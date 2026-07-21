@@ -1,0 +1,4 @@
+{"sessionId": "synth-u-d", "cwd": "D:\\project", "timestamp": "2026-07-14T12:00:00Z"}
+{"type": "user", "uuid": "4a4079e0-6eb2-f7ba-7a12-821c7c58a3f6", "message": {"role": "user", "content": [{"type": "text", "text": "setup project"}]}, "timestamp": "2026-07-14T12:01:00Z"}
+{"type": "user", "uuid": "c4d62b6d-cca0-8e5c-af06-c01889282859", "message": {"role": "user", "content": [{"type": "text", "text": "add CI pipeline"}]}, "timestamp": "2026-07-14T12:02:00Z", "parentUuid": "4a4079e0-6eb2-f7ba-7a12-821c7c58a3f6"}
+{"type": "user", "uuid": "a3deb6e4-8168-9f1d-3303-caecb8a6c401", "message": {"role": "user", "content": [{"type": "text", "text": "deploy to prod"}]}, "timestamp": "2026-07-14T12:03:00Z", "parentUuid": "c4d62b6d-cca0-8e5c-af06-c01889282859"}

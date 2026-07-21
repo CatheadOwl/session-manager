@@ -1,0 +1,5 @@
+{"timestamp": "2026-07-14T12:00:00Z", "type": "session_meta", "payload": {"id": "synth-e-4444", "cwd": "D:\\Document\\Projects\\test-project", "originator": "Codex Desktop", "cli_version": "0.144.2", "source": "vscode", "model_provider": "custom", "forked_from_id": "synth-c-2222"}}
+{"timestamp": "2026-07-14T12:01:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "init project"}]}}
+{"timestamp": "2026-07-14T12:02:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "configure database"}]}}
+{"timestamp": "2026-07-14T12:03:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "write REST API"}]}}
+{"timestamp": "2026-07-14T12:04:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "add redis caching"}]}}

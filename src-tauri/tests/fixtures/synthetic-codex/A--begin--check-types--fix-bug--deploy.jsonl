@@ -1,0 +1,5 @@
+{"timestamp": "2026-07-14T12:00:00Z", "type": "session_meta", "payload": {"id": "synth-a-0000", "cwd": "D:\\Document\\Projects\\test-project", "originator": "Codex Desktop", "cli_version": "0.144.2", "source": "vscode", "model_provider": "custom"}}
+{"timestamp": "2026-07-14T12:01:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "begin"}]}}
+{"timestamp": "2026-07-14T12:02:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "check the types in api.rs"}]}}
+{"timestamp": "2026-07-14T12:03:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix the type error"}]}}
+{"timestamp": "2026-07-14T12:04:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "deploy to staging"}]}}

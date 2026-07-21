@@ -1,0 +1,5 @@
+{"sessionId": "synth-u-a", "cwd": "D:\\project", "timestamp": "2026-07-14T12:00:00Z"}
+{"type": "user", "uuid": "27f237e6-b7f9-6587-b620-2ff3607ad88a", "message": {"role": "user", "content": [{"type": "text", "text": "init project"}]}, "timestamp": "2026-07-14T12:01:00Z"}
+{"type": "user", "uuid": "c6bdf6f6-5f38-45da-9085-e9ae5790b494", "message": {"role": "user", "content": [{"type": "text", "text": "configure database"}]}, "timestamp": "2026-07-14T12:02:00Z", "parentUuid": "27f237e6-b7f9-6587-b620-2ff3607ad88a"}
+{"type": "user", "uuid": "6593d7b1-2fd4-18cd-b35b-bf438de72f66", "message": {"role": "user", "content": [{"type": "text", "text": "write REST API"}]}, "timestamp": "2026-07-14T12:03:00Z", "parentUuid": "c6bdf6f6-5f38-45da-9085-e9ae5790b494"}
+{"type": "user", "uuid": "0c2f3adf-2a48-bab3-adb4-70f4da57f3d0", "message": {"role": "user", "content": [{"type": "text", "text": "test endpoints"}]}, "timestamp": "2026-07-14T12:04:00Z", "parentUuid": "6593d7b1-2fd4-18cd-b35b-bf438de72f66"}

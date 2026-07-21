@@ -1,0 +1,206 @@
+/* ─── Tree view ─────────────────────────────────────────── */
+
+.app-shell.tree-mode {
+  grid-template-columns: auto minmax(360px, 500px) minmax(0, 1fr);
+}
+
+.tree-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.35rem 0.4rem 0.75rem;
+}
+
+/* Virtualized tree: rows are absolutely positioned, container owns scrolling */
+.tree-view--virtual {
+  display: block;
+  overflow-y: auto;
+  padding: 0.35rem 0.4rem 0.75rem;
+}
+
+.tree-view--virtual::-webkit-scrollbar {
+  width: var(--scrollbar-width);
+}
+.tree-view--virtual::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tree-view--virtual::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.13);
+  border-radius: 2.5px;
+}
+
+.tree-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Root group background: applied per-row in the virtualized flat list */
+.tree-group {
+  background: rgba(241, 245, 249, 0.35);
+}
+
+.tree-group-first {
+  border-radius: 0.75rem 0.75rem 0 0;
+}
+
+.tree-group-last {
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+.tree-group-first.tree-group-last {
+  border-radius: 0.75rem;
+}
+
+.tree-node-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.12rem 0;
+  padding-left: var(--indent, 0px);
+}
+
+.tree-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--panel) 74%, var(--bg));
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  line-height: 1;
+  margin-top: 0.42rem;
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.tree-toggle-btn:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.tree-toggle-spacer {
+  visibility: hidden;
+}
+
+.tree-toggle-icon {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.18s ease;
+}
+
+.tree-toggle-btn[aria-expanded="true"] .tree-toggle-icon {
+  transform: rotate(90deg);
+}
+
+/* Highlight animation for fork-jump target message */
+.fork-jump-highlight {
+  animation: fork-jump-fade 2.5s ease-out;
+  border-radius: 1rem;
+}
+
+@keyframes fork-jump-fade {
+  0% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  60% {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.tree-session-item-wrapper {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0.9rem;
+  transition: background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.tree-session-item-wrapper .session-item {
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  border-radius: 0.9rem;
+}
+
+.tree-session-item-wrapper:hover {
+  background: color-mix(in srgb, var(--accent-soft) 48%, transparent);
+}
+
+/* Fork context text — shows the first diverging user input for forked sessions */
+.tree-fork-text {
+  position: relative;
+  margin: 0.1rem 0rem 0rem 0.8rem;
+  padding: 0.45rem 0.55rem 0.45rem 1.85rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--bg));
+  color: color-mix(in srgb, var(--muted) 86%, var(--accent));
+  font-size: 0.74rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.tree-fork-text::before {
+  content: '↳';
+  position: absolute;
+  left: 0.65rem;
+  top: 0.38rem;
+  color: var(--accent);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.tree-fork-text:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  color: var(--accent);
+  transform: translateX(2px);
+}
+
+.tree-session-item-fallback {
+  flex: 1;
+  min-width: 0;
+  opacity: 0.5;
+}
+
+/* ─── Virtualized rows: spacing via padding (absolute-positioned, gap has no effect) ─── */
+
+.tree-view--virtual .tree-node {
+  padding-bottom: 0.05rem;
+}
+

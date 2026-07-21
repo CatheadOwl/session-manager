@@ -1,0 +1,4 @@
+{"sessionId": "synth-u-e", "cwd": "D:\\project", "timestamp": "2026-07-14T12:00:00Z"}
+{"type": "user", "uuid": "4a4079e0-6eb2-f7ba-7a12-821c7c58a3f6", "message": {"role": "user", "content": [{"type": "text", "text": "setup project"}]}, "timestamp": "2026-07-14T12:01:00Z"}
+{"type": "user", "uuid": "560fce20-abef-5cd3-f8e4-d13c94669a46", "message": {"role": "user", "content": [{"type": "text", "text": "setup Docker"}]}, "timestamp": "2026-07-14T12:02:00Z", "parentUuid": "4a4079e0-6eb2-f7ba-7a12-821c7c58a3f6"}
+{"type": "user", "uuid": "b29bcbb0-f188-e009-3434-a5f213285f46", "message": {"role": "user", "content": [{"type": "text", "text": "validate compose"}]}, "timestamp": "2026-07-14T12:03:00Z", "parentUuid": "560fce20-abef-5cd3-f8e4-d13c94669a46"}

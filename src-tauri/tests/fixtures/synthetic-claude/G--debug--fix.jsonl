@@ -1,0 +1,3 @@
+{"sessionId": "synth-u-g", "cwd": "D:\\project", "timestamp": "2026-07-14T12:00:00Z"}
+{"type": "user", "uuid": "c0497521-d35d-6686-6e3a-f408094864c3", "message": {"role": "user", "content": [{"type": "text", "text": "debug crash"}]}, "timestamp": "2026-07-14T12:01:00Z"}
+{"type": "user", "uuid": "d24bade1-36bc-8cd7-7e37-395ea94226eb", "message": {"role": "user", "content": [{"type": "text", "text": "fix bug"}]}, "timestamp": "2026-07-14T12:02:00Z", "parentUuid": "c0497521-d35d-6686-6e3a-f408094864c3"}

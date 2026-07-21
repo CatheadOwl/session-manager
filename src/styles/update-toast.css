@@ -1,0 +1,49 @@
+/* ---- Update indicator ---- */
+
+/* Collapsed toolbar: icon button */
+.update-collapsed-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-top: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.update-collapsed-btn:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.update-collapsed-btn.spinning svg {
+  animation: spin-cw 0.8s linear infinite;
+}
+
+/* Red dot badge (shared by collapsed button & panel-left collapse button) */
+.update-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #dc2626;
+}
+
+/* Header variant: larger, center pinned to the button's top-right corner */
+.update-dot--header {
+  top: 1;
+  right: 1;
+  width: 8px;
+  height: 8px;
+  transform: translate(50%, -50%);
+}

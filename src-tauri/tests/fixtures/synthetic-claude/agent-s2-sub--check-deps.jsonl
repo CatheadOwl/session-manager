@@ -1,0 +1,2 @@
+{"sessionId": "synth-u-s2", "cwd": "D:\\project", "timestamp": "2026-07-14T12:00:00Z"}
+{"type": "user", "uuid": "b9eeaf6a-16ca-49f3-7df5-7620aed91b62", "message": {"role": "user", "content": [{"type": "text", "text": "check deps"}]}, "timestamp": "2026-07-14T12:01:00Z"}

@@ -1,0 +1,340 @@
+/* ---- Folder column ---- */
+
+.folder-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 220px;
+  padding: 0.75rem;
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+/* ─── FolderColumn thin scrollbar (consistent with MessagesSection) ──────── */
+.folder-column::-webkit-scrollbar {
+  width: var(--scrollbar-width);
+}
+.folder-column::-webkit-scrollbar-track {
+  background: transparent;
+}
+.folder-column::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.13);
+  border-radius: 2.5px;
+}
+
+.folder-column.collapsed {
+  align-items: center;
+  width: 48px;
+  padding: 0.75rem 0.35rem;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  padding: 0 0.25rem;
+}
+
+.folder-header-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.folder-collapse-btn,
+.folder-expand-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  border-radius: 0.35rem;
+  transition: color 0.12s ease, transform 0.12s ease;
+}
+
+.folder-collapse-btn,
+.folder-expand-btn {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.folder-toggle-icon {
+  width: 100%;
+  height: 100%;
+}
+
+.folder-toggle-icon-border,
+.folder-toggle-icon-divider {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+}
+
+.folder-toggle-icon-fill {
+  fill: currentColor;
+  stroke: none;
+  opacity: 0.82;
+}
+
+.folder-collapse-btn:hover,
+.folder-expand-btn:hover {
+  color: var(--text);
+}
+
+.folder-scope-block {
+  padding: 0 0.25rem 0.55rem;
+}
+
+.folder-scope-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.folder-scope-block .scope-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-scope-block .scope-toggle .view-mode-segment {
+  width: 100%;
+}
+
+.folder-scope-block .scope-toggle .view-mode-option {
+  flex: 1;
+}
+
+.folder-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.folder-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid transparent;
+  border-radius: 0.6rem;
+  padding: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  line-height: 1;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.folder-actions-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: currentColor;
+}
+
+.folder-actions-trigger:hover,
+.folder-actions-trigger[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--panel-strong) 78%, transparent);
+  color: var(--text);
+}
+
+.folder-actions-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.folder-actions-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  min-width: 10.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  padding: 0.3rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+}
+
+.folder-actions-item {
+  width: 100%;
+  border: 0;
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.folder-actions-item:hover:not(:disabled),
+.folder-actions-item:focus-visible:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
+.folder-section-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding: 0.5rem 0.5rem 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  user-select: none;
+  font-size: 0.92rem;
+}
+
+.folder-item:hover {
+  background: var(--accent-soft);
+}
+
+.folder-item.selected {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.folder-item-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.45rem 0.5rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  border-radius: 0.5rem;
+  outline: none;
+}
+
+.folder-item-label:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.folder-item-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.folder-item-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 400;
+  opacity: 0.72;
+}
+
+.folder-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
+  font-weight: 650;
+}
+
+.folder-action-slot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  min-height: 1.45rem;
+  flex-shrink: 0;
+}
+
+.folder-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.45rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.folder-item.selected .folder-count {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.folder-pin-btn {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  border: none;
+  background: var(--panel-strong);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.78rem;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+  border-radius: 999px;
+  color: inherit;
+}
+
+.folder-item:hover .folder-action-slot .folder-count,
+.folder-action-slot:has(.folder-pin-btn:focus-visible) .folder-count {
+  opacity: 0;
+}
+
+.folder-item:hover .folder-pin-btn,
+.folder-pin-btn:focus-visible {
+  opacity: 0.72;
+}
+
+.folder-pin-btn:hover,
+.folder-pin-btn:focus-visible {
+  opacity: 1 !important;
+  background: var(--accent-soft);
+}
+
+.folder-pin-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.scope-toggle {
+  display: inline-flex;
+  align-items: center;
+}

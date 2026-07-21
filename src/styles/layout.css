@@ -1,0 +1,12 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: auto minmax(300px, 380px) minmax(0, 1fr);
+  height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.07), transparent 28rem),
+    var(--bg);
+}
+
+.app-shell.no-folder-column {
+  grid-template-columns: auto minmax(300px, 380px) minmax(0, 1fr);
+}

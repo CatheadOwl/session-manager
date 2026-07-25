@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-07-25
+
+### Changed
+
+- Build macOS releases as one Universal binary for Apple Silicon and Intel.
+- Serialize release uploads so platform entries are not lost from `latest.json`.
+
+### Fixed
+
+- Generate and verify signed updater artifacts during release builds.
+- Use a bundle identifier that does not end in `.app`.
+
 ## [0.1.0] - 2026-07-21
 
 ### Added

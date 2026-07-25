@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Generate and verify signed updater artifacts during release builds.
-- Use a bundle identifier that does not end in `.app`.
+- Use the stable `com.catheadowl.session-manager` bundle identifier without an `.app` suffix.
 
 ## [0.1.0] - 2026-07-21
 

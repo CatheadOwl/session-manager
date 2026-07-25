@@ -9,10 +9,19 @@ on:
 permissions:
   contents: write
 
+# tauri-action updates the release manifest in place, so release runs must not
+# overlap even when they come from different triggers.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     strategy:
       fail-fast: false
+      # tauri-action merges each platform into one latest.json. Running the
+      # publishers serially prevents concurrent jobs from overwriting entries.
+      max-parallel: 1
       matrix:
         include:
           - platform: windows-latest
@@ -68,4 +77,22 @@ jobs:
           releaseBody: 'See the assets to download and install this version.'
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          # A universal updater is exposed under both darwin-aarch64 and
+          # darwin-x86_64, which is what installed clients request.
+          updaterJsonKeepUniversal: false
+          # Keep CI-only release settings in this workflow.
+          # Local build overlays are not used in CI.
+          # string-argv preserves the quoted JSON as one --config argument.
+          args: >-
+            ${{ matrix.args }}
+            --config '{"bundle":{"createUpdaterArtifacts":true,"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Verify macOS universal bundle
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          app_path="src-tauri/target/universal-apple-darwin/release/bundle/macos/Session Manager.app"
+          binary_path="$app_path/Contents/MacOS/session-manager"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          lipo "$binary_path" -verify_arch arm64 x86_64
+          test -f "$app_path.tar.gz.sig"

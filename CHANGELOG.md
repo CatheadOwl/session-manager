@@ -5,17 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.1] - 2026-07-25
+## [0.1.1] - 2026-07-26
 
 ### Changed
 
-- Build macOS releases as one Universal binary for Apple Silicon and Intel.
-- Serialize release uploads so platform entries are not lost from `latest.json`.
-
-### Fixed
-
-- Generate and verify signed updater artifacts during release builds.
-- Use the stable `com.catheadowl.session-manager` bundle identifier without an `.app` suffix.
+- macOS now ships as a Universal binary for Apple Silicon and Intel.
+- Use the stable `com.catheadowl.session-manager` application identifier.
+- Improve automatic update reliability across all platforms.
 
 ## [0.1.0] - 2026-07-21
 

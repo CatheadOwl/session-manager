@@ -9,8 +9,8 @@ use crate::session_manager::{SessionMessage, SessionMeta};
 
 use super::utils::{
     extract_text, extract_tool_calls, extract_tool_results, infer_session_id_from_filename,
-    move_single_file, parse_timestamp_to_ms, path_basename, read_head_tail_lines,
-    truncate_summary, TITLE_MAX_CHARS,
+    move_single_file, parse_timestamp_to_ms, path_basename, read_head_tail_lines, truncate_summary,
+    TITLE_MAX_CHARS,
 };
 use super::SessionProvider;
 
@@ -52,7 +52,6 @@ impl SessionProvider for OpenClawProvider {
     fn move_session(&self, source: &Path, dest: &Path) -> Result<(), String> {
         move_session(source, dest)
     }
-
 }
 
 // ─── Internal functions ──────────────────────────────────────────────────────
@@ -463,11 +462,7 @@ mod tests {
     fn move_session_moves_file() {
         let temp = tempdir().expect("tempdir");
         let source_file = temp.path().join("session.jsonl");
-        std::fs::write(
-            &source_file,
-            "{\"id\":\"test\",\"messages\":[]}\n",
-        )
-        .expect("write");
+        std::fs::write(&source_file, "{\"id\":\"test\",\"messages\":[]}\n").expect("write");
         let dest_dir = temp.path().join("archived");
         let provider = OpenClawProvider;
         provider

@@ -191,7 +191,11 @@ pub(crate) fn build_tree(files: &[CachedFileData]) -> Vec<TreeNodeData> {
                     .copied()
                     .unwrap_or_else(|| {
                         // Edge: fork at end of chain (session is strict prefix of parent)
-                        files[i].kept_indices.last().map(|k| k + 1).unwrap_or(chain_idx)
+                        files[i]
+                            .kept_indices
+                            .last()
+                            .map(|k| k + 1)
+                            .unwrap_or(chain_idx)
                     }) as u32
             } else {
                 fork_at[i]

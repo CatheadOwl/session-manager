@@ -11,7 +11,10 @@ use crate::session_manager::providers::ProviderRegistry;
 pub(crate) const USER_TEXT_PREVIEW_CHARS: usize = 64;
 
 #[allow(dead_code)]
-pub(crate) fn compute_file_data(registry: &ProviderRegistry, path: &Path) -> Result<CachedFileData, String> {
+pub(crate) fn compute_file_data(
+    registry: &ProviderRegistry,
+    path: &Path,
+) -> Result<CachedFileData, String> {
     // First parse session metadata — dispatches to the correct provider
     let meta = session_manager::parse_session_meta(registry, path)
         .ok_or_else(|| format!("Failed to parse session: {}", path.display()))?;
@@ -45,9 +48,9 @@ pub(crate) fn compute_file_data(registry: &ProviderRegistry, path: &Path) -> Res
             path.to_string_lossy()
         ),
         source_path: path.to_string_lossy().to_string(),
-        title: meta.title.unwrap_or_else(|| {
-            meta.session_id.chars().take(8).collect()
-        }),
+        title: meta
+            .title
+            .unwrap_or_else(|| meta.session_id.chars().take(8).collect()),
         summary: meta.summary,
         last_active_at: meta.last_active_at,
         project_dir: meta.project_dir,

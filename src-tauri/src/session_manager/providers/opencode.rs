@@ -249,7 +249,6 @@ fn read_part_text(part_dir: &Path) -> String {
     paths.sort();
 
     for part_path in paths {
-
         let content = match std::fs::read_to_string(&part_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -714,11 +713,7 @@ mod tests {
     fn move_session_moves_file() {
         let temp = tempdir().expect("tempdir");
         let source_file = temp.path().join("session-test.json");
-        std::fs::write(
-            &source_file,
-            r#"{"id":"move-test"}"#,
-        )
-        .expect("write");
+        std::fs::write(&source_file, r#"{"id":"move-test"}"#).expect("write");
         let dest_dir = temp.path().join("archived");
         let provider = OpenCodeProvider;
         provider

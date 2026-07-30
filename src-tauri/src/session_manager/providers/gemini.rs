@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use crate::session_manager::{SessionMessage, SessionMeta, ToolCallInfo};
 
-use super::utils::{move_single_file, parse_timestamp_to_ms, truncate_summary, truncate_tool_input};
+use super::utils::{
+    move_single_file, parse_timestamp_to_ms, truncate_summary, truncate_tool_input,
+};
 use super::SessionProvider;
 
 const PROVIDER_ID: &str = "gemini";
@@ -46,7 +48,6 @@ impl SessionProvider for GeminiProvider {
     fn move_session(&self, source: &Path, dest: &Path) -> Result<(), String> {
         move_session(source, dest)
     }
-
 }
 
 // ─── Internal functions ─────────────────────────────────────────────────────
@@ -411,11 +412,7 @@ mod tests {
     fn move_session_moves_file() {
         let temp = tempdir().expect("tempdir");
         let source_file = temp.path().join("session.json");
-        std::fs::write(
-            &source_file,
-            r#"{"sessionId":"move-test","messages":[]}"#,
-        )
-        .expect("write");
+        std::fs::write(&source_file, r#"{"sessionId":"move-test","messages":[]}"#).expect("write");
         let dest_dir = temp.path().join("archived");
         let provider = GeminiProvider;
         provider

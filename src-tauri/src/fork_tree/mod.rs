@@ -64,9 +64,10 @@ pub fn compute_fork_tree(
         if let Some(&cached_idx) = cache_index.get(source_path) {
             let mut data = cache.files[cached_idx].clone();
             data.forked_from_id = session.forked_from_id.clone();
-            data.title = session.title.clone().unwrap_or_else(|| {
-                session.session_id.chars().take(8).collect()
-            });
+            data.title = session
+                .title
+                .clone()
+                .unwrap_or_else(|| session.session_id.chars().take(8).collect());
             data.summary = session.summary.clone();
             data.last_active_at = session.last_active_at;
             data.project_dir = session.project_dir.clone();
@@ -78,7 +79,10 @@ pub fn compute_fork_tree(
         let provider = match registry.get(&session.provider_id) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("Warning: provider not found for session {}: {e}", source_path);
+                eprintln!(
+                    "Warning: provider not found for session {}: {e}",
+                    source_path
+                );
                 continue;
             }
         };
@@ -86,7 +90,10 @@ pub fn compute_fork_tree(
         let events = match provider.user_events(Path::new(source_path)) {
             Ok(events) => events,
             Err(e) => {
-                eprintln!("Warning: failed to compute fork data for {}: {e}", source_path);
+                eprintln!(
+                    "Warning: failed to compute fork data for {}: {e}",
+                    source_path
+                );
                 continue;
             }
         };
@@ -99,9 +106,10 @@ pub fn compute_fork_tree(
                 session.provider_id, session.session_id, source_path
             ),
             source_path: source_path.clone(),
-            title: session.title.clone().unwrap_or_else(|| {
-                session.session_id.chars().take(8).collect()
-            }),
+            title: session
+                .title
+                .clone()
+                .unwrap_or_else(|| session.session_id.chars().take(8).collect()),
             summary: session.summary.clone(),
             last_active_at: session.last_active_at,
             project_dir: session.project_dir.clone(),
@@ -117,7 +125,9 @@ pub fn compute_fork_tree(
     }
 
     // Prune stale cache entries (sessions no longer in scan results)
-    cache.files.retain(|f| current_paths.contains(&f.source_path));
+    cache
+        .files
+        .retain(|f| current_paths.contains(&f.source_path));
 
     // Filter and rebuild tree
     let (roots, total_sessions) = if let Some(dir) = project_dir_filter {
@@ -257,7 +267,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -271,7 +281,7 @@ mod tests {
                 user_texts: vec![],
                 // Without forked_from_id, sessions are always roots
                 kept_indices: vec![],
-            forked_from_id: Some("a".into()),
+                forked_from_id: Some("a".into()),
                 uuid_chain: vec![],
             },
         ];
@@ -300,7 +310,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec!["hello".into(), "world".into()],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -313,7 +323,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec!["hello".into(), "world".into(), "new".into()],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
         ];
@@ -324,7 +334,10 @@ mod tests {
         assert_eq!(roots[0].children.len(), 1);
         let child = &roots[0].children[0];
         assert_eq!(child.session_key, "claude:b:path2");
-        assert_eq!(child.forked_at_user, 2, "B forks at user index 2 (its 3rd message)");
+        assert_eq!(
+            child.forked_at_user, 2,
+            "B forks at user index 2 (its 3rd message)"
+        );
         assert_eq!(child.depth, 1);
     }
 
@@ -343,7 +356,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -356,13 +369,17 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
         ];
 
         let roots = build_tree(&files);
-        assert_eq!(roots.len(), 2, "different providers → both roots despite hash overlap");
+        assert_eq!(
+            roots.len(),
+            2,
+            "different providers → both roots despite hash overlap"
+        );
     }
 
     #[test]
@@ -378,7 +395,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -391,7 +408,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("a".into()),
+                forked_from_id: Some("a".into()),
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -404,7 +421,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h4".into(), "h5".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("b".into()),
+                forked_from_id: Some("b".into()),
                 uuid_chain: vec![],
             },
         ];
@@ -437,7 +454,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -450,7 +467,7 @@ mod tests {
                 hash_chain: vec!["h3".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
         ];
@@ -472,7 +489,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec!["hello".into(), "world".into()],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -485,7 +502,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h3".into()],
                 user_texts: vec!["hello".into(), "different path".into()],
                 kept_indices: vec![],
-            forked_from_id: Some("a".into()),
+                forked_from_id: Some("a".into()),
                 uuid_chain: vec![],
             },
         ];
@@ -595,8 +612,8 @@ mod tests {
         }
 
         let registry = build_provider_registry();
-        let result =
-            compute_fork_tree(&registry, &session_manager::SessionScope::Active, None).expect("compute");
+        let result = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None)
+            .expect("compute");
         assert_eq!(result.total_sessions, 2);
         assert!(!result.computed_from_cache);
 
@@ -608,8 +625,8 @@ mod tests {
         assert_eq!(result.roots[1].children.len(), 0);
 
         // Second call re-scans but reuses cache for hash chain computation
-        let result2 =
-            compute_fork_tree(&registry, &session_manager::SessionScope::Active, None).expect("compute");
+        let result2 = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None)
+            .expect("compute");
         assert_eq!(result2.total_sessions, 2);
 
         // get_fork_tree reads persisted cache and reports as cached
@@ -637,7 +654,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -650,7 +667,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("a".to_string()),
+                forked_from_id: Some("a".to_string()),
                 uuid_chain: vec![],
             },
         ];
@@ -679,7 +696,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -692,7 +709,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("a".to_string()),
+                forked_from_id: Some("a".to_string()),
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -705,7 +722,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("b".to_string()),
+                forked_from_id: Some("b".to_string()),
                 uuid_chain: vec![],
             },
         ];
@@ -742,7 +759,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec![],
             },
             CachedFileData {
@@ -755,7 +772,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("a".to_string()),
+                forked_from_id: Some("a".to_string()),
                 uuid_chain: vec![],
             },
         ];
@@ -1021,7 +1038,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec!["hello".into(), "world".into()],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
@@ -1034,7 +1051,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec!["hello".into(), "world".into(), "new".into()],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into(), "u3".into()],
             },
         ];
@@ -1067,7 +1084,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
@@ -1080,7 +1097,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
         ];
@@ -1107,7 +1124,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
@@ -1120,7 +1137,7 @@ mod tests {
                 hash_chain: vec!["h3".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u3".into(), "u4".into()],
             },
         ];
@@ -1148,7 +1165,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h3".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: None,
+                forked_from_id: None,
                 uuid_chain: vec!["u1".into(), "u2".into(), "u3".into()],
             },
             CachedFileData {
@@ -1161,7 +1178,7 @@ mod tests {
                 hash_chain: vec!["h1".into(), "h2".into(), "h4".into()],
                 user_texts: vec![],
                 kept_indices: vec![],
-            forked_from_id: Some("a".to_string()),
+                forked_from_id: Some("a".to_string()),
                 uuid_chain: vec!["u1".into(), "u2".into(), "b3".into(), "b4".into()],
             },
         ];

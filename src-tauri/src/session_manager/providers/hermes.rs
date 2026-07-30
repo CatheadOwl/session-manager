@@ -50,7 +50,6 @@ impl SessionProvider for HermesProvider {
     fn move_session(&self, source: &Path, dest: &Path) -> Result<(), String> {
         move_session(source, dest)
     }
-
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
@@ -469,11 +468,7 @@ mod tests {
     fn move_session_moves_file() {
         let temp = tempdir().expect("tempdir");
         let source_file = temp.path().join("session.jsonl");
-        std::fs::write(
-            &source_file,
-            "{\"id\":\"test\",\"messages\":[]}\n",
-        )
-        .expect("write");
+        std::fs::write(&source_file, "{\"id\":\"test\",\"messages\":[]}\n").expect("write");
         let dest_dir = temp.path().join("archived");
         let provider = HermesProvider;
         provider

@@ -48,6 +48,7 @@ pub fn build_provider_registry() -> Arc<ProviderRegistry> {
     registry.register(Box::new(providers::hermes::HermesProvider));
     registry.register(Box::new(providers::openclaw::OpenClawProvider));
     registry.register(Box::new(providers::opencode::OpenCodeProvider));
+    registry.register(Box::new(providers::pi::PiProvider));
     registry.register(Box::new(providers::qoder::QoderProvider));
     Arc::new(registry)
 }

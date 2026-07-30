@@ -4,6 +4,7 @@ pub mod gemini;
 pub mod hermes;
 pub mod openclaw;
 pub mod opencode;
+pub mod pi;
 pub mod qoder;
 pub mod utils;
 

@@ -71,6 +71,10 @@ pub fn get_qoder_projects_dir() -> PathBuf {
     get_home_dir().join(".qoder").join("projects")
 }
 
+pub fn get_pi_sessions_dir() -> PathBuf {
+    get_home_dir().join(".pi").join("agent").join("sessions")
+}
+
 pub fn get_opencode_base_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {
@@ -96,7 +100,9 @@ pub fn get_claude_config_dir() -> PathBuf {
 }
 
 pub fn get_app_metadata_path() -> Result<PathBuf, String> {
-    Ok(get_home_dir().join(".session-manager").join("metadata.json"))
+    Ok(get_home_dir()
+        .join(".session-manager")
+        .join("metadata.json"))
 }
 
 pub fn get_fork_tree_cache_path() -> Result<PathBuf, String> {

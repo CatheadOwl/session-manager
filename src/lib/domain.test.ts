@@ -11,12 +11,22 @@ const session = (over: Partial<SessionMeta>): SessionMeta => ({
 describe("getSessionKey", () => {
   it("includes sourcePath for file-level uniqueness", () => {
     expect(getSessionKey(session({ sourcePath: "/data/a.jsonl" }))).toBe(
-      "claude:s1:/data/a.jsonl",
+      "claude:s1:file:/data/a.jsonl",
     );
   });
 
   it("falls back to empty sourcePath segment when absent", () => {
-    expect(getSessionKey(session({}))).toBe("claude:s1:");
+    expect(getSessionKey(session({}))).toBe("claude:s1:file:");
+  });
+
+  it("distinguishes database locators with the same path", () => {
+    expect(
+      getSessionKey(
+        session({
+          locator: { kind: "database", path: "/data/opencode.db", recordId: "row-a" },
+        }),
+      ),
+    ).toBe("claude:s1:database:/data/opencode.db:row-a");
   });
 });
 

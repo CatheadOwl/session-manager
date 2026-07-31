@@ -1,9 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SessionDetail, SessionMessage, SessionMeta } from "@/types";
+import type { SessionDetail, SessionLocator, SessionMessage, SessionMeta } from "@/types";
 
-export interface DeleteSessionOptions {
+export interface SessionHandleOptions {
   providerId: string;
   sessionId: string;
+  sourcePath?: string;
+  locator?: SessionLocator;
+}
+
+export interface DeleteSessionOptions extends SessionHandleOptions {
   sourcePath: string;
 }
 
@@ -63,25 +68,34 @@ export const sessionsApi = {
   },
 
   async getMessages(
-    providerId: string,
-    sourcePath: string,
+    providerIdOrOptions: string | SessionHandleOptions,
+    sourcePath?: string,
   ): Promise<SessionMessage[]> {
-    return await invoke("get_session_messages", { providerId, sourcePath });
+    const options =
+      typeof providerIdOrOptions === "string"
+        ? { providerId: providerIdOrOptions, sessionId: "", sourcePath }
+        : providerIdOrOptions;
+    return await invoke("get_session_messages", { ...options });
   },
 
   async getSessionDetail(
-    providerId: string,
-    sourcePath: string,
+    providerIdOrOptions: string | SessionHandleOptions,
+    sourcePath?: string,
   ): Promise<SessionDetail> {
-    return await invoke("get_session_detail", { providerId, sourcePath });
+    const options =
+      typeof providerIdOrOptions === "string"
+        ? { providerId: providerIdOrOptions, sessionId: "", sourcePath }
+        : providerIdOrOptions;
+    return await invoke("get_session_detail", { ...options });
   },
 
   async delete(options: DeleteSessionOptions): Promise<boolean> {
-    const { providerId, sessionId, sourcePath } = options;
+    const { providerId, sessionId, sourcePath, locator } = options;
     return await invoke("delete_session", {
       providerId,
       sessionId,
       sourcePath,
+      locator,
     });
   },
 
@@ -92,8 +106,8 @@ export const sessionsApi = {
   },
 
   async archive(options: DeleteSessionOptions): Promise<boolean> {
-    const { providerId, sessionId, sourcePath } = options;
-    return await invoke("archive_session", { providerId, sessionId, sourcePath });
+    const { providerId, sessionId, sourcePath, locator } = options;
+    return await invoke("archive_session", { providerId, sessionId, sourcePath, locator });
   },
 
   async archiveMany(
@@ -103,8 +117,8 @@ export const sessionsApi = {
   },
 
   async restore(options: DeleteSessionOptions): Promise<boolean> {
-    const { providerId, sessionId, sourcePath } = options;
-    return await invoke("restore_session", { providerId, sessionId, sourcePath });
+    const { providerId, sessionId, sourcePath, locator } = options;
+    return await invoke("restore_session", { providerId, sessionId, sourcePath, locator });
   },
 
   async restoreMany(

@@ -7,8 +7,13 @@ export interface SessionMeta {
   createdAt?: number;
   lastActiveAt?: number;
   sourcePath?: string;
+  locator?: SessionLocator;
   resumeCommand?: string;
 }
+
+export type SessionLocator =
+  | { kind: "file"; path: string }
+  | { kind: "database"; path: string; recordId: string };
 
 export interface TokenUsage {
   inputTokens: number;

@@ -1,35 +1,68 @@
 use std::path::Path;
 
 use super::providers::ProviderRegistry;
-use super::types::{QaPair, SessionDetail, SessionMessage};
+use super::types::{QaPair, SessionDetail, SessionHandle, SessionMessage};
 
+#[allow(dead_code)]
+#[deprecated(note = "use load_messages_for_handle instead")]
 pub fn load_messages(
     registry: &ProviderRegistry,
     provider_id: &str,
     source_path: &str,
 ) -> Result<Vec<SessionMessage>, String> {
-    let path = Path::new(source_path);
-    registry.get(provider_id)?.load_messages(path)
+    let handle = SessionHandle {
+        provider_id: provider_id.to_string(),
+        session_id: String::new(),
+        locator: super::types::SessionLocator::File {
+            path: source_path.to_string(),
+        },
+    };
+    load_messages_for_handle(registry, &handle)
 }
 
-fn load_raw_content_fallback(
+pub fn load_messages_for_handle(
     registry: &ProviderRegistry,
-    provider_id: &str,
-    source_path: &str,
-) -> Result<Option<String>, String> {
-    let path = Path::new(source_path);
-    registry.get(provider_id)?.load_raw_content_fallback(path)
+    handle: &SessionHandle,
+) -> Result<Vec<SessionMessage>, String> {
+    let path = Path::new(handle.file_path()?);
+    registry.get(&handle.provider_id)?.load_messages(path)
 }
 
+fn load_raw_content_fallback_for_handle(
+    registry: &ProviderRegistry,
+    handle: &SessionHandle,
+) -> Result<Option<String>, String> {
+    let path = Path::new(handle.file_path()?);
+    registry
+        .get(&handle.provider_id)?
+        .load_raw_content_fallback(path)
+}
+
+#[allow(dead_code)]
+#[deprecated(note = "use load_session_detail_for_handle instead")]
 pub fn load_session_detail(
     registry: &ProviderRegistry,
     provider_id: &str,
     source_path: &str,
 ) -> Result<SessionDetail, String> {
-    let messages = load_messages(registry, provider_id, source_path)?;
+    let handle = SessionHandle {
+        provider_id: provider_id.to_string(),
+        session_id: String::new(),
+        locator: super::types::SessionLocator::File {
+            path: source_path.to_string(),
+        },
+    };
+    load_session_detail_for_handle(registry, &handle)
+}
+
+pub fn load_session_detail_for_handle(
+    registry: &ProviderRegistry,
+    handle: &SessionHandle,
+) -> Result<SessionDetail, String> {
+    let messages = load_messages_for_handle(registry, handle)?;
     let qa_pairs = extract_qa_pairs(&messages);
     let raw_content = if messages.is_empty() {
-        load_raw_content_fallback(registry, provider_id, source_path)?
+        load_raw_content_fallback_for_handle(registry, handle)?
     } else {
         None
     };

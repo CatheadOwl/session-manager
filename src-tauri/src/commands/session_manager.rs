@@ -40,12 +40,21 @@ pub async fn list_sessions(
 pub async fn get_session_messages(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     providerId: String,
-    sourcePath: String,
+    sourcePath: Option<String>,
+    sessionId: Option<String>,
+    locator: Option<session_manager::SessionLocator>,
 ) -> Result<Vec<session_manager::SessionMessage>, String> {
+    let request = session_manager::SessionHandleRequest {
+        provider_id: providerId,
+        session_id: sessionId.unwrap_or_default(),
+        source_path: sourcePath,
+        locator,
+    };
+    let handle = request.into_handle()?;
     run_blocking!(
         registry,
         reg,
-        session_manager::load_messages(&reg, &providerId, &sourcePath)
+        session_manager::load_messages_for_handle(&reg, &handle)
     )
 }
 
@@ -53,12 +62,21 @@ pub async fn get_session_messages(
 pub async fn get_session_detail(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     providerId: String,
-    sourcePath: String,
+    sourcePath: Option<String>,
+    sessionId: Option<String>,
+    locator: Option<session_manager::SessionLocator>,
 ) -> Result<session_manager::SessionDetail, String> {
+    let request = session_manager::SessionHandleRequest {
+        provider_id: providerId,
+        session_id: sessionId.unwrap_or_default(),
+        source_path: sourcePath,
+        locator,
+    };
+    let handle = request.into_handle()?;
     run_blocking!(
         registry,
         reg,
-        session_manager::load_session_detail(&reg, &providerId, &sourcePath)
+        session_manager::load_session_detail_for_handle(&reg, &handle)
     )
 }
 
@@ -67,12 +85,20 @@ pub async fn delete_session(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     providerId: String,
     sessionId: String,
-    sourcePath: String,
+    sourcePath: Option<String>,
+    locator: Option<session_manager::SessionLocator>,
 ) -> Result<bool, String> {
+    let request = session_manager::SessionHandleRequest {
+        provider_id: providerId,
+        session_id: sessionId,
+        source_path: sourcePath,
+        locator,
+    };
+    let handle = request.into_handle()?;
     run_blocking!(
         registry,
         reg,
-        session_manager::delete_session(&reg, &providerId, &sessionId, &sourcePath)
+        session_manager::delete_session_for_handle(&reg, &handle)
     )
 }
 
@@ -117,12 +143,20 @@ pub async fn archive_session(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     providerId: String,
     sessionId: String,
-    sourcePath: String,
+    sourcePath: Option<String>,
+    locator: Option<session_manager::SessionLocator>,
 ) -> Result<bool, String> {
+    let request = session_manager::SessionHandleRequest {
+        provider_id: providerId,
+        session_id: sessionId,
+        source_path: sourcePath,
+        locator,
+    };
+    let handle = request.into_handle()?;
     run_blocking!(
         registry,
         reg,
-        session_manager::archive_session(&reg, &providerId, &sessionId, &sourcePath)
+        session_manager::archive_session_for_handle(&reg, &handle)
     )
 }
 
@@ -131,12 +165,20 @@ pub async fn restore_session(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     providerId: String,
     sessionId: String,
-    sourcePath: String,
+    sourcePath: Option<String>,
+    locator: Option<session_manager::SessionLocator>,
 ) -> Result<bool, String> {
+    let request = session_manager::SessionHandleRequest {
+        provider_id: providerId,
+        session_id: sessionId,
+        source_path: sourcePath,
+        locator,
+    };
+    let handle = request.into_handle()?;
     run_blocking!(
         registry,
         reg,
-        session_manager::restore_session(&reg, &providerId, &sessionId, &sourcePath)
+        session_manager::restore_session_for_handle(&reg, &handle)
     )
 }
 

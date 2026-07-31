@@ -13,7 +13,6 @@ use self::providers::ProviderRegistry;
 
 /// Parse session metadata from a session file path.
 /// Dispatches to the appropriate provider's `parse_session` via the registry.
-#[allow(dead_code)]
 pub fn parse_session_meta(registry: &ProviderRegistry, path: &Path) -> Option<SessionMeta> {
     for provider in registry.all() {
         if let Some(meta) = provider.parse_session(path) {
@@ -25,15 +24,21 @@ pub fn parse_session_meta(registry: &ProviderRegistry, path: &Path) -> Option<Se
 
 // Re-export public types and functions
 pub use types::{
-    CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, SessionDetail,
-    SessionMessage, SessionMeta, SessionScope, TokenUsage, ToolCallInfo,
+    CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, SessionDetail, SessionHandle,
+    SessionHandleRequest, SessionLocator, SessionMessage, SessionMeta, SessionScope, TokenUsage,
+    ToolCallInfo,
 };
 
 // Registry-aware re-exports: these functions now require a registry reference.
 // Callers (commands) receive the registry from Tauri managed state and pass it through.
-pub use messages::{load_messages, load_session_detail};
+#[allow(deprecated, unused_imports)]
+pub use messages::{
+    load_messages, load_messages_for_handle, load_session_detail, load_session_detail_for_handle,
+};
+#[allow(deprecated, unused_imports)]
 pub use operations::{
-    archive_session, archive_sessions, delete_session, delete_sessions, restore_session,
+    archive_session, archive_session_for_handle, archive_sessions, delete_session,
+    delete_session_for_handle, delete_sessions, restore_session, restore_session_for_handle,
     restore_sessions,
 };
 pub use scan::scan_sessions_with_scope;
@@ -253,8 +258,14 @@ mod tests {
         .expect("write");
 
         let registry = test_registry();
-        let detail =
-            load_session_detail(&registry, "claude", &path.to_string_lossy()).expect("load detail");
+        let handle = SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: "session.jsonl".to_string(),
+            locator: SessionLocator::File {
+                path: path.to_string_lossy().to_string(),
+            },
+        };
+        let detail = load_session_detail_for_handle(&registry, &handle).expect("load detail");
         assert_eq!(detail.messages.len(), 1);
         assert_eq!(detail.raw_content, None);
     }
@@ -273,13 +284,83 @@ mod tests {
         .expect("write");
 
         let registry = test_registry();
-        let detail =
-            load_session_detail(&registry, "claude", &path.to_string_lossy()).expect("load detail");
+        let handle = SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: "session.jsonl".to_string(),
+            locator: SessionLocator::File {
+                path: path.to_string_lossy().to_string(),
+            },
+        };
+        let detail = load_session_detail_for_handle(&registry, &handle).expect("load detail");
         assert!(detail.messages.is_empty());
         assert_eq!(
             detail.raw_content.as_deref(),
             Some("explain how fork detection works\n\nFork tree architecture")
         );
+    }
+
+    #[test]
+    fn source_path_request_resolves_to_file_locator() {
+        let request = SessionHandleRequest {
+            provider_id: "claude".to_string(),
+            session_id: "s1".to_string(),
+            source_path: Some("/tmp/session.jsonl".to_string()),
+            locator: None,
+        };
+
+        let handle = request.into_handle().expect("handle");
+
+        assert_eq!(handle.provider_id, "claude");
+        assert_eq!(handle.session_id, "s1");
+        assert_eq!(handle.file_path().expect("file path"), "/tmp/session.jsonl");
+        assert_eq!(handle.detail_key(), "claude:s1:file:/tmp/session.jsonl");
+    }
+
+    #[test]
+    fn database_locator_is_not_a_filesystem_path() {
+        let request = SessionHandleRequest {
+            provider_id: "opencode".to_string(),
+            session_id: "row-a".to_string(),
+            source_path: Some("/tmp/opencode.db".to_string()),
+            locator: Some(SessionLocator::Database {
+                path: "/tmp/opencode.db".to_string(),
+                record_id: "row-a".to_string(),
+            }),
+        };
+
+        let handle = request.into_handle().expect("handle");
+
+        assert_eq!(
+            handle.file_path().unwrap_err(),
+            "Database-backed sessions cannot be treated as filesystem paths"
+        );
+        assert_eq!(handle.display_source_path(), "/tmp/opencode.db");
+        assert_eq!(
+            handle.detail_key(),
+            "opencode:row-a:database:/tmp/opencode.db:row-a"
+        );
+    }
+
+    #[test]
+    fn database_locator_detail_keys_include_record_id() {
+        let left = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "left".to_string(),
+            locator: SessionLocator::Database {
+                path: "/tmp/opencode.db".to_string(),
+                record_id: "left".to_string(),
+            },
+        };
+        let right = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "right".to_string(),
+            locator: SessionLocator::Database {
+                path: "/tmp/opencode.db".to_string(),
+                record_id: "right".to_string(),
+            },
+        };
+
+        assert_ne!(left.detail_key(), right.detail_key());
     }
 
     #[test]
@@ -347,11 +428,13 @@ mod tests {
                 provider_id: "claude".to_string(),
                 session_id: "s1".to_string(),
                 source_path: "/tmp/s1".to_string(),
+                locator: None,
             },
             DeleteSessionRequest {
                 provider_id: "claude".to_string(),
                 session_id: "s2".to_string(),
                 source_path: "/tmp/s2".to_string(),
+                locator: None,
             },
         ];
 
@@ -368,6 +451,29 @@ mod tests {
         assert_eq!(outcomes[0].error, None);
         assert!(!outcomes[1].success);
         assert_eq!(outcomes[1].error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn batch_operation_rejects_database_locator_without_touching_path() {
+        let requests = vec![DeleteSessionRequest {
+            provider_id: "opencode".to_string(),
+            session_id: "row-a".to_string(),
+            source_path: "Z:/missing/opencode.db".to_string(),
+            locator: Some(SessionLocator::Database {
+                path: "Z:/missing/opencode.db".to_string(),
+                record_id: "row-a".to_string(),
+            }),
+        }];
+
+        let registry = test_registry();
+        let outcomes = delete_sessions(&registry, &requests);
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(!outcomes[0].success);
+        assert_eq!(
+            outcomes[0].error.as_deref(),
+            Some("Database-backed sessions are read-only and do not support this operation")
+        );
     }
 
     #[test]

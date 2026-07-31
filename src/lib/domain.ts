@@ -7,9 +7,21 @@ import { normalizeProjectDir } from "@/utils/format";
  * These belong in lib/ (not components/) because hooks and lib code depend on them.
  */
 
-/** Globally unique key for a session (includes sourcePath for file-level uniqueness). */
+const locatorKeyPart = (session: SessionMeta): string => {
+  if (session.locator?.kind === "database") {
+    return `database:${session.locator.path}:${session.locator.recordId}`;
+  }
+
+  if (session.locator?.kind === "file") {
+    return `file:${session.locator.path}`;
+  }
+
+  return `file:${session.sourcePath ?? ""}`;
+};
+
+/** Globally unique key for a session (includes storage locator for data-level uniqueness). */
 export const getSessionKey = (session: SessionMeta): string =>
-  `${session.providerId}:${session.sessionId}:${session.sourcePath ?? ""}`;
+  `${session.providerId}:${session.sessionId}:${locatorKeyPart(session)}`;
 
 /** Metadata key for star/pin state (providerId:sessionId, no sourcePath). */
 export const getMetadataKey = (session: SessionMeta): string =>

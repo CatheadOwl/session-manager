@@ -8,12 +8,34 @@
  *
  * @tanstack/react-query uses array keys; each factory returns a const tuple.
  */
+import type { SessionLocator } from "@/types";
+
+export const sessionLocatorKey = (locator: SessionLocator | undefined, sourcePath?: string) => {
+  if (locator?.kind === "database") {
+    return ["database", locator.path, locator.recordId] as const;
+  }
+
+  if (locator?.kind === "file") {
+    return ["file", locator.path] as const;
+  }
+
+  return ["file", sourcePath ?? ""] as const;
+};
 
 export const queryKeys = {
   sessions: (scope: "active" | "archived") => ["sessions", scope] as const,
 
-  sessionDetail: (providerId: string, sourcePath: string) =>
-    ["sessionDetail", providerId, sourcePath] as const,
+  sessionDetail: (
+    providerId: string,
+    sourcePathOrLocator: string | SessionLocator | undefined,
+  ) =>
+    [
+      "sessionDetail",
+      providerId,
+      ...(typeof sourcePathOrLocator === "string"
+        ? sessionLocatorKey(undefined, sourcePathOrLocator)
+        : sessionLocatorKey(sourcePathOrLocator)),
+    ] as const,
 
   appMetadata: () => ["appMetadata"] as const,
 

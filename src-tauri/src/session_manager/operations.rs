@@ -1,20 +1,42 @@
 use std::path::{Path, PathBuf};
 
 use super::providers::ProviderRegistry;
-use super::types::{DeleteSessionOutcome, DeleteSessionRequest};
+use super::types::{DeleteSessionOutcome, DeleteSessionRequest, SessionHandle};
 
+const DB_OPERATION_UNSUPPORTED: &str =
+    "Database-backed sessions are read-only and do not support this operation";
+
+#[allow(dead_code)]
+#[deprecated(note = "use delete_session_for_handle instead")]
 pub fn delete_session(
     registry: &ProviderRegistry,
     provider_id: &str,
     session_id: &str,
     source_path: &str,
 ) -> Result<bool, String> {
-    let provider = registry.get(provider_id)?;
+    let handle = SessionHandle {
+        provider_id: provider_id.to_string(),
+        session_id: session_id.to_string(),
+        locator: super::types::SessionLocator::File {
+            path: source_path.to_string(),
+        },
+    };
+    delete_session_for_handle(registry, &handle)
+}
+
+pub fn delete_session_for_handle(
+    registry: &ProviderRegistry,
+    handle: &SessionHandle,
+) -> Result<bool, String> {
+    let source_path = handle
+        .file_path()
+        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     delete_session_with_roots(
         registry,
-        provider_id,
-        session_id,
+        &handle.provider_id,
+        &handle.session_id,
         Path::new(source_path),
         &roots,
     )
@@ -25,12 +47,7 @@ pub fn delete_sessions(
     requests: &[DeleteSessionRequest],
 ) -> Vec<DeleteSessionOutcome> {
     collect_session_outcomes(requests, "Session was not deleted", |request| {
-        delete_session(
-            registry,
-            &request.provider_id,
-            &request.session_id,
-            &request.source_path,
-        )
+        delete_session_for_handle(registry, &request.to_handle())
     })
 }
 
@@ -39,12 +56,7 @@ pub fn archive_sessions(
     requests: &[DeleteSessionRequest],
 ) -> Vec<DeleteSessionOutcome> {
     collect_session_outcomes(requests, "Session was not archived", |request| {
-        archive_session(
-            registry,
-            &request.provider_id,
-            &request.session_id,
-            &request.source_path,
-        )
+        archive_session_for_handle(registry, &request.to_handle())
     })
 }
 
@@ -53,12 +65,7 @@ pub fn restore_sessions(
     requests: &[DeleteSessionRequest],
 ) -> Vec<DeleteSessionOutcome> {
     collect_session_outcomes(requests, "Session was not restored", |request| {
-        restore_session(
-            registry,
-            &request.provider_id,
-            &request.session_id,
-            &request.source_path,
-        )
+        restore_session_for_handle(registry, &request.to_handle())
     })
 }
 
@@ -219,13 +226,32 @@ fn move_session_between_roots(
     Ok(true)
 }
 
+#[allow(dead_code)]
+#[deprecated(note = "use archive_session_for_handle instead")]
 pub fn archive_session(
     registry: &ProviderRegistry,
     provider_id: &str,
     session_id: &str,
     source_path: &str,
 ) -> Result<bool, String> {
-    let provider = registry.get(provider_id)?;
+    let handle = SessionHandle {
+        provider_id: provider_id.to_string(),
+        session_id: session_id.to_string(),
+        locator: super::types::SessionLocator::File {
+            path: source_path.to_string(),
+        },
+    };
+    archive_session_for_handle(registry, &handle)
+}
+
+pub fn archive_session_for_handle(
+    registry: &ProviderRegistry,
+    handle: &SessionHandle,
+) -> Result<bool, String> {
+    let source_path = handle
+        .file_path()
+        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     // Active root = first root, Archive root = second root (per ClaudeProvider::roots())
     let active_root = roots
@@ -236,21 +262,40 @@ pub fn archive_session(
         .ok_or_else(|| "No archive root found".to_string())?;
     move_session_between_roots(
         registry,
-        provider_id,
-        session_id,
+        &handle.provider_id,
+        &handle.session_id,
         source_path,
         active_root,
         archive_root,
     )
 }
 
+#[allow(dead_code)]
+#[deprecated(note = "use restore_session_for_handle instead")]
 pub fn restore_session(
     registry: &ProviderRegistry,
     provider_id: &str,
     session_id: &str,
     source_path: &str,
 ) -> Result<bool, String> {
-    let provider = registry.get(provider_id)?;
+    let handle = SessionHandle {
+        provider_id: provider_id.to_string(),
+        session_id: session_id.to_string(),
+        locator: super::types::SessionLocator::File {
+            path: source_path.to_string(),
+        },
+    };
+    restore_session_for_handle(registry, &handle)
+}
+
+pub fn restore_session_for_handle(
+    registry: &ProviderRegistry,
+    handle: &SessionHandle,
+) -> Result<bool, String> {
+    let source_path = handle
+        .file_path()
+        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     let archive_root = roots
         .get(1)
@@ -260,8 +305,8 @@ pub fn restore_session(
         .ok_or_else(|| "No active root found".to_string())?;
     move_session_between_roots(
         registry,
-        provider_id,
-        session_id,
+        &handle.provider_id,
+        &handle.session_id,
         source_path,
         archive_root,
         active_root,

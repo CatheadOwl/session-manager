@@ -5,7 +5,7 @@ import type { SessionMeta } from "@/types";
 import type { TreeNodeData } from "@/lib/api/sessions";
 import { SessionItem } from "./SessionItem";
 import { TreeView } from "./TreeView";
-import { getSessionKey } from "@/lib/domain";
+import { getSessionKey, supportsLifecycleOperations } from "@/lib/domain";
 
 // ─── Selection context (ref-based, avoids re-render on mode toggle) ────────
 
@@ -95,6 +95,16 @@ export const SessionList = memo(function SessionList({
     () => selectedKeysSet.size,
     [selectedKeysSet],
   );
+  const selectedOperationCount = useMemo(() => {
+    let count = 0;
+    for (const key of selectedKeysSet) {
+      const session = sessionMap.get(key);
+      if (session && supportsLifecycleOperations(session)) {
+        count++;
+      }
+    }
+    return count;
+  }, [selectedKeysSet, sessionMap]);
 
   const listScrollRef = useRef<HTMLDivElement>(null);
 
@@ -179,10 +189,10 @@ export const SessionList = memo(function SessionList({
               <button
                 type="button"
                 className="batch-delete-btn"
-                disabled={selectedCount === 0}
+                disabled={selectedOperationCount === 0}
                 onClick={onBatchDelete}
               >
-                Delete{selectedCount > 0 ? ` (${selectedCount})` : ""}
+                Delete{selectedOperationCount > 0 ? ` (${selectedOperationCount})` : ""}
               </button>
             ) : null}
           </div>

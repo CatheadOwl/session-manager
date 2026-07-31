@@ -88,6 +88,10 @@
   height: var(--star-icon-size);
 }
 
+.lifecycle-action-tooltip {
+  display: inline-flex;
+}
+
 .provider-pill,
 .role-badge {
   display: inline-flex;

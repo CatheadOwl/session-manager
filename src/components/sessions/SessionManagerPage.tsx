@@ -6,7 +6,7 @@ import { useSessionUIState } from "@/hooks/useSessionUIState";
 import { useUpdater } from "@/hooks/useUpdater";
 import type { DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
-import { getMetadataKey, getSessionKey } from "@/lib/domain";
+import { getLifecycleOperationOptions, getMetadataKey, getSessionKey } from "@/lib/domain";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 import { FolderFilter } from "./FolderFilter";
 import { SessionDetail } from "./SessionDetail";
@@ -74,15 +74,17 @@ export function SessionManagerPage() {
 
   const handleBatchDelete = useCallback(() => {
     const keys = selectedKeysRef.current;
-    const items = keys
+    const selectedSessions = keys
       .map((key) => getSessionFromMap(queries.sessionMap, key))
-      .filter((s): s is SessionMeta & { sourcePath: string } => Boolean(s?.sourcePath))
-      .map((s) => ({
-        providerId: s.providerId,
-        sessionId: s.sessionId,
-        sourcePath: s.sourcePath,
-      }));
-    mutations.handleBatchDelete(items);
+      .filter((s): s is SessionMeta => Boolean(s));
+    const items = selectedSessions
+      .map(getLifecycleOperationOptions)
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const skippedCount = selectedSessions.length - items.length;
+    if (items.length === 0 && skippedCount > 0) {
+      window.alert("Selected sessions are read-only and cannot be deleted.");
+    }
+    mutations.handleBatchDelete(items, skippedCount);
     ui.clearSelection();
   }, [queries.sessionMap, mutations.handleBatchDelete, ui.clearSelection]);
 
@@ -116,7 +118,7 @@ export function SessionManagerPage() {
   // Delete: just sets the pending-delete state; confirmDeleteSession (from mutations) does the actual deletion
   const handleDelete = useCallback(
     (session: SessionMeta) => {
-      if (!session.sourcePath) return;
+      if (!getLifecycleOperationOptions(session)) return;
       ui.setSessionPendingDelete(session);
     },
     [ui.setSessionPendingDelete],

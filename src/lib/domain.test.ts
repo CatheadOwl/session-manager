@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getSessionKey, getMetadataKey, deriveFolderList } from "./domain";
+import {
+  deriveFolderList,
+  getLifecycleOperationOptions,
+  getMetadataKey,
+  getSessionKey,
+  supportsLifecycleOperations,
+} from "./domain";
 import type { SessionMeta } from "@/types";
 
 const session = (over: Partial<SessionMeta>): SessionMeta => ({
@@ -33,6 +39,42 @@ describe("getSessionKey", () => {
 describe("getMetadataKey", () => {
   it("omits sourcePath so star/pin state is shared across forks", () => {
     expect(getMetadataKey(session({ sourcePath: "/data/a.jsonl" }))).toBe("claude:s1");
+  });
+});
+
+describe("lifecycle operation support", () => {
+  it("builds file locator operation options from the locator path", () => {
+    const meta = session({
+      sourcePath: "/stale/path.jsonl",
+      locator: { kind: "file", path: "/data/session.jsonl" },
+    });
+
+    expect(getLifecycleOperationOptions(meta)).toEqual({
+      providerId: "claude",
+      sessionId: "s1",
+      sourcePath: "/data/session.jsonl",
+      locator: { kind: "file", path: "/data/session.jsonl" },
+    });
+    expect(supportsLifecycleOperations(meta)).toBe(true);
+  });
+
+  it("falls back to legacy sourcePath for file-backed sessions", () => {
+    expect(getLifecycleOperationOptions(session({ sourcePath: "/data/session.jsonl" }))).toEqual({
+      providerId: "claude",
+      sessionId: "s1",
+      sourcePath: "/data/session.jsonl",
+      locator: undefined,
+    });
+  });
+
+  it("rejects database-backed sessions even when they expose a sourcePath", () => {
+    const meta = session({
+      sourcePath: "/data/opencode.db",
+      locator: { kind: "database", path: "/data/opencode.db", recordId: "row-a" },
+    });
+
+    expect(getLifecycleOperationOptions(meta)).toBeUndefined();
+    expect(supportsLifecycleOperations(meta)).toBe(false);
   });
 });
 

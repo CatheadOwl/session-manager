@@ -70,6 +70,29 @@ mod tests {
     // Use the global shared lock to prevent parallel tests from racing on env vars.
     static ENV_LOCK: &std::sync::Mutex<()> = &TEST_ENV_LOCK;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let old_value = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old_value }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old_value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn test_registry() -> Arc<ProviderRegistry> {
         build_provider_registry()
     }
@@ -472,6 +495,83 @@ mod tests {
         assert!(!outcomes[0].success);
         assert_eq!(
             outcomes[0].error.as_deref(),
+            Some("Database-backed sessions are read-only and do not support this operation")
+        );
+    }
+
+    #[test]
+    fn database_archive_restore_reject_before_touching_path() {
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "row-a".to_string(),
+            locator: SessionLocator::Database {
+                path: "Z:/missing/opencode.db".to_string(),
+                record_id: "row-a".to_string(),
+            },
+        };
+        let registry = test_registry();
+
+        let archive_err = archive_session_for_handle(&registry, &handle)
+            .expect_err("database archive should be unsupported");
+        let restore_err = restore_session_for_handle(&registry, &handle)
+            .expect_err("database restore should be unsupported");
+
+        assert_eq!(
+            archive_err,
+            "Database-backed sessions are read-only and do not support this operation"
+        );
+        assert_eq!(
+            restore_err,
+            "Database-backed sessions are read-only and do not support this operation"
+        );
+    }
+
+    #[test]
+    fn mixed_batch_delete_keeps_file_success_and_database_failure() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+
+        let test_home = tempdir().expect("tempdir");
+        let _test_home_guard = EnvVarGuard::set_path("SESSION_MANAGER_TEST_HOME", test_home.path());
+
+        let source = test_home
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("my-folder")
+            .join("batch-file.jsonl");
+        std::fs::create_dir_all(source.parent().unwrap()).expect("create dir");
+        write_claude_session(&source, "file-session");
+
+        let requests = vec![
+            DeleteSessionRequest {
+                provider_id: "claude".to_string(),
+                session_id: "file-session".to_string(),
+                source_path: source.to_string_lossy().to_string(),
+                locator: Some(SessionLocator::File {
+                    path: source.to_string_lossy().to_string(),
+                }),
+            },
+            DeleteSessionRequest {
+                provider_id: "opencode".to_string(),
+                session_id: "row-a".to_string(),
+                source_path: "Z:/missing/opencode.db".to_string(),
+                locator: Some(SessionLocator::Database {
+                    path: "Z:/missing/opencode.db".to_string(),
+                    record_id: "row-a".to_string(),
+                }),
+            },
+        ];
+
+        let registry = test_registry();
+        let outcomes = delete_sessions(&registry, &requests);
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].success);
+        assert_eq!(outcomes[0].error, None);
+        assert!(!source.exists(), "file-backed session should be deleted");
+        assert!(!outcomes[1].success);
+        assert_eq!(
+            outcomes[1].error.as_deref(),
             Some("Database-backed sessions are read-only and do not support this operation")
         );
     }

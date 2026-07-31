@@ -14,6 +14,7 @@ import { SegmentedControl } from "./SegmentedControl";
 import { RawSessionContent } from "./RawSessionContent";
 import { formatSessionTitle, formatTimestamp } from "@/utils/format";
 import { getLegacyCollapsedMessage } from "@/utils/content-collapse";
+import { supportsLifecycleOperations } from "@/lib/domain";
 
 interface SessionDetailProps {
   session: SessionMeta | null;
@@ -205,6 +206,10 @@ export const SessionDetail = memo(function SessionDetail({
   }
 
   const sessionTitle = formatSessionTitle(session);
+  const lifecycleSupported = supportsLifecycleOperations(session);
+  const lifecycleTitle = lifecycleSupported
+    ? undefined
+    : "OpenCode SQLite sessions are read-only in this version.";
 
   return (
     <main className="session-detail">
@@ -216,33 +221,42 @@ export const SessionDetail = memo(function SessionDetail({
               <div className="detail-actions">
                 <StarButton starred={isStarred} onToggle={() => onToggleStar(session)} />
                 {scope === "active" && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={isArchiving}
-                    onClick={() => onArchive(session)}
-                  >
-                    {isArchiving ? "Archiving..." : "Archive"}
-                  </button>
+                  <span className="lifecycle-action-tooltip" title={lifecycleTitle}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={isArchiving || !lifecycleSupported}
+                      aria-label={lifecycleTitle ?? "Archive session"}
+                      onClick={() => onArchive(session)}
+                    >
+                      {isArchiving ? "Archiving..." : "Archive"}
+                    </button>
+                  </span>
                 )}
                 {scope === "archived" && (
+                  <span className="lifecycle-action-tooltip" title={lifecycleTitle}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={isRestoring || !lifecycleSupported}
+                      aria-label={lifecycleTitle ?? "Restore session"}
+                      onClick={() => onRestore(session)}
+                    >
+                      {isRestoring ? "Restoring..." : "Restore"}
+                    </button>
+                  </span>
+                )}
+                <span className="lifecycle-action-tooltip" title={lifecycleTitle}>
                   <button
                     type="button"
-                    className="secondary-button"
-                    disabled={isRestoring}
-                    onClick={() => onRestore(session)}
+                    className="danger-button"
+                    disabled={isDeleting || !lifecycleSupported}
+                    aria-label={lifecycleTitle ?? "Delete session"}
+                    onClick={() => onDelete(session)}
                   >
-                    {isRestoring ? "Restoring..." : "Restore"}
+                    {isDeleting ? "Deleting..." : "Delete"}
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="danger-button"
-                  disabled={isDeleting}
-                  onClick={() => onDelete(session)}
-                >
-                  {isDeleting ? "Deleting..." : "Delete"}
-                </button>
+                </span>
               </div>
             </div>
             <h2 title={sessionTitle}>{sessionTitle}</h2>

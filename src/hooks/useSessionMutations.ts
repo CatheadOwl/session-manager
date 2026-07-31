@@ -12,7 +12,7 @@ import {
 } from "@/lib/query/mutations";
 import type { SessionMeta } from "@/types";
 import { normalizeProjectDir } from "@/utils/format";
-import { getMetadataKey } from "@/lib/domain";
+import { getLifecycleOperationOptions, getMetadataKey } from "@/lib/domain";
 
 interface UseSessionMutationsOptions {
   onSessionDeleted: () => void;
@@ -46,16 +46,14 @@ export function useSessionMutations(
 
   // ─── Data helpers ─────────────────────────────────────────────────
   const getFolderOperationItems = useCallback(
-    (folder: string): DeleteSessionOptions[] => {
-      if (folder === "all" || folder === "Unknown") return [];
-      return sessions
+    (folder: string): { items: DeleteSessionOptions[]; skippedCount: number } => {
+      if (folder === "all" || folder === "Unknown") return { items: [], skippedCount: 0 };
+      const folderSessions = sessions
         .filter((session) => normalizeProjectDir(session.projectDir) === folder)
-        .filter((session): session is SessionMeta & { sourcePath: string } => Boolean(session.sourcePath))
-        .map((session) => ({
-          providerId: session.providerId,
-          sessionId: session.sessionId,
-          sourcePath: session.sourcePath,
-        }));
+      const items = folderSessions
+        .map(getLifecycleOperationOptions)
+        .filter((item): item is DeleteSessionOptions => Boolean(item));
+      return { items, skippedCount: folderSessions.length - items.length };
     },
     [sessions],
   );
@@ -63,14 +61,11 @@ export function useSessionMutations(
   // ─── Single-session handlers ──────────────────────────────────────
   const confirmDeleteSession = useCallback(
     (session: SessionMeta) => {
-      if (!session.sourcePath) return;
+      const input = getLifecycleOperationOptions(session);
+      if (!input) return;
 
       deleteMutation.mutate(
-        {
-          providerId: session.providerId,
-          sessionId: session.sessionId,
-          sourcePath: session.sourcePath,
-        },
+        input,
         {
           onSuccess: () => onSessionDeleted(),
           onError: (error) => window.alert(error.message),
@@ -81,10 +76,13 @@ export function useSessionMutations(
   );
 
   const handleBatchDelete = useCallback(
-    (sessionsToDelete: { providerId: string; sessionId: string; sourcePath: string }[]) => {
+    (sessionsToDelete: DeleteSessionOptions[], skippedCount = 0) => {
       if (sessionsToDelete.length === 0) return;
 
-      const ok = window.confirm(`Delete ${sessionsToDelete.length} selected session(s)?\n\nThis cannot be undone.`);
+      const skipped = skippedCount > 0 ? `\n\n${skippedCount} read-only session(s) will be skipped.` : "";
+      const ok = window.confirm(
+        `Delete ${sessionsToDelete.length} selected session(s)?${skipped}\n\nThis cannot be undone.`,
+      );
       if (!ok) return;
 
       deleteSessionsMutation.mutate(sessionsToDelete, {
@@ -99,13 +97,10 @@ export function useSessionMutations(
 
   const handleArchive = useCallback(
     (session: SessionMeta) => {
-      if (!session.sourcePath) return;
+      const input = getLifecycleOperationOptions(session);
+      if (!input) return;
       archiveMutation.mutate(
-        {
-          providerId: session.providerId,
-          sessionId: session.sessionId,
-          sourcePath: session.sourcePath,
-        },
+        input,
         {
           onSuccess: () => onSessionArchived(),
           onError: (error) => window.alert(error.message),
@@ -117,13 +112,10 @@ export function useSessionMutations(
 
   const handleRestore = useCallback(
     (session: SessionMeta) => {
-      if (!session.sourcePath) return;
+      const input = getLifecycleOperationOptions(session);
+      if (!input) return;
       restoreMutation.mutate(
-        {
-          providerId: session.providerId,
-          sessionId: session.sessionId,
-          sourcePath: session.sourcePath,
-        },
+        input,
         {
           onSuccess: () => onSessionRestored(),
           onError: (error) => window.alert(error.message),
@@ -136,15 +128,16 @@ export function useSessionMutations(
   // ─── Folder-level handlers ────────────────────────────────────────
   const handleFolderAction = useCallback(
     (folder: string, action: "archive" | "restore") => {
-      const items = getFolderOperationItems(folder);
+      const { items, skippedCount } = getFolderOperationItems(folder);
       if (items.length === 0) {
-        window.alert("No sessions with source files were found in this folder.");
+        window.alert("No sessions that support this operation were found in this folder.");
         return;
       }
 
       const verb = action === "archive" ? "Archive" : "Restore";
+      const skipped = skippedCount > 0 ? `\n\n${skippedCount} read-only session(s) will be skipped.` : "";
       const ok = window.confirm(
-        `${verb} ${items.length} sessions from this folder?\n\n${folder}\n\nPinned folders are not changed.`,
+        `${verb} ${items.length} sessions from this folder?${skipped}\n\n${folder}\n\nPinned folders are not changed.`,
       );
       if (!ok) return;
 

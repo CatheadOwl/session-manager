@@ -27,6 +27,42 @@ export const getSessionKey = (session: SessionMeta): string =>
 export const getMetadataKey = (session: SessionMeta): string =>
   `${session.providerId}:${session.sessionId}`;
 
+export interface SessionLifecycleOperationOptions {
+  providerId: string;
+  sessionId: string;
+  /**
+   * Named for the existing mutation API. For file locators this is the file
+   * locator path; for legacy sessions it falls back to SessionMeta.sourcePath.
+   */
+  sourcePath: string;
+  locator?: SessionMeta["locator"];
+}
+
+export const getLifecycleOperationOptions = (
+  session: SessionMeta,
+): SessionLifecycleOperationOptions | undefined => {
+  if (session.locator?.kind === "database") {
+    return undefined;
+  }
+
+  const sourcePath = session.locator?.kind === "file"
+    ? session.locator.path
+    : session.sourcePath;
+  if (!sourcePath) {
+    return undefined;
+  }
+
+  return {
+    providerId: session.providerId,
+    sessionId: session.sessionId,
+    sourcePath,
+    locator: session.locator,
+  };
+};
+
+export const supportsLifecycleOperations = (session: SessionMeta): boolean =>
+  Boolean(getLifecycleOperationOptions(session));
+
 export interface FolderGroup {
   name: string;
   count: number;

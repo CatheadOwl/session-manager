@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::session_manager::{SessionMessage, SessionMeta};
+use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta};
 
 use super::utils::{
     extract_text, extract_tool_calls, extract_tool_results, move_single_file,
@@ -207,7 +207,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         project_dir: cwd,
         created_at: first_ts,
         last_active_at: last_ts.or(first_ts),
-        source_path: Some(source_path),
+        source_path: Some(source_path.clone()),
+        locator: Some(SessionLocator::File { path: source_path }),
         resume_command: None,
         forked_from_id: None,
     })

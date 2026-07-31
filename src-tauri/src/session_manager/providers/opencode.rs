@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::session_manager::{SessionMessage, SessionMeta, ToolCallInfo};
+use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta, ToolCallInfo};
 
 use super::utils::{move_single_file, path_basename, truncate_summary, TITLE_MAX_CHARS};
 use super::SessionProvider;
@@ -165,7 +165,8 @@ fn parse_session_file(path: &Path, storage_dir: &Path) -> Option<SessionMeta> {
         project_dir: directory,
         created_at,
         last_active_at,
-        source_path: Some(source_path),
+        source_path: Some(source_path.clone()),
+        locator: Some(SessionLocator::File { path: source_path }),
         resume_command: Some(format!("opencode -s {session_id}")),
         forked_from_id: None,
     })

@@ -18,10 +18,25 @@ pub struct SessionMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<SessionLocator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
     /// Provider-specific session ID this session forked from (e.g. Codex's forked_from_id).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<String>,
+}
+
+impl SessionMeta {
+    pub fn debug_assert_file_locator_matches_source_path(&self) {
+        if let (Some(source_path), Some(SessionLocator::File { path })) =
+            (&self.source_path, &self.locator)
+        {
+            debug_assert_eq!(
+                source_path, path,
+                "file-backed SessionMeta locator must match source_path"
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
@@ -239,4 +254,48 @@ pub struct DeleteSessionOutcome {
 pub enum SessionScope {
     Active,
     Archived,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_meta(source_path: Option<String>, locator: Option<SessionLocator>) -> SessionMeta {
+        SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "session-1".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: None,
+            last_active_at: None,
+            source_path,
+            locator,
+            resume_command: None,
+            forked_from_id: None,
+        }
+    }
+
+    #[test]
+    fn file_locator_can_match_source_path() {
+        base_meta(
+            Some("/data/session.jsonl".to_string()),
+            Some(SessionLocator::File {
+                path: "/data/session.jsonl".to_string(),
+            }),
+        )
+        .debug_assert_file_locator_matches_source_path();
+    }
+
+    #[test]
+    #[should_panic(expected = "file-backed SessionMeta locator must match source_path")]
+    fn file_locator_mismatch_panics_in_debug_assertions() {
+        base_meta(
+            Some("/data/session.jsonl".to_string()),
+            Some(SessionLocator::File {
+                path: "/other/session.jsonl".to_string(),
+            }),
+        )
+        .debug_assert_file_locator_matches_source_path();
+    }
 }

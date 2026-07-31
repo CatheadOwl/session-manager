@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::session_manager::{SessionMessage, SessionMeta, ToolCallInfo};
+use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta, ToolCallInfo};
 
 use super::utils::{
     move_single_file, parse_timestamp_to_ms, truncate_summary, truncate_tool_input,
@@ -215,7 +215,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         project_dir: None, // populated later by scan_sessions_in_root
         created_at,
         last_active_at: last_active_at.or(created_at),
-        source_path: Some(source_path),
+        source_path: Some(source_path.clone()),
+        locator: Some(SessionLocator::File { path: source_path }),
         resume_command: Some(format!("gemini --resume {session_id}")),
         forked_from_id: None,
     })

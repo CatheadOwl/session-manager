@@ -1,5 +1,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { sessionsApi, type AppMetadata, type ForkTreeResult } from "@/lib/api/sessions";
+import {
+  loadableSessionHandleOptionsFromMeta,
+  sessionsApi,
+  type AppMetadata,
+  type ForkTreeResult,
+} from "@/lib/api/sessions";
 import type { SessionDetail, SessionMeta } from "@/types";
 import { queryKeys } from "./keys";
 
@@ -19,14 +24,22 @@ export const useAppMetadataQuery = () => {
   });
 };
 
-export const useSessionDetailQuery = (
-  providerId?: string,
-  sourcePath?: string,
-) => {
+export const useSessionDetailQuery = (session?: SessionMeta | null) => {
+  const handleOptions = loadableSessionHandleOptionsFromMeta(session);
+
   return useQuery<SessionDetail>({
-    queryKey: queryKeys.sessionDetail(providerId!, sourcePath!),
-    queryFn: async () => sessionsApi.getSessionDetail(providerId!, sourcePath!),
-    enabled: Boolean(providerId && sourcePath),
+    queryKey: queryKeys.sessionDetail(
+      handleOptions?.providerId ?? "",
+      handleOptions?.locator ?? handleOptions?.sourcePath,
+    ),
+    queryFn: async () => {
+      if (!handleOptions) {
+        throw new Error("Session detail query requires a loadable session");
+      }
+
+      return sessionsApi.getSessionDetail(handleOptions);
+    },
+    enabled: Boolean(handleOptions),
     staleTime: 30 * 1000,
     placeholderData: keepPreviousData,
   });

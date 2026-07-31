@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::fs_utils;
-use crate::session_manager::{SessionMessage, SessionMeta};
+use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta};
 
 use super::utils::{
     extract_text, extract_tool_calls, extract_tool_results, infer_session_id_from_filename,
@@ -370,6 +370,9 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         created_at,
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
+        locator: Some(SessionLocator::File {
+            path: path.to_string_lossy().to_string(),
+        }),
         resume_command: None,
         forked_from_id: None,
     })

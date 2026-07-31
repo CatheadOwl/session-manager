@@ -32,6 +32,25 @@ interface RawAppMetadata {
   pinned_folders?: string[];
 }
 
+export const sessionHandleOptionsFromMeta = (
+  session: SessionMeta,
+): SessionHandleOptions => ({
+  providerId: session.providerId,
+  sessionId: session.sessionId,
+  sourcePath: session.sourcePath,
+  locator: session.locator,
+});
+
+export const loadableSessionHandleOptionsFromMeta = (
+  session?: SessionMeta | null,
+): SessionHandleOptions | undefined => {
+  if (!session?.providerId || (!session.locator && !session.sourcePath)) {
+    return undefined;
+  }
+
+  return sessionHandleOptionsFromMeta(session);
+};
+
 export interface SessionMetadata {
   starred: boolean;
 }

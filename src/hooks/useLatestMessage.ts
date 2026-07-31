@@ -1,12 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { sessionsApi } from "@/lib/api/sessions";
+import {
+  loadableSessionHandleOptionsFromMeta,
+  sessionsApi,
+  type SessionHandleOptions,
+} from "@/lib/api/sessions";
 import { queryKeys } from "@/lib/query/keys";
-import type { SessionDetail, SessionMessage } from "@/types";
+import type { SessionDetail, SessionMessage, SessionMeta } from "@/types";
 
-interface UseLatestMessageOptions {
-  providerId?: string;
-  sourcePath?: string;
-}
+type UseLatestMessageOptions =
+  | { session: SessionMeta; providerId?: never; sourcePath?: never }
+  | { session?: undefined; providerId?: string; sourcePath?: string };
 
 interface UseLatestMessageResult {
   getLatestMessage: () => Promise<SessionMessage | undefined>;
@@ -20,17 +23,26 @@ interface UseLatestMessageResult {
  * when the session detail is already cached via useSessionDetailQuery.
  */
 export function useLatestMessage({
+  session,
   providerId,
   sourcePath,
 }: UseLatestMessageOptions): UseLatestMessageResult {
   const queryClient = useQueryClient();
 
   const getLatestMessage = async (): Promise<SessionMessage | undefined> => {
-    if (!providerId || !sourcePath) return;
+    const handleOptions: SessionHandleOptions | undefined = session
+      ? loadableSessionHandleOptionsFromMeta(session)
+      : providerId && sourcePath
+        ? { providerId, sessionId: "", sourcePath }
+        : undefined;
+    if (!handleOptions) return;
 
     // Try cache first
     const cached = queryClient.getQueryData<SessionDetail>(
-      queryKeys.sessionDetail(providerId, sourcePath),
+      queryKeys.sessionDetail(
+        handleOptions.providerId,
+        handleOptions.locator ?? handleOptions.sourcePath,
+      ),
     );
     if (cached?.messages?.length) {
       return [...cached.messages]
@@ -39,7 +51,7 @@ export function useLatestMessage({
     }
 
     // Fall back to API call
-    const messages = await sessionsApi.getMessages(providerId, sourcePath);
+    const messages = await sessionsApi.getMessages(handleOptions);
     return [...messages].reverse().find((m) => m.content.trim());
   };
 

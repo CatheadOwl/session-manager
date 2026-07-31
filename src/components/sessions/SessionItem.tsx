@@ -28,10 +28,7 @@ export const SessionItem = memo(function SessionItem({
     () => session.lastActiveAt ?? session.createdAt,
     [session.lastActiveAt, session.createdAt],
   );
-  const { getLatestMessage } = useLatestMessage({
-    providerId: session.providerId,
-    sourcePath: session.sourcePath,
-  });
+  const { getLatestMessage } = useLatestMessage({ session });
   const selectionCtx = useSelectionContext();
 
   const handleClick = () => {
@@ -75,7 +72,7 @@ export const SessionItem = memo(function SessionItem({
             getText={async () => (await getLatestMessage())?.content}
             label="Copy latest message"
             className="session-copy-latest-btn"
-            disabled={!session.sourcePath}
+            disabled={!session.sourcePath && !session.locator}
           />
         </span>
       </div>

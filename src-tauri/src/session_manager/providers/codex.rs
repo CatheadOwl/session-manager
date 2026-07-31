@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::session_manager::types::ToolResultInfo;
-use crate::session_manager::{SessionMessage, SessionMeta, ToolCallInfo};
+use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta, ToolCallInfo};
 
 use super::utils::{
     extract_text, move_single_file, parse_timestamp_to_ms, path_basename, read_head_tail_lines,
@@ -312,6 +312,9 @@ fn parse_session_with_titles(
         created_at,
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
+        locator: Some(SessionLocator::File {
+            path: path.to_string_lossy().to_string(),
+        }),
         resume_command: Some(format!("codex resume {session_id}")),
         forked_from_id,
     })

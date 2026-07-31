@@ -79,10 +79,7 @@ export function useSessionQueries(
   const isStarred = selectedMetaKey ? starredMap.has(selectedMetaKey) : false;
 
   // Session detail query (only fires when a session is selected)
-  const sessionDetailQuery = useSessionDetailQuery(
-    selectedSession?.providerId,
-    selectedSession?.sourcePath,
-  );
+  const sessionDetailQuery = useSessionDetailQuery(selectedSession);
 
   return {
     sessionsQuery,

@@ -21,7 +21,9 @@ pub fn scan_sessions_with_scope(
             }
         };
         if root.exists() {
-            sessions.extend(provider.scan_sessions(root));
+            sessions.extend(provider.scan_sessions(root).into_iter().inspect(|meta| {
+                meta.debug_assert_file_locator_matches_source_path();
+            }));
         }
     }
     sessions.sort_by(|a, b| {

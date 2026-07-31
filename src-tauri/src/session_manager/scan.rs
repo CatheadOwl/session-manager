@@ -7,7 +7,7 @@ pub fn scan_sessions_with_scope(
 ) -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
     for provider in registry.all() {
-        let roots = provider.roots();
+        let roots = provider.scan_roots();
         if roots.is_empty() {
             continue;
         }

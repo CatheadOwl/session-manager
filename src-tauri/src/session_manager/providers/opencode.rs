@@ -1,8 +1,12 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
 
-use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta, ToolCallInfo};
+use crate::session_manager::{
+    SessionHandle, SessionLocator, SessionMessage, SessionMeta, ToolCallInfo,
+};
 
 use super::utils::{move_single_file, path_basename, truncate_summary, TITLE_MAX_CHARS};
 use super::SessionProvider;
@@ -13,11 +17,13 @@ const PROVIDER_ID: &str = "opencode";
 
 /// Provider implementation for OpenCode sessions.
 ///
-/// Storage layout (JSON-only, no SQLite):
+/// Legacy storage layout:
 ///   {base}/storage/
 ///     session/{project_id}/{session_id}.json   — session metadata
 ///     message/{session_id}/{message_id}.json    — messages
 ///     part/{message_id}/{part_id}.json          — message parts
+///
+/// Newer OpenCode versions also store sessions in `{base}/opencode.db`.
 pub struct OpenCodeProvider;
 
 impl SessionProvider for OpenCodeProvider {
@@ -32,8 +38,15 @@ impl SessionProvider for OpenCodeProvider {
         ]
     }
 
+    fn scan_roots(&self) -> Vec<PathBuf> {
+        vec![
+            crate::config::get_opencode_base_dir(),
+            crate::config::get_opencode_archive_dir(),
+        ]
+    }
+
     fn scan_sessions(&self, root: &Path) -> Vec<SessionMeta> {
-        scan_sessions_in_root(root)
+        scan_sessions_from_scan_root(root)
     }
 
     fn load_messages(&self, path: &Path) -> Result<Vec<SessionMessage>, String> {
@@ -41,8 +54,35 @@ impl SessionProvider for OpenCodeProvider {
         load_messages_internal(path, &storage_dir)
     }
 
+    fn load_messages_for_handle(
+        &self,
+        handle: &SessionHandle,
+    ) -> Result<Vec<SessionMessage>, String> {
+        match &handle.locator {
+            SessionLocator::File { path } => self.load_messages(Path::new(path)),
+            SessionLocator::Database { path, record_id } => {
+                let session_id = if record_id.is_empty() {
+                    &handle.session_id
+                } else {
+                    record_id
+                };
+                load_messages_from_db(Path::new(path), session_id)
+            }
+        }
+    }
+
     fn load_raw_content_fallback(&self, _path: &Path) -> Result<Option<String>, String> {
         Ok(None)
+    }
+
+    fn load_raw_content_fallback_for_handle(
+        &self,
+        handle: &SessionHandle,
+    ) -> Result<Option<String>, String> {
+        match &handle.locator {
+            SessionLocator::File { path } => self.load_raw_content_fallback(Path::new(path)),
+            SessionLocator::Database { .. } => Ok(None),
+        }
     }
 
     fn parse_session(&self, path: &Path) -> Option<SessionMeta> {
@@ -81,7 +121,44 @@ fn derive_storage_base(session_path: &Path) -> PathBuf {
 
 // ─── Internal functions ─────────────────────────────────────────────────────
 
-fn scan_sessions_in_root(root: &Path) -> Vec<SessionMeta> {
+fn scan_sessions_from_scan_root(root: &Path) -> Vec<SessionMeta> {
+    let mut sessions = Vec::new();
+
+    let db_path = if root.file_name().and_then(|name| name.to_str()) == Some("opencode.db") {
+        root.to_path_buf()
+    } else {
+        root.join("opencode.db")
+    };
+    if db_path.is_file() {
+        sessions.extend(scan_sessions_in_db(&db_path));
+    }
+    let mut seen_session_ids: HashSet<String> = sessions
+        .iter()
+        .map(|meta| meta.session_id.clone())
+        .collect();
+
+    let storage_root = if root.join("session").is_dir() {
+        root.to_path_buf()
+    } else {
+        root.join("storage")
+    };
+    for meta in scan_sessions_in_legacy_storage(&storage_root) {
+        if seen_session_ids.insert(meta.session_id.clone()) {
+            sessions.push(meta);
+        }
+    }
+
+    sessions
+}
+
+fn warn_opencode_scan(path: &Path, message: impl std::fmt::Display) {
+    eprintln!(
+        "Warning: failed to scan OpenCode sessions at {}: {message}",
+        path.display()
+    );
+}
+
+fn scan_sessions_in_legacy_storage(root: &Path) -> Vec<SessionMeta> {
     let session_root = root.join("session");
     if !session_root.is_dir() {
         return Vec::new();
@@ -117,6 +194,87 @@ fn scan_sessions_in_root(root: &Path) -> Vec<SessionMeta> {
     }
 
     sessions
+}
+
+fn open_db_readonly(db_path: &Path) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("Failed to open OpenCode database read-only: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_millis(250))
+        .map_err(|e| format!("Failed to set OpenCode database busy timeout: {e}"))?;
+    Ok(conn)
+}
+
+fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
+    let conn = match open_db_readonly(db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            warn_opencode_scan(db_path, err);
+            return Vec::new();
+        }
+    };
+
+    let mut stmt = match conn.prepare(
+        "SELECT id, title, directory, parent_id, time_created, time_updated, \
+                model, agent, cost, tokens_input, tokens_output \
+         FROM session \
+         ORDER BY time_updated DESC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            warn_opencode_scan(db_path, format!("failed to prepare session query: {err}"));
+            return Vec::new();
+        }
+    };
+
+    let rows = match stmt.query_map([], |row| db_session_row_to_meta(row, db_path)) {
+        Ok(rows) => rows,
+        Err(err) => {
+            warn_opencode_scan(db_path, format!("failed to query session rows: {err}"));
+            return Vec::new();
+        }
+    };
+
+    rows.filter_map(|result| match result {
+        Ok(meta) => Some(meta),
+        Err(err) => {
+            warn_opencode_scan(db_path, format!("failed to read session row: {err}"));
+            None
+        }
+    })
+    .collect()
+}
+
+fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<SessionMeta> {
+    let session_id: String = row.get(0)?;
+    let title: Option<String> = row.get(1)?;
+    let directory: Option<String> = row.get(2)?;
+    let parent_id: Option<String> = row.get(3)?;
+    let created_at: Option<i64> = row.get(4)?;
+    let updated_at: Option<i64> = row.get(5)?;
+    let db_path_string = db_path.to_string_lossy().to_string();
+
+    Ok(SessionMeta {
+        provider_id: PROVIDER_ID.to_string(),
+        session_id: session_id.clone(),
+        title: title
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| directory.as_deref().and_then(path_basename))
+            .map(|t| truncate_summary(&t, TITLE_MAX_CHARS)),
+        summary: None,
+        project_dir: directory,
+        created_at,
+        last_active_at: updated_at.or(created_at),
+        source_path: Some(db_path_string.clone()),
+        locator: Some(SessionLocator::Database {
+            path: db_path_string,
+            record_id: session_id.clone(),
+        }),
+        resume_command: Some(format!("opencode -s {session_id}")),
+        forked_from_id: parent_id,
+    })
 }
 
 /// Parse an OpenCode session JSON file and extract metadata.
@@ -326,6 +484,164 @@ fn read_part_tool_calls(part_dir: &Path) -> Vec<ToolCallInfo> {
     }
 
     calls
+}
+
+struct DbMessageDraft {
+    id: String,
+    role: String,
+    created: i64,
+    content_parts: Vec<String>,
+    tool_calls: Vec<ToolCallInfo>,
+}
+
+impl DbMessageDraft {
+    fn from_row(message_id: String, created: Option<i64>, data: Option<String>) -> Self {
+        let value = data
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+        let role = value
+            .as_ref()
+            .and_then(|v| v.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+
+        Self {
+            id: message_id,
+            role,
+            created: created.unwrap_or(0),
+            content_parts: Vec::new(),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    fn push_part(&mut self, part_data: Option<String>) {
+        let Some(raw) = part_data else {
+            return;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            return;
+        };
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = value
+                    .get("text")
+                    .or_else(|| value.get("content"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    self.content_parts.push(text.to_string());
+                }
+            }
+            Some("tool") => {
+                if let Some(name) = value
+                    .get("tool")
+                    .or_else(|| value.get("name"))
+                    .and_then(Value::as_str)
+                {
+                    self.content_parts.push(format!("[Tool: {name}]"));
+                    self.tool_calls.push(ToolCallInfo {
+                        name: name.to_string(),
+                        input: value
+                            .get("state")
+                            .and_then(|state| state.get("input"))
+                            .map(|input| input.to_string())
+                            .unwrap_or_default(),
+                        call_id: value
+                            .get("callID")
+                            .or_else(|| value.get("call_id"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    });
+                }
+            }
+            Some("file") => {
+                if let Some(path) = value
+                    .get("path")
+                    .or_else(|| value.get("filename"))
+                    .or_else(|| value.get("name"))
+                    .and_then(Value::as_str)
+                {
+                    self.content_parts.push(format!("[File: {path}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn into_message(self) -> Option<SessionMessage> {
+        let content = self.content_parts.join("\n");
+        if content.trim().is_empty() {
+            return None;
+        }
+
+        Some(SessionMessage {
+            role: self.role,
+            content,
+            ts: Some(self.created),
+            usage: None,
+            cumulative_usage: None,
+            tool_calls: if self.tool_calls.is_empty() {
+                None
+            } else {
+                Some(self.tool_calls)
+            },
+            tool_result: None,
+        })
+    }
+}
+
+fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    let conn = open_db_readonly(db_path)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.id, m.time_created, m.data, p.id, p.time_created, p.data \
+             FROM message m \
+             LEFT JOIN part p ON p.message_id = m.id \
+             WHERE m.session_id = ? \
+             ORDER BY m.time_created ASC, m.id ASC, p.time_created ASC, p.id ASC",
+        )
+        .map_err(|e| format!("Failed to prepare OpenCode message query: {e}"))?;
+
+    let mut rows = stmt
+        .query([session_id])
+        .map_err(|e| format!("Failed to query OpenCode messages: {e}"))?;
+    let mut drafts = Vec::new();
+    let mut current: Option<DbMessageDraft> = None;
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to read OpenCode message row: {e}"))?
+    {
+        let message_id: String = row
+            .get(0)
+            .map_err(|e| format!("OpenCode message row is missing id: {e}"))?;
+
+        if current.as_ref().map(|draft| draft.id.as_str()) != Some(message_id.as_str()) {
+            if let Some(draft) = current.take() {
+                drafts.push(draft);
+            }
+            current = Some(DbMessageDraft::from_row(
+                message_id,
+                row.get(1).ok(),
+                row.get(2).ok(),
+            ));
+        }
+
+        if let Some(draft) = current.as_mut() {
+            draft.push_part(row.get(5).ok());
+        }
+    }
+
+    if let Some(draft) = current {
+        drafts.push(draft);
+    }
+
+    Ok(drafts
+        .into_iter()
+        .filter_map(DbMessageDraft::into_message)
+        .collect())
 }
 
 /// Load messages for a session given the session JSON file path and storage dir.
@@ -543,7 +859,43 @@ fn move_session(source_path: &Path, dest_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::TEST_ENV_LOCK;
+    use crate::session_manager::{
+        archive_session_for_handle, build_provider_registry, load_session_detail_for_handle,
+    };
+    use rusqlite::params;
     use tempfile::tempdir;
+
+    static ENV_LOCK: &std::sync::Mutex<()> = &TEST_ENV_LOCK;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let old_value = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old_value }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let old_value = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, old_value }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old_value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     /// Write a session JSON file into the given storage tree and return its path.
     fn write_session(
@@ -676,6 +1028,167 @@ mod tests {
         .expect("write part file");
     }
 
+    fn write_sqlite_fixture(base: &Path) -> PathBuf {
+        std::fs::create_dir_all(base).expect("create opencode base");
+        let db_path = base.join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        conn.execute(
+            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                "ses_db_1",
+                "SQLite Session",
+                "/tmp/opencode-project",
+                Option::<String>::None,
+                1_740_000_000_000i64,
+                1_740_000_020_000i64,
+                "model-a",
+                "agent-a",
+                0.01f64,
+                12i64,
+                34i64
+            ],
+        )
+        .expect("insert session one");
+        conn.execute(
+            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                "ses_db_2",
+                Option::<String>::None,
+                "/tmp/other-project",
+                "ses_db_1",
+                1_740_000_001_000i64,
+                1_740_000_010_000i64,
+                "model-b",
+                "agent-b",
+                0.02f64,
+                1i64,
+                2i64
+            ],
+        )
+        .expect("insert session two");
+
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "msg_user",
+                "ses_db_1",
+                1_740_000_002_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert user message");
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "msg_assistant",
+                "ses_db_1",
+                1_740_000_003_000i64,
+                serde_json::json!({"role":"assistant"}).to_string()
+            ],
+        )
+        .expect("insert assistant message");
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "msg_other",
+                "ses_db_2",
+                1_740_000_004_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert other message");
+
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_user_text",
+                "msg_user",
+                1_740_000_002_100i64,
+                serde_json::json!({"type":"text","text":"Hello from SQLite"}).to_string()
+            ],
+        )
+        .expect("insert user text part");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_assistant_text",
+                "msg_assistant",
+                1_740_000_003_100i64,
+                serde_json::json!({"type":"text","text":"Let me inspect"}).to_string()
+            ],
+        )
+        .expect("insert assistant text part");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_assistant_tool",
+                "msg_assistant",
+                1_740_000_003_200i64,
+                serde_json::json!({
+                    "type":"tool",
+                    "tool":"bash",
+                    "callID":"call_sqlite_1",
+                    "state":{"input":{"command":"pwd"}}
+                })
+                .to_string()
+            ],
+        )
+        .expect("insert tool part");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_unknown",
+                "msg_assistant",
+                1_740_000_003_300i64,
+                serde_json::json!({"type":"unknown","value":"skip me"}).to_string()
+            ],
+        )
+        .expect("insert unknown part");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_other_text",
+                "msg_other",
+                1_740_000_004_100i64,
+                serde_json::json!({"type":"text","text":"Other session"}).to_string()
+            ],
+        )
+        .expect("insert other part");
+
+        db_path
+    }
+
     /// Keep a tempdir alive for the test duration while providing the storage path.
     struct TestStorage {
         #[allow(dead_code)]
@@ -699,6 +1212,15 @@ mod tests {
         let provider = OpenCodeProvider;
         assert_eq!(provider.id(), "opencode");
         assert_eq!(provider.roots().len(), 2);
+        assert_eq!(provider.scan_roots().len(), 2);
+        assert!(
+            provider.roots()[0].ends_with("storage"),
+            "operation root should remain the legacy storage directory"
+        );
+        assert!(
+            !provider.scan_roots()[0].ends_with("storage"),
+            "scan root should widen to the OpenCode base directory"
+        );
     }
 
     #[test]
@@ -921,6 +1443,202 @@ mod tests {
     }
 
     #[test]
+    fn scan_sessions_reads_sqlite_database() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_fixture(temp.path());
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].session_id, "ses_db_1");
+        assert_eq!(sessions[0].title.as_deref(), Some("SQLite Session"));
+        assert_eq!(
+            sessions[0].source_path.as_deref(),
+            Some(db_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            sessions[0].locator,
+            Some(SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_db_1".to_string(),
+            })
+        );
+        assert_eq!(sessions[1].title.as_deref(), Some("other-project"));
+        assert_eq!(sessions[1].forked_from_id.as_deref(), Some("ses_db_1"));
+    }
+
+    #[test]
+    fn load_messages_reads_selected_sqlite_session() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_fixture(temp.path());
+        let provider = OpenCodeProvider;
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "ses_db_1".to_string(),
+            locator: SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_db_1".to_string(),
+            },
+        };
+
+        let messages = provider
+            .load_messages_for_handle(&handle)
+            .expect("load sqlite messages");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "Hello from SQLite");
+        assert_eq!(messages[0].ts, Some(1_740_000_002_000));
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "Let me inspect\n[Tool: bash]");
+        assert!(!messages[1].content.contains("Other session"));
+
+        let calls = messages[1].tool_calls.as_ref().expect("tool calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].call_id.as_deref(), Some("call_sqlite_1"));
+        assert!(calls[0].input.contains("pwd"));
+    }
+
+    #[test]
+    fn load_session_detail_reads_sqlite_session_through_registry() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_fixture(temp.path());
+        let registry = build_provider_registry();
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "ses_db_1".to_string(),
+            locator: SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_db_1".to_string(),
+            },
+        };
+
+        let detail = load_session_detail_for_handle(&registry, &handle).expect("load detail");
+
+        assert_eq!(detail.messages.len(), 2);
+        assert_eq!(detail.qa_pairs.len(), 1);
+        assert_eq!(detail.raw_content, None);
+    }
+
+    #[test]
+    fn sqlite_raw_content_fallback_returns_none() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_fixture(temp.path());
+        let provider = OpenCodeProvider;
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "ses_db_empty".to_string(),
+            locator: SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_db_empty".to_string(),
+            },
+        };
+
+        let raw = provider
+            .load_raw_content_fallback_for_handle(&handle)
+            .expect("db raw fallback");
+
+        assert!(raw.is_none());
+    }
+
+    #[test]
+    fn scan_sessions_prefers_sqlite_when_legacy_has_same_session_id() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_fixture(temp.path());
+        let legacy_storage = temp.path().join("storage");
+        write_session(
+            &legacy_storage,
+            "proj_abc",
+            "ses_db_1",
+            Some("Legacy Duplicate"),
+            Some("/tmp/legacy"),
+            1_740_000_000_000,
+            None,
+        );
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+
+        let matching: Vec<_> = sessions
+            .iter()
+            .filter(|session| session.session_id == "ses_db_1")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].title.as_deref(), Some("SQLite Session"));
+        assert_eq!(
+            matching[0].locator,
+            Some(SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_db_1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn scan_sessions_logs_and_skips_unreadable_sqlite_schema() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        conn.execute_batch("CREATE TABLE not_session (id TEXT PRIMARY KEY);")
+            .expect("create incompatible schema");
+        drop(conn);
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn archive_legacy_session_uses_storage_operation_root() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let test_home = tempdir().expect("tempdir");
+        let _test_home_guard = EnvVarGuard::set_path("SESSION_MANAGER_TEST_HOME", test_home.path());
+        let _xdg_data_home_guard = EnvVarGuard::remove("XDG_DATA_HOME");
+
+        let storage = test_home.path().join(".local/share/opencode/storage");
+        let session_path = write_session(
+            &storage,
+            "proj_abc",
+            "ses_archive_root",
+            Some("Archive Root"),
+            Some("/tmp"),
+            1_740_000_000_000,
+            None,
+        );
+        let registry = build_provider_registry();
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "ses_archive_root".to_string(),
+            locator: SessionLocator::File {
+                path: session_path.to_string_lossy().to_string(),
+            },
+        };
+
+        archive_session_for_handle(&registry, &handle).expect("archive legacy opencode session");
+
+        assert!(
+            !session_path.exists(),
+            "legacy session should move out of active storage"
+        );
+        assert!(
+            test_home
+                .path()
+                .join(
+                    ".local/share/opencode/storage_archived/session/proj_abc/ses_archive_root.json"
+                )
+                .exists(),
+            "archive path should be relative to storage, without an extra storage segment"
+        );
+        assert!(
+            !test_home
+                .path()
+                .join(".local/share/opencode/storage_archived/storage/session/proj_abc/ses_archive_root.json")
+                .exists(),
+            "archive path must not include a duplicated storage segment"
+        );
+    }
+
+    #[test]
     fn load_messages_skips_messages_with_no_parts() {
         let ts = TestStorage::new();
 
@@ -1130,7 +1848,7 @@ mod tests {
         let other_dir = storage_dir.join("session").join("proj_abc");
         std::fs::write(other_dir.join("notes.txt"), "not a session").expect("write notes");
 
-        let sessions = scan_sessions_in_root(storage_dir);
+        let sessions = scan_sessions_from_scan_root(storage_dir);
         assert_eq!(sessions.len(), 2);
         let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
         assert!(ids.contains(&"ses_001"));
@@ -1140,7 +1858,7 @@ mod tests {
     #[test]
     fn scan_sessions_empty_dir_returns_empty() {
         let ts = TestStorage::new();
-        let sessions = scan_sessions_in_root(&ts.storage);
+        let sessions = scan_sessions_from_scan_root(&ts.storage);
         assert!(sessions.is_empty());
     }
 
@@ -1149,7 +1867,7 @@ mod tests {
         let ts = TestStorage::new();
         std::fs::write(ts.storage.join("random.json"), "{}").expect("write random");
 
-        let sessions = scan_sessions_in_root(&ts.storage);
+        let sessions = scan_sessions_from_scan_root(&ts.storage);
         assert!(sessions.is_empty());
     }
 

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use super::providers::ProviderRegistry;
 use super::types::{QaPair, SessionDetail, SessionHandle, SessionMessage};
 
@@ -24,18 +22,18 @@ pub fn load_messages_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<Vec<SessionMessage>, String> {
-    let path = Path::new(handle.file_path()?);
-    registry.get(&handle.provider_id)?.load_messages(path)
+    registry
+        .get(&handle.provider_id)?
+        .load_messages_for_handle(handle)
 }
 
 fn load_raw_content_fallback_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<Option<String>, String> {
-    let path = Path::new(handle.file_path()?);
     registry
         .get(&handle.provider_id)?
-        .load_raw_content_fallback(path)
+        .load_raw_content_fallback_for_handle(handle)
 }
 
 #[allow(dead_code)]

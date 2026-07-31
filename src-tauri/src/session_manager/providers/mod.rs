@@ -11,7 +11,7 @@ pub mod utils;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::types::{SessionMessage, SessionMeta};
+use super::types::{SessionHandle, SessionMessage, SessionMeta};
 
 /// The core abstraction for a session provider (e.g., Claude, Cursor, Copilot).
 ///
@@ -25,14 +25,44 @@ pub trait SessionProvider: Send + Sync {
     /// All root directories this provider stores sessions under.
     fn roots(&self) -> Vec<PathBuf>;
 
+    /// Root directories used for scanning sessions.
+    ///
+    /// Defaults to `roots()`, which are also the lifecycle-operation roots.
+    /// Providers with multiple storage backends may widen scan roots without
+    /// changing the filesystem roots used by archive/restore/delete.
+    fn scan_roots(&self) -> Vec<PathBuf> {
+        self.roots()
+    }
+
     /// Scan a single root directory for all session files.
     fn scan_sessions(&self, root: &Path) -> Vec<SessionMeta>;
 
     /// Load parsed messages from a session file.
     fn load_messages(&self, path: &Path) -> Result<Vec<SessionMessage>, String>;
 
+    /// Load parsed messages from a structured session handle.
+    ///
+    /// File-backed providers can use the default path adapter. Providers backed
+    /// by multi-session stores override this method to use the full locator.
+    fn load_messages_for_handle(
+        &self,
+        handle: &SessionHandle,
+    ) -> Result<Vec<SessionMessage>, String> {
+        let path = Path::new(handle.file_path()?);
+        self.load_messages(path)
+    }
+
     /// Load raw content fallback (last prompt / AI title) when messages are empty.
     fn load_raw_content_fallback(&self, path: &Path) -> Result<Option<String>, String>;
+
+    /// Load raw content fallback from a structured session handle.
+    fn load_raw_content_fallback_for_handle(
+        &self,
+        handle: &SessionHandle,
+    ) -> Result<Option<String>, String> {
+        let path = Path::new(handle.file_path()?);
+        self.load_raw_content_fallback(path)
+    }
 
     /// Parse session metadata from a JSONL file path.
     fn parse_session(&self, path: &Path) -> Option<SessionMeta>;

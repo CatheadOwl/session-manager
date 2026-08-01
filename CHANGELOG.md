@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-08-01
+
+### Added
+
+- Add read-only OpenCode SQLite session discovery and detail loading.
+- Add a Pi (Earendil) session provider.
+
+### Changed
+
+- Use structured session locators to support both file-backed and database-backed sessions.
+- Treat OpenCode database-backed sessions as read-only for delete, archive, restore, and fork tree in this release.
+- Show OpenCode tool results mapped from session state, with a fallback for legacy tool-result-only parts.
+
 ## [0.1.1] - 2026-07-26
 
 ### Changed

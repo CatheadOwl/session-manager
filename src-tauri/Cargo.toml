@@ -1,6 +1,6 @@
 [package]
 name = "session-manager"
-version = "0.1.1"
+version = "0.2.0"
 description = "Local AI coding-agent session manager"
 authors = ["session-manager"]
 license = "MIT"

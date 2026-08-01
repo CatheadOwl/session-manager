@@ -50,6 +50,10 @@ pub fn compute_fork_tree(
     let mut current_files: Vec<CachedFileData> = Vec::new();
 
     for session in &sessions {
+        if !supports_fork_tree(session) {
+            continue;
+        }
+
         let source_path = match &session.source_path {
             Some(p) => p,
             None => continue,
@@ -150,6 +154,14 @@ pub fn compute_fork_tree(
     })
 }
 
+fn supports_fork_tree(session: &session_manager::SessionMeta) -> bool {
+    session.provider_id != "opencode"
+        && !matches!(
+            session.locator.as_ref(),
+            Some(session_manager::SessionLocator::Database { .. })
+        )
+}
+
 /// Return cached fork tree without recomputing.
 pub fn get_fork_tree() -> Result<ForkTreeResult, String> {
     let start = Instant::now();
@@ -183,7 +195,7 @@ mod tests {
     };
     use super::tree_builder::build_tree;
     use super::types::{CachedFileData, TreeNodeData};
-    use super::{compute_fork_tree, get_fork_tree};
+    use super::{compute_fork_tree, get_fork_tree, supports_fork_tree};
 
     use std::fs;
     use std::io::Write;
@@ -193,15 +205,54 @@ mod tests {
     use crate::config::TEST_ENV_LOCK;
     use crate::session_manager;
     use crate::session_manager::build_provider_registry;
+    use crate::session_manager::{SessionLocator, SessionMeta};
 
     // Use the global shared lock to prevent parallel tests from racing on env vars.
     static ENV_LOCK: &std::sync::Mutex<()> = &TEST_ENV_LOCK;
+
+    fn session_meta(locator: Option<SessionLocator>) -> SessionMeta {
+        SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "ses_test".to_string(),
+            title: None,
+            summary: None,
+            project_dir: Some("/tmp".to_string()),
+            created_at: None,
+            last_active_at: None,
+            source_path: Some("/tmp/session".to_string()),
+            locator,
+            resume_command: None,
+            forked_from_id: None,
+        }
+    }
 
     #[test]
     fn sha256_first_8_produces_8_char_hex() {
         let hash = sha256_first_8("hello");
         assert_eq!(hash.len(), 8);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn fork_tree_supports_only_file_backed_non_opencode_sessions() {
+        assert!(supports_fork_tree(&session_meta(Some(
+            SessionLocator::File {
+                path: "/tmp/session.json".to_string(),
+            }
+        ))));
+        assert!(supports_fork_tree(&session_meta(None)));
+        assert!(!supports_fork_tree(&SessionMeta {
+            provider_id: "opencode".to_string(),
+            ..session_meta(Some(SessionLocator::File {
+                path: "/tmp/opencode-session.json".to_string(),
+            }))
+        }));
+        assert!(!supports_fork_tree(&session_meta(Some(
+            SessionLocator::Database {
+                path: "/tmp/opencode.db".to_string(),
+                record_id: "ses_test".to_string(),
+            },
+        ))));
     }
 
     #[test]

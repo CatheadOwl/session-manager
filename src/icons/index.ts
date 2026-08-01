@@ -15,6 +15,7 @@ import openaiSvg from "./openai.svg?raw";
 import opencodeSvg from "./opencode.svg?raw";
 import clawSvg from "./claw.svg?raw";
 import qoderSvg from "./qoder.svg?raw";
+import piSvg from "./pi.svg?raw";
 
 /** Map of provider-id → inline SVG string */
 const iconMap: Record<string, string> = {
@@ -24,6 +25,7 @@ const iconMap: Record<string, string> = {
   opencode: opencodeSvg,
   openclaw: clawSvg,
   qoder: qoderSvg,
+  pi: piSvg,
   // hermes: no SVG — falls back to initials
 };
 
@@ -35,6 +37,7 @@ export const KNOWN_PROVIDERS = [
   "opencode",
   "openclaw",
   "hermes",
+  "pi",
   "qoder",
 ] as const;
 

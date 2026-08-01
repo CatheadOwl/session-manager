@@ -17,6 +17,7 @@ const metaMap: Record<string, ProviderIconMeta> = {
   opencode: { providerId: "opencode", label: "OpenCode",    defaultColor: "211E1E" },
   openclaw: { providerId: "openclaw", label: "OpenClaw",    defaultColor: "FF4D4D" },
   hermes:   { providerId: "hermes",   label: "Hermes",      defaultColor: undefined },
+  pi:       { providerId: "pi",       label: "Pi",          defaultColor: "000000" },
   qoder:    { providerId: "qoder",    label: "Qoder",       defaultColor: "2ADB5C" },
 };
 

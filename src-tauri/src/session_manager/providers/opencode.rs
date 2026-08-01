@@ -594,14 +594,20 @@ impl DbMessageDraft {
 
 fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<SessionMessage>, String> {
     let conn = open_db_readonly(db_path)?;
+    let part_join = if part_table_has_session_id(&conn)? {
+        "LEFT JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id"
+    } else {
+        "LEFT JOIN part p ON p.message_id = m.id"
+    };
+    let query = format!(
+        "SELECT m.id, m.time_created, m.data, p.id, p.time_created, p.data \
+         FROM message m \
+         {part_join} \
+         WHERE m.session_id = ? \
+         ORDER BY m.time_created ASC, m.id ASC, p.time_created ASC, p.id ASC"
+    );
     let mut stmt = conn
-        .prepare(
-            "SELECT m.id, m.time_created, m.data, p.id, p.time_created, p.data \
-             FROM message m \
-             LEFT JOIN part p ON p.message_id = m.id \
-             WHERE m.session_id = ? \
-             ORDER BY m.time_created ASC, m.id ASC, p.time_created ASC, p.id ASC",
-        )
+        .prepare(&query)
         .map_err(|e| format!("Failed to prepare OpenCode message query: {e}"))?;
 
     let mut rows = stmt
@@ -642,6 +648,29 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Session
         .into_iter()
         .filter_map(DbMessageDraft::into_message)
         .collect())
+}
+
+fn part_table_has_session_id(conn: &Connection) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(part)")
+        .map_err(|e| format!("Failed to inspect OpenCode part schema: {e}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("Failed to query OpenCode part schema: {e}"))?;
+
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to read OpenCode part schema: {e}"))?
+    {
+        let name: String = row
+            .get(1)
+            .map_err(|e| format!("Failed to read OpenCode part column name: {e}"))?;
+        if name == "session_id" {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Load messages for a session given the session JSON file path and storage dir.
@@ -1056,6 +1085,7 @@ mod tests {
             CREATE TABLE part (
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
                 time_created INTEGER,
                 data TEXT
             );
@@ -1130,30 +1160,33 @@ mod tests {
         .expect("insert other message");
 
         conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 "part_user_text",
                 "msg_user",
+                "ses_db_1",
                 1_740_000_002_100i64,
                 serde_json::json!({"type":"text","text":"Hello from SQLite"}).to_string()
             ],
         )
         .expect("insert user text part");
         conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 "part_assistant_text",
                 "msg_assistant",
+                "ses_db_1",
                 1_740_000_003_100i64,
                 serde_json::json!({"type":"text","text":"Let me inspect"}).to_string()
             ],
         )
         .expect("insert assistant text part");
         conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 "part_assistant_tool",
                 "msg_assistant",
+                "ses_db_1",
                 1_740_000_003_200i64,
                 serde_json::json!({
                     "type":"tool",
@@ -1166,20 +1199,22 @@ mod tests {
         )
         .expect("insert tool part");
         conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 "part_unknown",
                 "msg_assistant",
+                "ses_db_1",
                 1_740_000_003_300i64,
                 serde_json::json!({"type":"unknown","value":"skip me"}).to_string()
             ],
         )
         .expect("insert unknown part");
         conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 "part_other_text",
                 "msg_other",
+                "ses_db_2",
                 1_740_000_004_100i64,
                 serde_json::json!({"type":"text","text":"Other session"}).to_string()
             ],
@@ -1498,6 +1533,223 @@ mod tests {
         assert_eq!(calls[0].name, "bash");
         assert_eq!(calls[0].call_id.as_deref(), Some("call_sqlite_1"));
         assert!(calls[0].input.contains("pwd"));
+    }
+
+    #[test]
+    fn load_messages_ignores_parts_from_other_sessions_with_same_message_id() {
+        let temp = tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path()).expect("create temp root");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        conn.execute(
+            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                "ses_a",
+                "A",
+                "/tmp/a",
+                Option::<String>::None,
+                1_740_000_000_000i64,
+                1_740_000_020_000i64,
+                "model-a",
+                "agent-a",
+                0.01f64,
+                12i64,
+                34i64
+            ],
+        )
+        .expect("insert session a");
+        conn.execute(
+            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                "ses_b",
+                "B",
+                "/tmp/b",
+                Option::<String>::None,
+                1_740_000_001_000i64,
+                1_740_000_021_000i64,
+                "model-b",
+                "agent-b",
+                0.02f64,
+                1i64,
+                2i64
+            ],
+        )
+        .expect("insert session b");
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "shared_msg",
+                "ses_a",
+                1_740_000_002_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert message a");
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "msg_b",
+                "ses_b",
+                1_740_000_003_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert message b");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "part_a",
+                "shared_msg",
+                "ses_a",
+                1_740_000_002_100i64,
+                serde_json::json!({"type":"text","text":"A content"}).to_string()
+            ],
+        )
+        .expect("insert part a");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "part_b",
+                "msg_b",
+                "ses_b",
+                1_740_000_003_100i64,
+                serde_json::json!({"type":"text","text":"B content"}).to_string()
+            ],
+        )
+        .expect("insert part b");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "part_bad",
+                "shared_msg",
+                "ses_b",
+                1_740_000_003_200i64,
+                serde_json::json!({"type":"text","text":"BAD content"}).to_string()
+            ],
+        )
+        .expect("insert stray part");
+
+        let messages_a = super::load_messages_from_db(&db_path, "ses_a").expect("load messages a");
+        let messages_b = super::load_messages_from_db(&db_path, "ses_b").expect("load messages b");
+
+        assert_eq!(messages_a.len(), 1);
+        assert_eq!(messages_a[0].content, "A content");
+        assert_eq!(messages_b.len(), 1);
+        assert_eq!(messages_b[0].content, "B content");
+    }
+
+    #[test]
+    fn load_messages_supports_sqlite_part_schema_without_session_id() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        conn.execute(
+            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                "ses_legacy_db",
+                "Legacy DB",
+                "/tmp/legacy-db",
+                Option::<String>::None,
+                1_740_000_000_000i64,
+                1_740_000_020_000i64,
+                "model-a",
+                "agent-a",
+                0.01f64,
+                12i64,
+                34i64
+            ],
+        )
+        .expect("insert session");
+        conn.execute(
+            "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "msg_legacy",
+                "ses_legacy_db",
+                1_740_000_002_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert message");
+        conn.execute(
+            "INSERT INTO part VALUES (?1, ?2, ?3, ?4)",
+            params![
+                "part_legacy",
+                "msg_legacy",
+                1_740_000_002_100i64,
+                serde_json::json!({"type":"text","text":"Legacy schema content"}).to_string()
+            ],
+        )
+        .expect("insert part");
+        drop(conn);
+
+        let messages = super::load_messages_from_db(&db_path, "ses_legacy_db")
+            .expect("load legacy sqlite messages");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "Legacy schema content");
     }
 
     #[test]

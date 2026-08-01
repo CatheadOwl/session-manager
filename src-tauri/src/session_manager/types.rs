@@ -149,12 +149,14 @@ impl SessionLocator {
         }
     }
 
+    #[cfg(test)]
     pub fn display_source_path(&self) -> &str {
         match self {
             SessionLocator::File { path } | SessionLocator::Database { path, .. } => path,
         }
     }
 
+    #[cfg(test)]
     pub fn detail_key_part(&self) -> String {
         match self {
             SessionLocator::File { path } => format!("file:{path}"),
@@ -178,10 +180,12 @@ impl SessionHandle {
         self.locator.file_path()
     }
 
+    #[cfg(test)]
     pub fn display_source_path(&self) -> &str {
         self.locator.display_source_path()
     }
 
+    #[cfg(test)]
     pub fn detail_key(&self) -> String {
         format!(
             "{}:{}:{}",

@@ -65,7 +65,7 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build and publish
+      - name: Build draft release artifacts
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,7 +74,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'v__VERSION__'
-          releaseBody: 'See the assets to download and install this version.'
+          releaseBody: 'Draft artifacts only. Release notes are filled before publishing.'
           releaseDraft: true
           prerelease: false
           # A universal updater is exposed under both darwin-aarch64 and

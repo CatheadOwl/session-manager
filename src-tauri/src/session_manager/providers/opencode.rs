@@ -7,6 +7,7 @@ use serde_json::Value;
 use crate::session_manager::{
     SessionHandle, SessionLocator, SessionMessage, SessionMeta, ToolCallInfo,
 };
+use crate::session_manager::types::ToolResultInfo;
 
 use super::utils::{move_single_file, path_basename, truncate_summary, TITLE_MAX_CHARS};
 use super::SessionProvider;
@@ -486,12 +487,75 @@ fn read_part_tool_calls(part_dir: &Path) -> Vec<ToolCallInfo> {
     calls
 }
 
+/// Extract the tool result output from an OpenCode tool part.
+///
+/// OpenCode stores the result on the same part as the call: the output lives in
+/// `state.output` (older data duplicates it in `state.metadata.output`). A
+/// non-string or empty output (e.g. a failed skill call) yields `None`.
+fn extract_tool_output(value: &Value) -> Option<String> {
+    let state = value.get("state")?;
+    let from = |v: &Value| v.as_str().map(str::to_string).filter(|s| !s.trim().is_empty());
+    from(state.get("output")?).or_else(|| {
+        state
+            .get("metadata")
+            .and_then(|m| m.get("output"))
+            .and_then(from)
+    })
+}
+
+/// Read tool result outputs from the parts directory.
+/// Mirrors `read_part_tool_calls` for the file-backed storage layout.
+fn read_part_tool_results(part_dir: &Path) -> Option<ToolResultInfo> {
+    if !part_dir.is_dir() {
+        return None;
+    }
+
+    let entries = match std::fs::read_dir(part_dir) {
+        Ok(entries) => entries,
+        Err(_) => return None,
+    };
+
+    let mut result = None;
+    for entry in entries.flatten() {
+        let part_path = entry.path();
+        if part_path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&part_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if value.get("type").and_then(Value::as_str) != Some("tool") {
+            continue;
+        }
+        if let Some(output) = extract_tool_output(&value) {
+            let call_id = value
+                .get("callID")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            result = Some(ToolResultInfo {
+                content: output,
+                call_id,
+            });
+        }
+    }
+
+    result
+}
+
 struct DbMessageDraft {
     id: String,
     role: String,
     created: i64,
     content_parts: Vec<String>,
     tool_calls: Vec<ToolCallInfo>,
+    tool_result: Option<ToolResultInfo>,
 }
 
 impl DbMessageDraft {
@@ -512,6 +576,7 @@ impl DbMessageDraft {
             created: created.unwrap_or(0),
             content_parts: Vec::new(),
             tool_calls: Vec::new(),
+            tool_result: None,
         }
     }
 
@@ -535,6 +600,11 @@ impl DbMessageDraft {
                 }
             }
             Some("tool") => {
+                let call_id = value
+                    .get("callID")
+                    .or_else(|| value.get("call_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 if let Some(name) = value
                     .get("tool")
                     .or_else(|| value.get("name"))
@@ -548,11 +618,16 @@ impl DbMessageDraft {
                             .and_then(|state| state.get("input"))
                             .map(|input| input.to_string())
                             .unwrap_or_default(),
-                        call_id: value
-                            .get("callID")
-                            .or_else(|| value.get("call_id"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
+                        call_id: call_id.clone(),
+                    });
+                }
+                // OpenCode stores the tool result on the same part as the call.
+                // Keep the last non-empty output; a single message maps to one
+                // ToolResultInfo in the shared SessionMessage model.
+                if let Some(output) = extract_tool_output(&value) {
+                    self.tool_result = Some(ToolResultInfo {
+                        content: output,
+                        call_id,
                     });
                 }
             }
@@ -572,7 +647,7 @@ impl DbMessageDraft {
 
     fn into_message(self) -> Option<SessionMessage> {
         let content = self.content_parts.join("\n");
-        if content.trim().is_empty() {
+        if content.trim().is_empty() && self.tool_result.is_none() {
             return None;
         }
 
@@ -587,7 +662,7 @@ impl DbMessageDraft {
             } else {
                 Some(self.tool_calls)
             },
-            tool_result: None,
+            tool_result: self.tool_result,
         })
     }
 }
@@ -693,7 +768,13 @@ fn load_messages_internal(
         return Ok(Vec::new());
     }
 
-    let mut messages_raw: Vec<(i64, String, String, Vec<ToolCallInfo>)> = Vec::new();
+    let mut messages_raw: Vec<(
+        i64,
+        String,
+        String,
+        Vec<ToolCallInfo>,
+        Option<ToolResultInfo>,
+    )> = Vec::new();
 
     let entries = std::fs::read_dir(&msg_dir)
         .map_err(|e| format!("Failed to read message directory: {e}"))?;
@@ -737,16 +818,17 @@ fn load_messages_internal(
             continue;
         }
         let tool_calls = read_part_tool_calls(&part_dir);
+        let tool_result = read_part_tool_results(&part_dir);
 
-        messages_raw.push((created, role, text, tool_calls));
+        messages_raw.push((created, role, text, tool_calls, tool_result));
     }
 
     // Sort by created timestamp
-    messages_raw.sort_by_key(|(ts, _, _, _)| *ts);
+    messages_raw.sort_by_key(|(ts, _, _, _, _)| *ts);
 
     Ok(messages_raw
         .into_iter()
-        .map(|(ts, role, content, tool_calls)| {
+        .map(|(ts, role, content, tool_calls, tool_result)| {
             let tc = if tool_calls.is_empty() {
                 None
             } else {
@@ -759,7 +841,7 @@ fn load_messages_internal(
                 usage: None,
                 cumulative_usage: None,
                 tool_calls: tc,
-                tool_result: None,
+                tool_result,
             }
         })
         .collect())
@@ -1022,7 +1104,7 @@ mod tests {
         .expect("write part file");
     }
 
-    /// Write a tool part with real-world fields: callID + state.input.
+    /// Write a tool part with real-world fields: callID + state.input + state.output.
     fn write_tool_part_with_call(
         storage: &Path,
         msg_id: &str,
@@ -1030,6 +1112,7 @@ mod tests {
         tool: &str,
         call_id: &str,
         command: &str,
+        output: &str,
     ) {
         let part_dir = storage.join("part").join(msg_id);
         std::fs::create_dir_all(&part_dir).expect("create part dir");
@@ -1044,7 +1127,7 @@ mod tests {
                     "command": command,
                     "description": "test command",
                 },
-                "output": "",
+                "output": output,
                 "status": "completed",
             },
         });
@@ -1192,7 +1275,10 @@ mod tests {
                     "type":"tool",
                     "tool":"bash",
                     "callID":"call_sqlite_1",
-                    "state":{"input":{"command":"pwd"}}
+                    "state":{
+                        "input":{"command":"pwd"},
+                        "output":"/home/user"
+                    }
                 })
                 .to_string()
             ],
@@ -1533,6 +1619,11 @@ mod tests {
         assert_eq!(calls[0].name, "bash");
         assert_eq!(calls[0].call_id.as_deref(), Some("call_sqlite_1"));
         assert!(calls[0].input.contains("pwd"));
+
+        // OpenCode stores the result on the same part: state.output
+        let result = messages[1].tool_result.as_ref().expect("tool result");
+        assert_eq!(result.content, "/home/user");
+        assert_eq!(result.call_id.as_deref(), Some("call_sqlite_1"));
     }
 
     #[test]
@@ -2028,7 +2119,7 @@ mod tests {
             1_740_000_002_000,
         );
         write_text_part(&ts.storage, "msg_t2", "prt_t2", "Running...");
-        // Tool part with real-world callID + state.input.command
+        // Tool part with real-world callID + state.input.command + state.output
         write_tool_part_with_call(
             &ts.storage,
             "msg_t2",
@@ -2036,6 +2127,7 @@ mod tests {
             "bash",
             "call_79398764692c484892159dad",
             "python -m venv venv",
+            "venv created",
         );
 
         let provider = OpenCodeProvider;
@@ -2068,6 +2160,51 @@ mod tests {
             "state.input.command should be captured, got: {}",
             tool_calls[0].input,
         );
+
+        // Tool result comes from the same part's state.output
+        let result = assistant
+            .tool_result
+            .as_ref()
+            .expect("should have tool_result");
+        assert_eq!(result.content, "venv created");
+        assert_eq!(
+            result.call_id.as_deref(),
+            Some("call_79398764692c484892159dad")
+        );
+    }
+
+    #[test]
+    fn extract_tool_output_reads_state_output() {
+        let value = serde_json::json!({
+            "type": "tool",
+            "tool": "bash",
+            "state": { "output": "done", "metadata": { "output": "stale" } }
+        });
+        assert_eq!(extract_tool_output(&value).as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn extract_tool_output_falls_back_to_metadata_output() {
+        let value = serde_json::json!({
+            "type": "tool",
+            "state": { "output": "", "metadata": { "output": "fallback" } }
+        });
+        assert_eq!(extract_tool_output(&value).as_deref(), Some("fallback"));
+    }
+
+    #[test]
+    fn extract_tool_output_returns_none_when_empty_or_missing() {
+        // No state at all
+        assert_eq!(extract_tool_output(&serde_json::json!({"type":"tool"})), None);
+        // Empty output everywhere
+        let value = serde_json::json!({
+            "type": "tool",
+            "state": { "output": "", "metadata": { "output": "" } }
+        });
+        assert_eq!(extract_tool_output(&value), None);
+        // Non-string output
+        let value = serde_json::json!({"type":"tool","state":{"output":{}}});
+        assert_eq!(extract_tool_output(&value), None);
     }
 
     // ─── scan_sessions tests ──────────────────────────────────────────────────

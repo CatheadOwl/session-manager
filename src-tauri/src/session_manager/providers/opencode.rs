@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
 
+use crate::session_manager::types::ToolResultInfo;
 use crate::session_manager::{
     SessionHandle, SessionLocator, SessionMessage, SessionMeta, ToolCallInfo,
 };
-use crate::session_manager::types::ToolResultInfo;
 
 use super::utils::{move_single_file, path_basename, truncate_summary, TITLE_MAX_CHARS};
 use super::SessionProvider;
@@ -494,8 +494,12 @@ fn read_part_tool_calls(part_dir: &Path) -> Vec<ToolCallInfo> {
 /// non-string or empty output (e.g. a failed skill call) yields `None`.
 fn extract_tool_output(value: &Value) -> Option<String> {
     let state = value.get("state")?;
-    let from = |v: &Value| v.as_str().map(str::to_string).filter(|s| !s.trim().is_empty());
-    from(state.get("output")?).or_else(|| {
+    let from = |v: &Value| {
+        v.as_str()
+            .map(str::to_string)
+            .filter(|s| !s.trim().is_empty())
+    };
+    state.get("output").and_then(from).or_else(|| {
         state
             .get("metadata")
             .and_then(|m| m.get("output"))
@@ -515,13 +519,15 @@ fn read_part_tool_results(part_dir: &Path) -> Option<ToolResultInfo> {
         Err(_) => return None,
     };
 
-    let mut result = None;
-    for entry in entries.flatten() {
-        let part_path = entry.path();
-        if part_path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
 
+    let mut result = None;
+    for part_path in paths {
         let content = match std::fs::read_to_string(&part_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -813,12 +819,12 @@ fn load_messages_internal(
 
         // Read parts for this message
         let part_dir = storage_dir.join("part").join(&msg_id);
-        let text = read_part_text(&part_dir);
-        if text.trim().is_empty() {
-            continue;
-        }
         let tool_calls = read_part_tool_calls(&part_dir);
         let tool_result = read_part_tool_results(&part_dir);
+        let text = read_part_text(&part_dir);
+        if text.trim().is_empty() && tool_calls.is_empty() && tool_result.is_none() {
+            continue;
+        }
 
         messages_raw.push((created, role, text, tool_calls, tool_result));
     }
@@ -2174,6 +2180,74 @@ mod tests {
     }
 
     #[test]
+    fn load_messages_keeps_tool_result_only_legacy_parts() {
+        let ts = TestStorage::new();
+        let session_path = write_session(
+            &ts.storage,
+            "proj_abc",
+            "ses_tool_only",
+            Some("Tool Result Only"),
+            Some("/tmp"),
+            1_740_000_000_000,
+            None,
+        );
+
+        write_message(
+            &ts.storage,
+            "ses_tool_only",
+            "msg_t1",
+            "assistant",
+            1_740_000_001_000,
+        );
+        let part_dir = ts.storage.join("part").join("msg_t1");
+        std::fs::create_dir_all(&part_dir).expect("create part dir");
+        let part_early = serde_json::json!({
+            "type": "tool",
+            "callID": "call_tool_only",
+            "state": { "output": "first" }
+        });
+        let part_late = serde_json::json!({
+            "type": "tool",
+            "callID": "call_tool_only",
+            "state": { "output": "tool finished" }
+        });
+        std::fs::write(
+            part_dir.join("prt_a.json"),
+            serde_json::to_string_pretty(&part_early).expect("serialize"),
+        )
+        .expect("write part");
+        std::fs::write(
+            part_dir.join("prt_b.json"),
+            serde_json::to_string_pretty(&part_late).expect("serialize"),
+        )
+        .expect("write part");
+
+        let provider = OpenCodeProvider;
+        let meta = provider
+            .parse_session(&session_path)
+            .expect("parse session");
+        let sp = meta.source_path.expect("source_path");
+        let messages = provider
+            .load_messages(std::path::Path::new(&sp))
+            .expect("load_messages");
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].content.trim().is_empty());
+        let result = messages[0].tool_result.as_ref().expect("tool_result");
+        assert_eq!(result.content, "tool finished");
+        assert_eq!(result.call_id.as_deref(), Some("call_tool_only"));
+    }
+
+    #[test]
+    fn extract_tool_output_reads_metadata_output_when_state_output_missing() {
+        let value = serde_json::json!({
+            "type": "tool",
+            "state": { "metadata": { "output": "fallback" } }
+        });
+        assert_eq!(extract_tool_output(&value).as_deref(), Some("fallback"));
+    }
+
+    #[test]
     fn extract_tool_output_reads_state_output() {
         let value = serde_json::json!({
             "type": "tool",
@@ -2195,7 +2269,10 @@ mod tests {
     #[test]
     fn extract_tool_output_returns_none_when_empty_or_missing() {
         // No state at all
-        assert_eq!(extract_tool_output(&serde_json::json!({"type":"tool"})), None);
+        assert_eq!(
+            extract_tool_output(&serde_json::json!({"type":"tool"})),
+            None
+        );
         // Empty output everywhere
         let value = serde_json::json!({
             "type": "tool",

@@ -10,9 +10,20 @@
  */
 import type { SessionLocator } from "@/types";
 
-export const sessionLocatorKey = (locator: SessionLocator | undefined, sourcePath?: string) => {
+type DatabaseLocatorWire = Extract<SessionLocator, { kind: "database" }> & {
+  record_id?: string;
+};
+
+const databaseRecordId = (locator: DatabaseLocatorWire) =>
+  locator.recordId ?? locator.record_id ?? "";
+
+export const sessionLocatorKey = (
+  locator: SessionLocator | undefined,
+  sourcePath?: string,
+  fallbackSessionId?: string,
+) => {
   if (locator?.kind === "database") {
-    return ["database", locator.path, locator.recordId] as const;
+    return ["database", locator.path, databaseRecordId(locator) || fallbackSessionId || ""] as const;
   }
 
   if (locator?.kind === "file") {
@@ -28,13 +39,14 @@ export const queryKeys = {
   sessionDetail: (
     providerId: string,
     sourcePathOrLocator: string | SessionLocator | undefined,
+    sessionId?: string,
   ) =>
     [
       "sessionDetail",
       providerId,
       ...(typeof sourcePathOrLocator === "string"
         ? sessionLocatorKey(undefined, sourcePathOrLocator)
-        : sessionLocatorKey(sourcePathOrLocator)),
+        : sessionLocatorKey(sourcePathOrLocator, undefined, sessionId)),
     ] as const,
 
   appMetadata: () => ["appMetadata"] as const,

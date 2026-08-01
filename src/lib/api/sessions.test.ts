@@ -88,4 +88,17 @@ describe("sessionsApi handle-aware IPC payloads", () => {
       locator: { kind: "file", path: "/data/session.jsonl" },
     });
   });
+
+  it("does not treat database locators without a record id as loadable", async () => {
+    const { loadableSessionHandleOptionsFromMeta } = await import("./sessions");
+
+    expect(
+      loadableSessionHandleOptionsFromMeta({
+        providerId: "opencode",
+        sessionId: "row-a",
+        sourcePath: "/data/opencode.db",
+        locator: { kind: "database", path: "/data/opencode.db" },
+      }),
+    ).toBeUndefined();
+  });
 });

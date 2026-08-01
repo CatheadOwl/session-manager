@@ -34,6 +34,27 @@ describe("getSessionKey", () => {
       ),
     ).toBe("claude:s1:database:/data/opencode.db:row-a");
   });
+
+  it("accepts legacy snake_case database record ids", () => {
+    expect(
+      getSessionKey(
+        session({
+          locator: { kind: "database", path: "/data/opencode.db", record_id: "row-a" },
+        }),
+      ),
+    ).toBe("claude:s1:database:/data/opencode.db:row-a");
+  });
+
+  it("falls back to sessionId when a database locator is malformed", () => {
+    expect(
+      getSessionKey(
+        session({
+          sessionId: "row-a",
+          locator: { kind: "database", path: "/data/opencode.db" },
+        }),
+      ),
+    ).toBe("claude:row-a:database:/data/opencode.db:row-a");
+  });
 });
 
 describe("getMetadataKey", () => {

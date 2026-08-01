@@ -12,6 +12,10 @@ export interface DeleteSessionOptions extends SessionHandleOptions {
   sourcePath: string;
 }
 
+const databaseRecordId = (
+  locator: Extract<SessionLocator, { kind: "database" }>,
+): string | undefined => locator.recordId ?? locator.record_id;
+
 export interface ListSessionsOptions {
   scope?: "active" | "archived";
 }
@@ -45,6 +49,10 @@ export const loadableSessionHandleOptionsFromMeta = (
   session?: SessionMeta | null,
 ): SessionHandleOptions | undefined => {
   if (!session?.providerId || (!session.locator && !session.sourcePath)) {
+    return undefined;
+  }
+
+  if (session.locator?.kind === "database" && !databaseRecordId(session.locator)) {
     return undefined;
   }
 

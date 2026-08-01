@@ -18,7 +18,13 @@ const removeSuccessfulSessionsFromCache = (
     (current ?? []).filter((session: SessionMeta) => !successful.some((outcome) => sameSession(session, outcome))),
   );
   for (const outcome of successful) {
-    queryClient.removeQueries({ queryKey: queryKeys.sessionDetail(outcome.providerId, outcome.sourcePath) });
+    queryClient.removeQueries({
+      queryKey: queryKeys.sessionDetail(
+        outcome.providerId,
+        outcome.locator ?? outcome.sourcePath,
+        outcome.sessionId,
+      ),
+    });
   }
 };
 
@@ -30,7 +36,13 @@ const removeSingleSessionFromCache = (
   queryClient.setQueryData<SessionMeta[]>(queryKeys.sessions(scope), (current: SessionMeta[] | undefined) =>
     (current ?? []).filter((session: SessionMeta) => !sameSession(session, input)),
   );
-  queryClient.removeQueries({ queryKey: queryKeys.sessionDetail(input.providerId, input.sourcePath) });
+  queryClient.removeQueries({
+    queryKey: queryKeys.sessionDetail(
+      input.providerId,
+      input.locator ?? input.sourcePath,
+      input.sessionId,
+    ),
+  });
 };
 
 /**

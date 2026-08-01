@@ -13,7 +13,7 @@ export interface SessionMeta {
 
 export type SessionLocator =
   | { kind: "file"; path: string }
-  | { kind: "database"; path: string; recordId: string };
+  | { kind: "database"; path: string; recordId?: string; record_id?: string };
 
 export interface TokenUsage {
   inputTokens: number;

@@ -129,8 +129,14 @@ pub struct SessionDetail {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SessionLocator {
-    File { path: String },
-    Database { path: String, record_id: String },
+    File {
+        path: String,
+    },
+    Database {
+        path: String,
+        #[serde(rename = "recordId", alias = "record_id")]
+        record_id: String,
+    },
 }
 
 impl SessionLocator {
@@ -285,6 +291,43 @@ mod tests {
             }),
         )
         .debug_assert_file_locator_matches_source_path();
+    }
+
+    #[test]
+    fn database_locator_uses_camel_case_record_id_on_the_wire() {
+        let locator = SessionLocator::Database {
+            path: "/data/opencode.db".to_string(),
+            record_id: "row-a".to_string(),
+        };
+
+        let value = serde_json::to_value(&locator).expect("serialize locator");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "kind": "database",
+                "path": "/data/opencode.db",
+                "recordId": "row-a",
+            })
+        );
+    }
+
+    #[test]
+    fn database_locator_accepts_legacy_snake_case_record_id() {
+        let locator: SessionLocator = serde_json::from_value(serde_json::json!({
+            "kind": "database",
+            "path": "/data/opencode.db",
+            "record_id": "row-a",
+        }))
+        .expect("deserialize legacy locator");
+
+        assert_eq!(
+            locator,
+            SessionLocator::Database {
+                path: "/data/opencode.db".to_string(),
+                record_id: "row-a".to_string(),
+            }
+        );
     }
 
     #[test]

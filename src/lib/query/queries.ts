@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   loadableSessionHandleOptionsFromMeta,
   sessionsApi,
@@ -31,6 +31,7 @@ export const useSessionDetailQuery = (session?: SessionMeta | null) => {
     queryKey: queryKeys.sessionDetail(
       handleOptions?.providerId ?? "",
       handleOptions?.locator ?? handleOptions?.sourcePath,
+      handleOptions?.sessionId,
     ),
     queryFn: async () => {
       if (!handleOptions) {
@@ -41,7 +42,6 @@ export const useSessionDetailQuery = (session?: SessionMeta | null) => {
     },
     enabled: Boolean(handleOptions),
     staleTime: 30 * 1000,
-    placeholderData: keepPreviousData,
   });
 };
 

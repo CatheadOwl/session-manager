@@ -9,7 +9,7 @@ import { normalizeProjectDir } from "@/utils/format";
 
 const locatorKeyPart = (session: SessionMeta): string => {
   if (session.locator?.kind === "database") {
-    return `database:${session.locator.path}:${session.locator.recordId}`;
+    return `database:${session.locator.path}:${session.locator.recordId ?? session.locator.record_id ?? session.sessionId}`;
   }
 
   if (session.locator?.kind === "file") {

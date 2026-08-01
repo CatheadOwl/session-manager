@@ -42,6 +42,7 @@ export function useLatestMessage({
       queryKeys.sessionDetail(
         handleOptions.providerId,
         handleOptions.locator ?? handleOptions.sourcePath,
+        handleOptions.sessionId,
       ),
     );
     if (cached?.messages?.length) {

@@ -64,8 +64,9 @@ export const useSetPinnedFoldersMutation = () => {
 
   return useMutation({
     mutationFn: async (folders: string[]) => {
-      await sessionsApi.setPinnedFolders(folders);
-      return folders;
+      // setPinnedFolders returns the normalized list so the optimistic cache
+      // write in onSuccess stays canonical even if a caller passes raw pins.
+      return sessionsApi.setPinnedFolders(folders);
     },
     onSuccess: (folders) => {
       queryClient.setQueryData<AppMetadata>(queryKeys.appMetadata(), (current: AppMetadata | undefined) => ({

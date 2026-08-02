@@ -25,6 +25,7 @@ export function useSessionQueries(
   const sessionsQuery = useSessionsQuery(scope);
   const sessions: SessionMeta[] = sessionsQuery.data ?? [];
   const appMetadataQuery = useAppMetadataQuery();
+  // Pins arrive canonical: `getAppMetadata` normalizes at the metadata boundary.
   const pinnedFolders: string[] = appMetadataQuery.data?.pinnedFolders ?? [];
 
   // Fork tree

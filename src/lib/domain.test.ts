@@ -4,6 +4,7 @@ import {
   getLifecycleOperationOptions,
   getMetadataKey,
   getSessionKey,
+  normalizePinnedFolders,
   supportsLifecycleOperations,
 } from "./domain";
 import type { SessionMeta } from "@/types";
@@ -12,6 +13,37 @@ const session = (over: Partial<SessionMeta>): SessionMeta => ({
   providerId: "claude",
   sessionId: "s1",
   ...over,
+});
+
+describe("normalizePinnedFolders", () => {
+  it("migrates pre-separator-unification backslash pins to canonical forward-slash names", () => {
+    expect(normalizePinnedFolders(["D:\\Document\\Projects\\agent-dev"])).toEqual([
+      "d:/Document/Projects/agent-dev",
+    ]);
+  });
+
+  it("leaves already-canonical pins untouched", () => {
+    expect(normalizePinnedFolders(["d:/Document/Projects/agent-dev"])).toEqual([
+      "d:/Document/Projects/agent-dev",
+    ]);
+  });
+
+  it("dedupes pins that collide after normalization", () => {
+    expect(
+      normalizePinnedFolders([
+        "D:\\Document\\Projects\\agent-dev",
+        "d:/Document/Projects/agent-dev",
+      ]),
+    ).toEqual(["d:/Document/Projects/agent-dev"]);
+  });
+
+  it("dedupes across drive case, separator style, and exact duplicates", () => {
+    expect(normalizePinnedFolders(["d:/x", "D:\\x", "d:/x"])).toEqual(["d:/x"]);
+  });
+
+  it("normalizes empty stored pins to the Unknown sentinel", () => {
+    expect(normalizePinnedFolders([""])).toEqual(["Unknown"]);
+  });
 });
 
 describe("getSessionKey", () => {

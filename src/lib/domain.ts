@@ -88,3 +88,32 @@ export const deriveFolderList = (sessions: SessionMeta[]): FolderGroup[] => {
     .map(([name, { count, lastActiveAt }]) => ({ name, count, lastActiveAt }))
     .sort((a, b) => a.name.localeCompare(b.name));
 };
+
+/**
+ * Map pinned-folder keys onto canonical folder names.
+ *
+ * `AppMetadata.pinnedFolders` is a persisted store contract: every entry must
+ * live in the same canonical space as folder names derived by
+ * `deriveFolderList`, so `pinnedFolders.includes(folder.name)` and pin
+ * write-backs stay consistent. Old builds stored pins with Windows backslashes
+ * (e.g. `d:\...`); after separators were unified to `/` those no longer matched
+ * `d:/...`. Normalizing at the metadata boundary — on read in `getAppMetadata`
+ * and on write in `setPinnedFolders` — keeps the store canonical without a
+ * one-time migration; dedupe guards against storage already holding both
+ * spellings. Empty entries normalize to the `Unknown` sentinel (same as
+ * `normalizeProjectDir` for missing project dirs); only reachable from
+ * pre-corrupted storage, since pins are always written from canonical folder
+ * names.
+ */
+export const normalizePinnedFolders = (folders: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const folder of folders) {
+    const canonical = normalizeProjectDir(folder);
+    if (!seen.has(canonical)) {
+      seen.add(canonical);
+      result.push(canonical);
+    }
+  }
+  return result;
+};

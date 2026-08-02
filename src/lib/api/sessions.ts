@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SessionDetail, SessionLocator, SessionMessage, SessionMeta } from "@/types";
+import { normalizePinnedFolders } from "@/lib/domain";
 
 export interface SessionHandleOptions {
   providerId: string;
@@ -27,6 +28,11 @@ export interface DeleteSessionResult extends DeleteSessionOptions {
 
 export interface AppMetadata {
   sessions: Record<string, SessionMetadata>;
+  /**
+   * Pinned folder names, always in the canonical form used by folder grouping
+   * (see `normalizePinnedFolders`). Read and write both normalize so persisted
+   * keys from pre-separator-unification builds still match.
+   */
   pinnedFolders: string[];
 }
 
@@ -158,7 +164,9 @@ export const sessionsApi = {
     const metadata = await invoke<RawAppMetadata>("get_app_metadata");
     return {
       sessions: metadata.sessions ?? {},
-      pinnedFolders: metadata.pinnedFolders ?? metadata.pinned_folders ?? [],
+      pinnedFolders: normalizePinnedFolders(
+        metadata.pinnedFolders ?? metadata.pinned_folders ?? [],
+      ),
     };
   },
 
@@ -166,8 +174,13 @@ export const sessionsApi = {
     return await invoke("set_session_starred", { sessionKey, starred });
   },
 
-  async setPinnedFolders(folders: string[]): Promise<void> {
-    return await invoke("set_pinned_folders", { folders });
+  async setPinnedFolders(folders: string[]): Promise<string[]> {
+    // Keep the persisted store canonical so old separator spellings never
+    // re-enter storage; callers already build from normalized pins. Return the
+    // normalized list so optimistic cache updates stay canonical too.
+    const normalized = normalizePinnedFolders(folders);
+    await invoke("set_pinned_folders", { folders: normalized });
+    return normalized;
   },
 
   async computeForkTree(options?: ForkTreeOptions): Promise<ForkTreeResult> {

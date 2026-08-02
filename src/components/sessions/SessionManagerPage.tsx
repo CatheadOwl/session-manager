@@ -20,7 +20,7 @@ import { SessionList } from "./SessionList";
 
 export function SessionManagerPage() {
   const ui = useSessionUIState();
-  const queries = useSessionQueries(ui.scope, ui.selectedFolder, ui.selectedKey, ui.search);
+  const queries = useSessionQueries(ui.scope, ui.selectedFolder, ui.selectedKey, ui.search, ui.viewMode === "tree");
   const updater = useUpdater();
 
   // ─── Folder operation result handler ──────────────────────────────

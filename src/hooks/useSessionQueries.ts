@@ -20,6 +20,7 @@ export function useSessionQueries(
   selectedFolder: string,
   selectedKey: string | null,
   search: string,
+  treeEnabled: boolean,
 ) {
   // ─── Raw queries ──────────────────────────────────────────────────
   const sessionsQuery = useSessionsQuery(scope);
@@ -32,7 +33,7 @@ export function useSessionQueries(
   const folderForTree = selectedFolder !== "all" && selectedFolder !== "Unknown"
     ? selectedFolder
     : undefined;
-  const forkTreeQuery = useForkTreeQuery(scope, folderForTree);
+  const forkTreeQuery = useForkTreeQuery(scope, folderForTree, treeEnabled);
   const treeRoots = forkTreeQuery.data?.roots ?? [];
   const treeTotalSessions = forkTreeQuery.data?.totalSessions ?? 0;
 

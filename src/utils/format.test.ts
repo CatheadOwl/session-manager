@@ -38,8 +38,17 @@ describe("getBaseName", () => {
 
 describe("normalizeProjectDir", () => {
   it("lowercases the drive letter of a windows path", () => {
-    expect(normalizeProjectDir("C:\\Users\\foo")).toBe("c:\\Users\\foo");
-    expect(normalizeProjectDir("D:\\proj")).toBe("d:\\proj");
+    expect(normalizeProjectDir("C:\\Users\\foo")).toBe("c:/Users/foo");
+    expect(normalizeProjectDir("D:\\proj")).toBe("d:/proj");
+  });
+
+  it("unifies separators to forward slash so / and \\ spellings group together", () => {
+    expect(normalizeProjectDir("D:/Document/Projects/agent-dev")).toBe(
+      "d:/Document/Projects/agent-dev",
+    );
+    expect(normalizeProjectDir("D:\\Document\\Projects\\agent-dev")).toBe(
+      "d:/Document/Projects/agent-dev",
+    );
   });
 
   it("leaves posix paths untouched", () => {

@@ -108,8 +108,19 @@ describe("deriveFolderList", () => {
     ];
 
     expect(deriveFolderList(sessions)).toEqual([
-      { name: "c:\\proj", count: 2 },
-      { name: "d:\\other", count: 1 },
+      { name: "c:/proj", count: 2 },
+      { name: "d:/other", count: 1 },
+    ]);
+  });
+
+  it("merges sessions whose project dir differs only by separator style", () => {
+    const sessions = [
+      session({ sessionId: "a", projectDir: "D:/Document/Projects/agent-dev" }),
+      session({ sessionId: "b", projectDir: "D:\\Document\\Projects\\agent-dev" }),
+    ];
+
+    expect(deriveFolderList(sessions)).toEqual([
+      { name: "d:/Document/Projects/agent-dev", count: 2 },
     ]);
   });
 

@@ -9,7 +9,13 @@ export const getBaseName = (path?: string | null) => {
 
 export const normalizeProjectDir = (path?: string | null) => {
   if (!path) return "Unknown";
-  return path.replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
+  return path
+    // Shape-based drive letter detection (Windows-only form, but decided by the
+    // path itself, not the host platform).
+    .replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase()}:`)
+    // Unify all separators to `/` so `D:/...` and `D:\...` group together.
+    // POSIX paths contain no backslashes, so this is a no-op for them.
+    .replace(/\\/g, "/");
 };
 
 export const formatSessionTitle = (session: SessionMeta) =>

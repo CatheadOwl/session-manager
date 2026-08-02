@@ -28,9 +28,8 @@ pub(crate) fn count_filtered(files: &[CachedFileData], filter: Option<&str>) -> 
     }
 }
 
-/// Normalize a path string for comparison: lowercase, normalize backslashes.
+/// Normalize a path string for comparison: lowercase, unify separators to `/`.
+/// Mirrors `normalizeProjectDir` on the frontend so both sides share one canonical form.
 fn normalize_path_for_comparison(path: &str) -> String {
-    path.replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
+    path.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }

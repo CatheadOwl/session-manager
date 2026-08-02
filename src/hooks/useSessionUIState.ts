@@ -16,6 +16,7 @@ export function useSessionUIState() {
   const [showStarredOnly, setShowStarredOnly] = useState(false);
   const [forkJumpIndex, setForkJumpIndex] = useState<number | undefined>(undefined);
   const [sessionPendingDelete, setSessionPendingDelete] = useState<SessionMeta | null>(null);
+  const [batchDeletePending, setBatchDeletePending] = useState<SessionMeta[] | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedSessionKeys, setSelectedSessionKeys] = useState<string[]>([]);
 
@@ -84,6 +85,8 @@ export function useSessionUIState() {
     setForkJumpIndex,
     sessionPendingDelete,
     setSessionPendingDelete,
+    batchDeletePending,
+    setBatchDeletePending,
     selectionMode,
     toggleSelectionMode,
     selectedSessionKeys,

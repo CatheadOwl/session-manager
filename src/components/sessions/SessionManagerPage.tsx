@@ -6,8 +6,14 @@ import { useSessionUIState } from "@/hooks/useSessionUIState";
 import { useUpdater } from "@/hooks/useUpdater";
 import type { DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
-import { getLifecycleOperationOptions, getMetadataKey, getSessionKey } from "@/lib/domain";
-import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
+import { getLifecycleOperationOptions, getMetadataKey, getSessionKey, type SessionLifecycleOperationOptions } from "@/lib/domain";
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from "./ConfirmDeleteDialog";
+
+// Filter a session list down to those eligible for file-lifecycle deletion
+const getDeletableSessions = (sessions: SessionMeta[]): SessionLifecycleOperationOptions[] =>
+  sessions
+    .map(getLifecycleOperationOptions)
+    .filter((item): item is SessionLifecycleOperationOptions => Boolean(item));
 import { FolderFilter } from "./FolderFilter";
 import { SessionDetail } from "./SessionDetail";
 import { SessionList } from "./SessionList";
@@ -72,21 +78,36 @@ export function SessionManagerPage() {
     [ui.selectedSessionKeys],
   );
 
+  // Batch delete dialog payload: deletable count + read-only skips, derived from the pending session list
+  const batchDeleteTarget = useMemo<ConfirmDeleteTarget | null>(() => {
+    const pending = ui.batchDeletePending;
+    if (!pending || pending.length === 0) return null;
+    const items = getDeletableSessions(pending);
+    return {
+      kind: "batch",
+      count: items.length,
+      skippedCount: pending.length - items.length,
+    };
+  }, [ui.batchDeletePending]);
+
+  // At most one delete dialog renders — single takes precedence over batch
+  const deleteTarget = ui.sessionPendingDelete
+    ? { kind: "single" as const, session: ui.sessionPendingDelete }
+    : batchDeleteTarget;
+
   const handleBatchDelete = useCallback(() => {
     const keys = selectedKeysRef.current;
     const selectedSessions = keys
       .map((key) => getSessionFromMap(queries.sessionMap, key))
       .filter((s): s is SessionMeta => Boolean(s));
-    const items = selectedSessions
-      .map(getLifecycleOperationOptions)
-      .filter((item): item is NonNullable<typeof item> => Boolean(item));
-    const skippedCount = selectedSessions.length - items.length;
-    if (items.length === 0 && skippedCount > 0) {
+    const items = getDeletableSessions(selectedSessions);
+    if (items.length === 0 && selectedSessions.length > 0) {
       window.alert("Selected sessions are read-only and cannot be deleted.");
+      ui.clearSelection();
+      return;
     }
-    mutations.handleBatchDelete(items, skippedCount);
-    ui.clearSelection();
-  }, [queries.sessionMap, mutations.handleBatchDelete, ui.clearSelection]);
+    ui.setBatchDeletePending(selectedSessions);
+  }, [queries.sessionMap, ui.setBatchDeletePending, ui.clearSelection]);
 
   // ─── Auto-select first available session ──────────────────────────
   useEffect(() => {
@@ -124,17 +145,28 @@ export function SessionManagerPage() {
     [ui.setSessionPendingDelete],
   );
 
-  const handleConfirmDelete = useCallback(
-    (session: SessionMeta) => {
-      ui.setSessionPendingDelete(null); // close dialog immediately, avoid "Deleting..." flicker
-      mutations.confirmDeleteSession(session);
-    },
-    [ui.setSessionPendingDelete, mutations.confirmDeleteSession],
-  );
+  const handleConfirmDelete = useCallback(() => {
+    const session = ui.sessionPendingDelete;
+    ui.setSessionPendingDelete(null); // close dialog immediately, avoid "Deleting..." flicker
+    if (session) mutations.confirmDeleteSession(session);
+  }, [ui.sessionPendingDelete, ui.setSessionPendingDelete, mutations.confirmDeleteSession]);
 
   const handleCancelDelete = useCallback(
     () => ui.setSessionPendingDelete(null),
     [ui.setSessionPendingDelete],
+  );
+
+  const handleConfirmBatchDelete = useCallback(() => {
+    const pending = ui.batchDeletePending;
+    if (!pending) return;
+    ui.setBatchDeletePending(null); // close dialog immediately, avoid "Deleting..." flicker
+    ui.clearSelection();
+    mutations.executeBatchDelete(getDeletableSessions(pending));
+  }, [ui.batchDeletePending, ui.setBatchDeletePending, ui.clearSelection, mutations.executeBatchDelete]);
+
+  const handleCancelBatchDelete = useCallback(
+    () => ui.setBatchDeletePending(null),
+    [ui.setBatchDeletePending],
   );
 
   const handleRefresh = useCallback(() => {
@@ -211,12 +243,12 @@ export function SessionManagerPage() {
         onRestore={mutations.handleRestore}
         forkJumpIndex={ui.forkJumpIndex}
       />
-      {ui.sessionPendingDelete ? (
+      {deleteTarget ? (
         <ConfirmDeleteDialog
-          session={ui.sessionPendingDelete}
+          target={deleteTarget}
           isDeleting={false}
-          onConfirm={handleConfirmDelete}
-          onCancel={handleCancelDelete}
+          onConfirm={deleteTarget.kind === "single" ? handleConfirmDelete : handleConfirmBatchDelete}
+          onCancel={deleteTarget.kind === "single" ? handleCancelDelete : handleCancelBatchDelete}
         />
       ) : null}
     </div>

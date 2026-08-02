@@ -1,14 +1,18 @@
 import { useEffect } from "react";
 import type { SessionMeta } from "@/types";
 
+export type ConfirmDeleteTarget =
+  | { kind: "single"; session: SessionMeta }
+  | { kind: "batch"; count: number; skippedCount: number };
+
 interface ConfirmDeleteDialogProps {
-  session: SessionMeta;
+  target: ConfirmDeleteTarget;
   isDeleting: boolean;
-  onConfirm: (session: SessionMeta) => void;
+  onConfirm: () => void;
   onCancel: () => void;
 }
 
-export function ConfirmDeleteDialog({ session, isDeleting, onConfirm, onCancel }: ConfirmDeleteDialogProps) {
+export function ConfirmDeleteDialog({ target, isDeleting, onConfirm, onCancel }: ConfirmDeleteDialogProps) {
   // Escape key dismisses the dialog
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -17,6 +21,21 @@ export function ConfirmDeleteDialog({ session, isDeleting, onConfirm, onCancel }
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [isDeleting, onCancel]);
+
+  const isBatch = target.kind === "batch";
+  const title = isBatch
+    ? `Delete ${target.count} session${target.count === 1 ? "" : "s"}?`
+    : "Delete session?";
+  const description = isBatch
+    ? `This will move ${target.count} selected session${target.count === 1 ? "" : "s"} to your system's trash / Recycle Bin.`
+    : "This will move the session to your system's trash / Recycle Bin.";
+  const skippedNote =
+    isBatch && target.skippedCount > 0
+      ? `${target.skippedCount} read-only session(s) will be skipped.`
+      : "";
+  const targetLabel = isBatch
+    ? `${target.count} selected session${target.count === 1 ? "" : "s"}`
+    : target.session.title || target.session.sessionId;
 
   return (
     <div className="confirm-dialog-backdrop" role="presentation" onClick={onCancel}>
@@ -30,12 +49,18 @@ export function ConfirmDeleteDialog({ session, isDeleting, onConfirm, onCancel }
       >
         <div className="confirm-dialog-icon" aria-hidden="true">×</div>
         <div className="confirm-dialog-content">
-          <h2 id="delete-session-title">Delete session?</h2>
+          <h2 id="delete-session-title">{title}</h2>
           <p id="delete-session-description">
-            This will move the session to your system's trash / Recycle Bin.
+            {description}
+            {skippedNote ? (
+              <>
+                <br />
+                {skippedNote}
+              </>
+            ) : null}
           </p>
-          <div className="confirm-dialog-target" title={session.title || session.sessionId}>
-            {session.title || session.sessionId}
+          <div className="confirm-dialog-target" title={targetLabel}>
+            {targetLabel}
           </div>
         </div>
         <div className="confirm-dialog-actions">
@@ -50,7 +75,7 @@ export function ConfirmDeleteDialog({ session, isDeleting, onConfirm, onCancel }
           <button
             type="button"
             className="danger-button"
-            onClick={() => onConfirm(session)}
+            onClick={onConfirm}
             disabled={isDeleting}
           >
             {isDeleting ? "Deleting..." : "Delete"}

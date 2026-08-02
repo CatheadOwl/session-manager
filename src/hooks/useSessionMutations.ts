@@ -75,15 +75,9 @@ export function useSessionMutations(
     [deleteMutation, onSessionDeleted],
   );
 
-  const handleBatchDelete = useCallback(
-    (sessionsToDelete: DeleteSessionOptions[], skippedCount = 0) => {
+  const executeBatchDelete = useCallback(
+    (sessionsToDelete: DeleteSessionOptions[]) => {
       if (sessionsToDelete.length === 0) return;
-
-      const skipped = skippedCount > 0 ? `\n\n${skippedCount} read-only session(s) will be skipped.` : "";
-      const ok = window.confirm(
-        `Delete ${sessionsToDelete.length} selected session(s)?${skipped}\n\nThis cannot be undone.`,
-      );
-      if (!ok) return;
 
       deleteSessionsMutation.mutate(sessionsToDelete, {
         onSuccess: () => {
@@ -183,7 +177,7 @@ export function useSessionMutations(
   // ─── Return ───────────────────────────────────────────────────────
   return {
     confirmDeleteSession,
-    handleBatchDelete,
+    executeBatchDelete,
     handleArchive,
     handleRestore,
     handleArchiveFolder,

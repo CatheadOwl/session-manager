@@ -42,7 +42,7 @@ pub(crate) fn compute_file_data(
 
     Ok(CachedFileData {
         session_key: format!(
-            "{}:{}:{}",
+            "{}:{}:file:{}",
             meta.provider_id,
             meta.session_id,
             path.to_string_lossy()

@@ -60,6 +60,15 @@ pub fn compute_fork_tree(
         };
         current_paths.insert(source_path.clone());
 
+        // Mirror the frontend `getSessionKey` precedence: prefer the File
+        // locator path over the legacy source_path. Identical today, but
+        // keying off the same field the frontend uses keeps the contract
+        // robust if a provider ever sets them to different strings.
+        let key_path = match &session.locator {
+            Some(session_manager::SessionLocator::File { path }) => path.as_str(),
+            _ => source_path.as_str(),
+        };
+
         // Reuse cached hash-chain data if available for this source path.
         // The hash chain is expensive to recompute (full-file read + SHA256),
         // but session meta fields are cheap — override those so changes to
@@ -67,6 +76,10 @@ pub fn compute_fork_tree(
         // immediately without a manual cache clear.
         if let Some(&cached_idx) = cache_index.get(source_path) {
             let mut data = cache.files[cached_idx].clone();
+            // Keep the key canonical even when reusing a cached entry so a
+            // stale-format key can never leak into the tree result.
+            data.session_key =
+                fork_tree_session_key(&session.provider_id, &session.session_id, key_path);
             data.forked_from_id = session.forked_from_id.clone();
             data.title = session
                 .title
@@ -105,10 +118,7 @@ pub fn compute_fork_tree(
         let (hash_chain, user_texts, kept_indices) = hash_chain::hash_events(&events);
 
         let file_data = CachedFileData {
-            session_key: format!(
-                "{}:{}:{}",
-                session.provider_id, session.session_id, source_path
-            ),
+            session_key: fork_tree_session_key(&session.provider_id, &session.session_id, key_path),
             source_path: source_path.clone(),
             title: session
                 .title
@@ -160,6 +170,16 @@ fn supports_fork_tree(session: &session_manager::SessionMeta) -> bool {
             session.locator.as_ref(),
             Some(session_manager::SessionLocator::Database { .. })
         )
+}
+
+/// Canonical fork-tree session key, matching the frontend `getSessionKey`
+/// for file-backed sessions (`providerId:sessionId:file:<sourcePath>`).
+///
+/// `TreeView` looks sessions up by this key in a map keyed with the frontend
+/// `getSessionKey`, so the format here must stay identical or every node
+/// renders as "Not in current scope".
+fn fork_tree_session_key(provider_id: &str, session_id: &str, source_path: &str) -> String {
+    format!("{provider_id}:{session_id}:file:{source_path}")
 }
 
 /// Return cached fork tree without recomputing.
@@ -285,7 +305,7 @@ mod tests {
     #[test]
     fn build_tree_single_root() {
         let files = vec![CachedFileData {
-            session_key: "claude:a:path1".into(),
+            session_key: "claude:a:file:path1".into(),
             source_path: "path1".into(),
             title: "Session A".into(),
             summary: None,
@@ -300,7 +320,7 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "claude:a:path1");
+        assert_eq!(roots[0].session_key, "claude:a:file:path1");
         assert_eq!(roots[0].depth, 0);
         assert!(roots[0].children.is_empty());
     }
@@ -309,7 +329,7 @@ mod tests {
     fn build_tree_linear_chain_via_forked_from_id() {
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -322,7 +342,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -339,9 +359,9 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "claude:a:path1");
+        assert_eq!(roots[0].session_key, "claude:a:file:path1");
         assert_eq!(roots[0].children.len(), 1);
-        assert_eq!(roots[0].children[0].session_key, "claude:b:path2");
+        assert_eq!(roots[0].children[0].session_key, "claude:b:file:path2");
         assert_eq!(roots[0].children[0].depth, 1);
         assert_eq!(roots[0].children[0].forked_at_user, 2);
     }
@@ -352,7 +372,7 @@ mod tests {
         // B's hash chain has A's full chain as prefix → heuristic makes B a child of A.
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -365,7 +385,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -381,10 +401,10 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1, "A is root, B is child via heuristic");
-        assert_eq!(roots[0].session_key, "claude:a:path1");
+        assert_eq!(roots[0].session_key, "claude:a:file:path1");
         assert_eq!(roots[0].children.len(), 1);
         let child = &roots[0].children[0];
-        assert_eq!(child.session_key, "claude:b:path2");
+        assert_eq!(child.session_key, "claude:b:file:path2");
         assert_eq!(
             child.forked_at_user, 2,
             "B forks at user index 2 (its 3rd message)"
@@ -398,7 +418,7 @@ mod tests {
         // Heuristic is same-provider only → both remain roots.
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -411,7 +431,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "codex:b:path2".into(),
+                session_key: "codex:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -437,7 +457,7 @@ mod tests {
     fn build_tree_fork_via_forked_from_id() {
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -450,7 +470,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -463,7 +483,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:c:path3".into(),
+                session_key: "claude:c:file:path3".into(),
                 source_path: "path3".into(),
                 title: "C".into(),
                 summary: None,
@@ -479,16 +499,16 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "claude:a:path1");
+        assert_eq!(roots[0].session_key, "claude:a:file:path1");
         assert_eq!(roots[0].children.len(), 1);
         // B is a child of A, forked at user 2
         let b = &roots[0].children[0];
-        assert_eq!(b.session_key, "claude:b:path2");
+        assert_eq!(b.session_key, "claude:b:file:path2");
         assert_eq!(b.forked_at_user, 2);
         assert_eq!(b.depth, 1);
         // C is a child of B, forked at user 3
         assert_eq!(b.children.len(), 1);
-        assert_eq!(b.children[0].session_key, "claude:c:path3");
+        assert_eq!(b.children[0].session_key, "claude:c:file:path3");
         assert_eq!(b.children[0].forked_at_user, 3);
     }
 
@@ -496,7 +516,7 @@ mod tests {
     fn build_tree_two_roots() {
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -509,7 +529,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -531,7 +551,7 @@ mod tests {
     fn build_tree_fork_user_text_via_forked_from_id() {
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -544,7 +564,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -574,7 +594,7 @@ mod tests {
         // LCP of 1 should map to original index 2 (not 1).
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -587,7 +607,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -604,7 +624,7 @@ mod tests {
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
         let child = &roots[0].children[0];
-        assert_eq!(child.session_key, "claude:b:path2");
+        assert_eq!(child.session_key, "claude:b:file:path2");
         // LCP = 1 (chain-space) → kept_indices[1] = 2 (original event index)
         assert_eq!(
             child.forked_at_user, 2,
@@ -668,6 +688,15 @@ mod tests {
         assert_eq!(result.total_sessions, 2);
         assert!(!result.computed_from_cache);
 
+        // Regression guard: tree session keys must match the frontend
+        // `getSessionKey` (`providerId:sessionId:file:<sourcePath>`), or
+        // TreeView cannot resolve any node against its session map.
+        assert!(
+            result.roots[0].session_key.starts_with("claude:a:file:"),
+            "fork tree session_key must carry the file: locator segment, got {}",
+            result.roots[0].session_key
+        );
+
         // No forked_from_id for Claude sessions.
         // A and B both start with "hello" which is filtered as a greeting,
         // leaving "world" vs "different" — no LCP match → both roots.
@@ -679,11 +708,21 @@ mod tests {
         let result2 = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None)
             .expect("compute");
         assert_eq!(result2.total_sessions, 2);
+        assert!(
+            result2.roots[0].session_key.starts_with("claude:a:file:"),
+            "cache-reuse path must also emit canonical keys, got {}",
+            result2.roots[0].session_key
+        );
 
         // get_fork_tree reads persisted cache and reports as cached
         let result3 = get_fork_tree().expect("get cached");
         assert!(result3.computed_from_cache);
         assert_eq!(result3.total_sessions, 2);
+        assert!(
+            result3.roots[0].session_key.starts_with("claude:a:file:"),
+            "cache-only get_fork_tree path must also emit canonical keys, got {}",
+            result3.roots[0].session_key
+        );
 
         // Clean up env
         std::env::remove_var("CLAUDE_CONFIG_DIR");
@@ -696,7 +735,7 @@ mod tests {
         // Session B has forked_from_id = "a" → B should be child of A
         let files = vec![
             CachedFileData {
-                session_key: "codex:a:/tmp/a.jsonl".into(),
+                session_key: "codex:a:file:/tmp/a.jsonl".into(),
                 source_path: "a.jsonl".into(),
                 title: "A".into(),
                 summary: None,
@@ -709,7 +748,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "codex:b:/tmp/b.jsonl".into(),
+                session_key: "codex:b:file:/tmp/b.jsonl".into(),
                 source_path: "b.jsonl".into(),
                 title: "B".into(),
                 summary: None,
@@ -725,10 +764,10 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "codex:a:/tmp/a.jsonl");
+        assert_eq!(roots[0].session_key, "codex:a:file:/tmp/a.jsonl");
         assert_eq!(roots[0].children.len(), 1);
         let b = &roots[0].children[0];
-        assert_eq!(b.session_key, "codex:b:/tmp/b.jsonl");
+        assert_eq!(b.session_key, "codex:b:file:/tmp/b.jsonl");
         assert_eq!(b.forked_at_user, 2); // prefix len = 2 (h1, h2 match)
         assert_eq!(b.depth, 1);
     }
@@ -738,7 +777,7 @@ mod tests {
         // A → B → C chain, all using forked_from_id
         let files = vec![
             CachedFileData {
-                session_key: "codex:a:/tmp/a.jsonl".into(),
+                session_key: "codex:a:file:/tmp/a.jsonl".into(),
                 source_path: "a.jsonl".into(),
                 title: "A".into(),
                 summary: None,
@@ -751,7 +790,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "codex:b:/tmp/b.jsonl".into(),
+                session_key: "codex:b:file:/tmp/b.jsonl".into(),
                 source_path: "b.jsonl".into(),
                 title: "B".into(),
                 summary: None,
@@ -764,7 +803,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "codex:c:/tmp/c.jsonl".into(),
+                session_key: "codex:c:file:/tmp/c.jsonl".into(),
                 source_path: "c.jsonl".into(),
                 title: "C".into(),
                 summary: None,
@@ -780,15 +819,15 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "codex:a:/tmp/a.jsonl");
+        assert_eq!(roots[0].session_key, "codex:a:file:/tmp/a.jsonl");
         assert_eq!(roots[0].children.len(), 1);
         let b = &roots[0].children[0];
-        assert_eq!(b.session_key, "codex:b:/tmp/b.jsonl");
+        assert_eq!(b.session_key, "codex:b:file:/tmp/b.jsonl");
         assert_eq!(b.forked_at_user, 2);
         assert_eq!(b.depth, 1);
         assert_eq!(b.children.len(), 1);
         let c = &b.children[0];
-        assert_eq!(c.session_key, "codex:c:/tmp/c.jsonl");
+        assert_eq!(c.session_key, "codex:c:file:/tmp/c.jsonl");
         assert_eq!(c.forked_at_user, 3);
         assert_eq!(c.depth, 2);
     }
@@ -801,7 +840,7 @@ mod tests {
         // Sorted by chain length: B(len=2) first, A(len=3) second.
         let files = vec![
             CachedFileData {
-                session_key: "codex:a:/tmp/a.jsonl".into(),
+                session_key: "codex:a:file:/tmp/a.jsonl".into(),
                 source_path: "a.jsonl".into(),
                 title: "A".into(),
                 summary: None,
@@ -814,7 +853,7 @@ mod tests {
                 uuid_chain: vec![],
             },
             CachedFileData {
-                session_key: "codex:b:/tmp/b.jsonl".into(),
+                session_key: "codex:b:file:/tmp/b.jsonl".into(),
                 source_path: "b.jsonl".into(),
                 title: "B".into(),
                 summary: None,
@@ -830,10 +869,10 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "codex:a:/tmp/a.jsonl");
+        assert_eq!(roots[0].session_key, "codex:a:file:/tmp/a.jsonl");
         assert_eq!(roots[0].children.len(), 1);
         let b = &roots[0].children[0];
-        assert_eq!(b.session_key, "codex:b:/tmp/b.jsonl");
+        assert_eq!(b.session_key, "codex:b:file:/tmp/b.jsonl");
         assert_eq!(b.forked_at_user, 2); // common prefix = 2
         assert_eq!(b.depth, 1);
     }
@@ -842,7 +881,7 @@ mod tests {
     fn build_tree_forked_from_id_orphan_becomes_root() {
         // Session has forked_from_id pointing to a session not in the file set
         let files = vec![CachedFileData {
-            session_key: "codex:orphan:/tmp/o.jsonl".into(),
+            session_key: "codex:orphan:file:/tmp/o.jsonl".into(),
             source_path: "o.jsonl".into(),
             title: "Orphan".into(),
             summary: None,
@@ -857,7 +896,7 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "codex:orphan:/tmp/o.jsonl");
+        assert_eq!(roots[0].session_key, "codex:orphan:file:/tmp/o.jsonl");
         assert_eq!(roots[0].depth, 0);
     }
 
@@ -1080,7 +1119,7 @@ mod tests {
         // B's uuid_chain has A's full chain as prefix -> B is child of A.
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -1093,7 +1132,7 @@ mod tests {
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -1109,10 +1148,10 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1, "A is root, B is child via uuid-chain LCP");
-        assert_eq!(roots[0].session_key, "claude:a:path1");
+        assert_eq!(roots[0].session_key, "claude:a:file:path1");
         assert_eq!(roots[0].children.len(), 1);
         let child = &roots[0].children[0];
-        assert_eq!(child.session_key, "claude:b:path2");
+        assert_eq!(child.session_key, "claude:b:file:path2");
         assert_eq!(
             child.forked_at_user, 2,
             "B forks at user index 2 via uuid-chain LCP"
@@ -1126,7 +1165,7 @@ mod tests {
         // Heuristic is same-provider only -> both remain roots.
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -1139,7 +1178,7 @@ mod tests {
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
-                session_key: "gemini:b:path2".into(),
+                session_key: "gemini:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -1166,7 +1205,7 @@ mod tests {
         // Two sessions, same provider, uuid_chain has no overlap.
         let files = vec![
             CachedFileData {
-                session_key: "claude:a:path1".into(),
+                session_key: "claude:a:file:path1".into(),
                 source_path: "path1".into(),
                 title: "A".into(),
                 summary: None,
@@ -1179,7 +1218,7 @@ mod tests {
                 uuid_chain: vec!["u1".into(), "u2".into()],
             },
             CachedFileData {
-                session_key: "claude:b:path2".into(),
+                session_key: "claude:b:file:path2".into(),
                 source_path: "path2".into(),
                 title: "B".into(),
                 summary: None,
@@ -1207,7 +1246,7 @@ mod tests {
         // not hash_chain LCP.
         let files = vec![
             CachedFileData {
-                session_key: "codex:a:/tmp/a.jsonl".into(),
+                session_key: "codex:a:file:/tmp/a.jsonl".into(),
                 source_path: "a.jsonl".into(),
                 title: "A".into(),
                 summary: None,
@@ -1220,7 +1259,7 @@ mod tests {
                 uuid_chain: vec!["u1".into(), "u2".into(), "u3".into()],
             },
             CachedFileData {
-                session_key: "codex:b:/tmp/b.jsonl".into(),
+                session_key: "codex:b:file:/tmp/b.jsonl".into(),
                 source_path: "b.jsonl".into(),
                 title: "B".into(),
                 summary: None,
@@ -1236,10 +1275,10 @@ mod tests {
 
         let roots = build_tree(&files);
         assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].session_key, "codex:a:/tmp/a.jsonl");
+        assert_eq!(roots[0].session_key, "codex:a:file:/tmp/a.jsonl");
         assert_eq!(roots[0].children.len(), 1);
         let b = &roots[0].children[0];
-        assert_eq!(b.session_key, "codex:b:/tmp/b.jsonl");
+        assert_eq!(b.session_key, "codex:b:file:/tmp/b.jsonl");
         assert_eq!(
             b.forked_at_user, 2,
             "fork_at from uuid_chain LCP (u1, u2), not hash_chain"

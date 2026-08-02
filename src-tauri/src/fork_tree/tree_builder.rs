@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::types::{CachedFileData, TreeNodeData};
 
 /// Extract the session_id component from a session_key of the form
-/// `"provider_id:session_id:source_path"`.
+/// `"provider_id:session_id:file:source_path"`.
 fn session_id_from_key(key: &str) -> &str {
     key.splitn(3, ':').nth(1).unwrap_or("")
 }
@@ -23,6 +23,11 @@ fn is_ancestor_of(ancestor: usize, descendant: usize, parent: &[Option<usize>]) 
 }
 
 /// Build a tree from a list of file data.
+///
+/// Session keys follow the canonical `"provider_id:session_id:file:source_path"`
+/// form (the frontend `getSessionKey`); the provider and session_id segments are
+/// split on `:`, so the `file:` locator segment at index 2 does not affect
+/// parent resolution.
 ///
 /// Processing is per-provider, with three independent paths:
 ///

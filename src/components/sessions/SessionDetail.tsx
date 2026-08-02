@@ -284,19 +284,37 @@ export const SessionDetail = memo(function SessionDetail({
               </div>
               <div>
                 <dt>Project path</dt>
-                <dd>{session.projectDir || "—"}</dd>
+                <dd className="metadata-copyable">
+                  <span className="metadata-value">{session.projectDir || "—"}</span>
+                  {session.projectDir ? (
+                    <CopyButton text={session.projectDir} label="Copy project path" className="metadata-copy-btn" />
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt>Source path</dt>
-                <dd>{session.sourcePath || "—"}</dd>
+                <dd className="metadata-copyable">
+                  <span className="metadata-value">{session.sourcePath || "—"}</span>
+                  {session.sourcePath ? (
+                    <CopyButton text={session.sourcePath} label="Copy source path" className="metadata-copy-btn" />
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt>Session ID</dt>
-                <dd>{session.sessionId}</dd>
+                <dd className="metadata-copyable">
+                  <span className="metadata-value">{session.sessionId}</span>
+                  <CopyButton text={session.sessionId} label="Copy session ID" className="metadata-copy-btn" />
+                </dd>
               </div>
               <div>
                 <dt>Resume</dt>
-                <dd>{session.resumeCommand || "—"}</dd>
+                <dd className="metadata-copyable">
+                  <span className="metadata-value">{session.resumeCommand || "—"}</span>
+                  {session.resumeCommand ? (
+                    <CopyButton text={session.resumeCommand} label="Copy resume command" className="metadata-copy-btn" />
+                  ) : null}
+                </dd>
               </div>
             </dl>
           </div>

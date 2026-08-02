@@ -318,6 +318,45 @@
   font-size: 0.88rem;
 }
 
+/* Copyable metadata rows: value + inline copy button, both hidden when the card collapses */
+.metadata-card .metadata-copyable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.metadata-card .metadata-copyable .metadata-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.metadata-card .copy-feedback-button {
+  flex: none;
+  width: 1.6rem;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 0.4rem;
+  color: #94a3b8;
+  background: transparent;
+}
+
+.metadata-card .copy-feedback-button:hover {
+  color: var(--accent);
+  background: rgba(219, 234, 254, 0.55);
+}
+
+.metadata-card .copy-feedback-copied {
+  color: #15803d;
+  background: rgba(220, 252, 231, 0.8);
+}
+
+.metadata-card .copy-feedback-failed {
+  color: #dc2626;
+  background: var(--danger-soft);
+}
+
 .metadata-toggle {
   display: flex;
   align-items: center;

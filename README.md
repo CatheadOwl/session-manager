@@ -6,7 +6,7 @@
 
 **Browse, search, inspect, archive, and clean up local AI coding-agent sessions.**
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square)](#)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](#)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?style=flat-square&logo=tauri&logoColor=black)](https://tauri.app)
 [![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![Rust](https://img.shields.io/badge/Rust-1.85+-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -70,6 +70,7 @@ The project was inspired by [CC Switch's Session Manager](https://github.com/far
 | OpenClaw | Experimental | `~/.openclaw/agents/` |
 | Hermes | Experimental | `~/.config/hermes/sessions/` |
 | Qoder | Experimental | `~/.qoder/projects/`, `~/.qoder-cn/projects/` |
+| Pi | Experimental | `~/.pi/agent/sessions/` |
 
 > **Stable** = the author dogfoods these two daily, so they get first-class treatment.
 >

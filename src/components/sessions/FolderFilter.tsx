@@ -24,6 +24,19 @@ interface FolderFilterProps {
   onInstallUpdate: () => void;
 }
 
+type FolderSortKey = "recent" | "alpha";
+
+const SORT_OPTIONS: { value: FolderSortKey; label: string }[] = [
+  { value: "recent", label: "Recent" },
+  { value: "alpha", label: "A-Z" },
+];
+
+// Exhaustive map: adding a FolderSortKey without a comparator is a compile error.
+const SORT_COMPARATORS: Record<FolderSortKey, (a: FolderGroup, b: FolderGroup) => number> = {
+  recent: (a, b) => b.lastActiveAt - a.lastActiveAt || a.name.localeCompare(b.name),
+  alpha: (a, b) => a.name.localeCompare(b.name),
+};
+
 export const FolderFilter = memo(function FolderFilter({
   folders,
   selectedFolder,
@@ -42,16 +55,28 @@ export const FolderFilter = memo(function FolderFilter({
   onInstallUpdate,
 }: FolderFilterProps) {
   const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [isSortOpen, setIsSortOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<FolderSortKey>("recent");
   const actionsRef = useClickOutside<HTMLDivElement>({
     isOpen: isActionsOpen,
     onClose: () => setIsActionsOpen(false),
+  });
+  const sortRef = useClickOutside<HTMLDivElement>({
+    isOpen: isSortOpen,
+    onClose: () => setIsSortOpen(false),
   });
   const canMoveSelectedFolder = selectedFolder !== "all" && selectedFolder !== "Unknown";
   const folderActionLabel = scope === "active" ? "Archive folder" : "Restore folder";
 
   useEffect(() => {
     setIsActionsOpen(false);
+    setIsSortOpen(false);
   }, [selectedFolder, scope, isCollapsed]);
+
+  const handleSortSelect = (key: FolderSortKey) => {
+    setSortKey(key);
+    setIsSortOpen(false);
+  };
 
   const handleFolderAction = () => {
     if (!canMoveSelectedFolder || isFolderOperationPending) return;
@@ -85,10 +110,16 @@ export const FolderFilter = memo(function FolderFilter({
   }
 
   const totalCount = folders.reduce((sum, f) => sum + f.count, 0);
-  const pinned = pinnedFolders
-    .map((name) => folders.find((f) => f.name === name))
-    .filter((f): f is FolderGroup => f !== undefined);
-  const unpinned = folders.filter((f) => !pinnedFolders.includes(f.name));
+  const pinned = sortFolders(
+    pinnedFolders
+      .map((name) => folders.find((f) => f.name === name))
+      .filter((f): f is FolderGroup => f !== undefined),
+    sortKey,
+  );
+  const unpinned = sortFolders(
+    folders.filter((f) => !pinnedFolders.includes(f.name)),
+    sortKey,
+  );
 
   return (
     <div className="folder-column">
@@ -146,6 +177,39 @@ export const FolderFilter = memo(function FolderFilter({
             ) : null}
           </div>
         </div>
+      </div>
+
+      <div className="folder-sort" ref={sortRef}>
+        <button
+          type="button"
+          className="folder-sort-trigger"
+          onClick={() => setIsSortOpen((open) => !open)}
+          aria-haspopup="menu"
+          aria-expanded={isSortOpen}
+          aria-controls="folder-sort-menu"
+          aria-label={`Sort folders: ${SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}`}
+        >
+          <span className="folder-sort-label">
+            {SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}
+          </span>
+          <ChevronDownIcon />
+        </button>
+        {isSortOpen ? (
+          <div className="folder-sort-menu" id="folder-sort-menu" role="menu">
+            {SORT_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`folder-sort-item${sortKey === option.value ? " active" : ""}`}
+                role="menuitemradio"
+                aria-checked={sortKey === option.value}
+                onClick={() => handleSortSelect(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className={`folder-item${selectedFolder === "all" ? " selected" : ""}`}>
@@ -259,6 +323,19 @@ function MoreHorizontalIcon() {
   );
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg
+      className="folder-sort-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 function PanelToggleIcon({ direction }: { direction: "collapse" | "expand" }) {
   return (
     <svg
@@ -290,4 +367,8 @@ function getFolderDisplay(folder: string) {
 
 function getPinIcon(pinned: boolean) {
   return pinned ? "\u{1F4CD}" : "\u{1F4CC}";
+}
+
+function sortFolders(list: FolderGroup[], sortKey: FolderSortKey): FolderGroup[] {
+  return [...list].sort(SORT_COMPARATORS[sortKey]);
 }

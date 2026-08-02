@@ -108,8 +108,21 @@ describe("deriveFolderList", () => {
     ];
 
     expect(deriveFolderList(sessions)).toEqual([
-      { name: "c:/proj", count: 2 },
-      { name: "d:/other", count: 1 },
+      { name: "c:/proj", count: 2, lastActiveAt: 0 },
+      { name: "d:/other", count: 1, lastActiveAt: 0 },
+    ]);
+  });
+
+  it("tracks the most recent lastActiveAt per folder, falling back to createdAt", () => {
+    const sessions = [
+      session({ sessionId: "a", projectDir: "C:\\proj", lastActiveAt: 100, createdAt: 10 }),
+      session({ sessionId: "b", projectDir: "C:\\proj", lastActiveAt: 300, createdAt: 20 }),
+      session({ sessionId: "c", projectDir: "D:\\other", createdAt: 50 }),
+    ];
+
+    expect(deriveFolderList(sessions)).toEqual([
+      { name: "c:/proj", count: 2, lastActiveAt: 300 },
+      { name: "d:/other", count: 1, lastActiveAt: 50 },
     ]);
   });
 
@@ -120,13 +133,13 @@ describe("deriveFolderList", () => {
     ];
 
     expect(deriveFolderList(sessions)).toEqual([
-      { name: "d:/Document/Projects/agent-dev", count: 2 },
+      { name: "d:/Document/Projects/agent-dev", count: 2, lastActiveAt: 0 },
     ]);
   });
 
   it("maps missing project dirs to 'Unknown'", () => {
     const sessions = [session({ sessionId: "a", projectDir: null })];
-    expect(deriveFolderList(sessions)).toEqual([{ name: "Unknown", count: 1 }]);
+    expect(deriveFolderList(sessions)).toEqual([{ name: "Unknown", count: 1, lastActiveAt: 0 }]);
   });
 
   it("returns an empty list for no sessions", () => {

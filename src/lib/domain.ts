@@ -66,16 +66,25 @@ export const supportsLifecycleOperations = (session: SessionMeta): boolean =>
 export interface FolderGroup {
   name: string;
   count: number;
+  /** Most recent session activity (lastActiveAt, falling back to createdAt) in this folder. */
+  lastActiveAt: number;
 }
 
 /** Derive a sorted list of folder groups from a list of sessions. */
 export const deriveFolderList = (sessions: SessionMeta[]): FolderGroup[] => {
-  const map = new Map<string, number>();
+  const map = new Map<string, { count: number; lastActiveAt: number }>();
   for (const session of sessions) {
     const folder = normalizeProjectDir(session.projectDir);
-    map.set(folder, (map.get(folder) || 0) + 1);
+    const ts = session.lastActiveAt ?? session.createdAt ?? 0;
+    const entry = map.get(folder);
+    if (entry) {
+      entry.count += 1;
+      if (ts > entry.lastActiveAt) entry.lastActiveAt = ts;
+    } else {
+      map.set(folder, { count: 1, lastActiveAt: ts });
+    }
   }
   return Array.from(map.entries())
-    .map(([name, count]) => ({ name, count }))
+    .map(([name, { count, lastActiveAt }]) => ({ name, count, lastActiveAt }))
     .sort((a, b) => a.name.localeCompare(b.name));
 };

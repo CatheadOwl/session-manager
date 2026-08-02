@@ -38,7 +38,6 @@ export interface AppMetadata {
 
 interface RawAppMetadata {
   sessions?: Record<string, SessionMetadata>;
-  pinnedFolders?: string[];
   pinned_folders?: string[];
 }
 
@@ -164,9 +163,7 @@ export const sessionsApi = {
     const metadata = await invoke<RawAppMetadata>("get_app_metadata");
     return {
       sessions: metadata.sessions ?? {},
-      pinnedFolders: normalizePinnedFolders(
-        metadata.pinnedFolders ?? metadata.pinned_folders ?? [],
-      ),
+      pinnedFolders: normalizePinnedFolders(metadata.pinned_folders ?? []),
     };
   },
 

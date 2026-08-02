@@ -98,7 +98,7 @@ describe("SessionManagerPage", () => {
 
     mocks.invoke.mockImplementation((command: string, payload?: { sessionId?: string }) => {
       if (command === "list_sessions") return Promise.resolve(sessions);
-      if (command === "get_app_metadata") return Promise.resolve({ sessions: {}, pinnedFolders: [] });
+      if (command === "get_app_metadata") return Promise.resolve({ sessions: {}, pinned_folders: [] });
       if (command === "compute_fork_tree") {
         return Promise.resolve({
           roots: [],

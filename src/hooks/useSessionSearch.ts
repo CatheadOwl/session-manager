@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import FlexSearch from "flexsearch";
 import type { SessionMeta } from "@/types";
 
@@ -20,28 +20,20 @@ export function useSessionSearch({
     return sessions.filter((session) => session.providerId === providerFilter);
   }, [sessions, providerFilter]);
 
-  const index = useMemo(() => {
-    const nextIndex = new FlexSearch.Index({
-      tokenize: "full",
-      resolution: 9,
-    });
-
-    filteredByProvider.forEach((session, idx) => {
-      const metaContent = [
-        session.sessionId,
-        session.title,
-        session.summary,
-        session.projectDir,
-        session.sourcePath,
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-      nextIndex.add(idx, metaContent);
-    });
-
-    return nextIndex;
-  }, [filteredByProvider]);
+  /**
+   * Lazily-built FlexSearch index, cached per `filteredByProvider` scope.
+   *
+   * Building the index is O(n) in session count and is pure waste while the
+   * search box is empty — the empty-query path below never touches it. So defer
+   * construction until the first non-empty query, and rebuild only when the
+   * scoped session list actually changes (new array identity). Keeping the build
+   * out of the eager render path removes the per-folder-click rebuild that made
+   * selecting a folder with many sessions laggy.
+   */
+  const indexRef = useRef<{
+    scope: SessionMeta[];
+    index: InstanceType<typeof FlexSearch.Index>;
+  } | null>(null);
 
   const search = useCallback(
     (query: string): SessionMeta[] => {
@@ -55,13 +47,37 @@ export function useSessionSearch({
         });
       }
 
-      const results = index.search(needle, {
+      // Build (or rebuild) the index once per session list scope.
+      if (!indexRef.current || indexRef.current.scope !== filteredByProvider) {
+        const nextIndex = new FlexSearch.Index({
+          tokenize: "full",
+          resolution: 9,
+        });
+
+        filteredByProvider.forEach((session, idx) => {
+          const metaContent = [
+            session.sessionId,
+            session.title,
+            session.summary,
+            session.projectDir,
+            session.sourcePath,
+          ]
+            .filter(Boolean)
+            .join(" ");
+
+          nextIndex.add(idx, metaContent);
+        });
+
+        indexRef.current = { scope: filteredByProvider, index: nextIndex };
+      }
+
+      const results = indexRef.current.index.search(needle, {
         limit: filteredByProvider.length,
       }) as number[];
 
       return results.map((idx) => filteredByProvider[idx]);
     },
-    [index, filteredByProvider],
+    [filteredByProvider],
   );
 
   return { search };

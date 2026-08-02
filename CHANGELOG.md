@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add sort/filter controls to the left-side folder panel. ([#1](https://github.com/CatheadOwl/session-manager/issues/1))
 - Add one-click COPY buttons to session metadata (resume command, etc.). ([#2](https://github.com/CatheadOwl/session-manager/issues/2))
 
+### Fixed
+
+- Fix fork-tree nodes rendering as "Not in current scope" due to a mismatched session key format.
+
 ## [0.2.0] - 2026-08-01
 
 ### Added

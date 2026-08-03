@@ -14,6 +14,14 @@ use super::SessionProvider;
 
 const PROVIDER_ID: &str = "opencode";
 
+/// Cap on the number of SQLite sessions returned per list scan.
+///
+/// Prevents unbounded list materialization (plus downstream full-list
+/// rendering and search indexing) from exhausting memory on very large
+/// OpenCode databases. Deliberate stop-gap; a systematic refactor should
+/// replace this with real pagination.
+const DB_LIST_LIMIT: i64 = 1000;
+
 // ─── OpenCodeProvider ───────────────────────────────────────────────────────
 
 /// Provider implementation for OpenCode sessions.
@@ -221,7 +229,8 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
         "SELECT id, title, directory, parent_id, time_created, time_updated, \
                 model, agent, cost, tokens_input, tokens_output \
          FROM session \
-         ORDER BY time_updated DESC",
+         ORDER BY time_updated DESC, id DESC \
+         LIMIT ?",
     ) {
         Ok(stmt) => stmt,
         Err(err) => {
@@ -230,7 +239,7 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
         }
     };
 
-    let rows = match stmt.query_map([], |row| db_session_row_to_meta(row, db_path)) {
+    let rows = match stmt.query_map([DB_LIST_LIMIT], |row| db_session_row_to_meta(row, db_path)) {
         Ok(rows) => rows,
         Err(err) => {
             warn_opencode_scan(db_path, format!("failed to query session rows: {err}"));
@@ -1592,6 +1601,126 @@ mod tests {
         );
         assert_eq!(sessions[1].title.as_deref(), Some("other-project"));
         assert_eq!(sessions[1].forked_from_id.as_deref(), Some("ses_db_1"));
+    }
+
+    #[test]
+    fn scan_sessions_in_db_respects_list_limit() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        let count = DB_LIST_LIMIT + 1;
+        for i in 0..count {
+            conn.execute(
+                "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    format!("ses_{i:05}"),
+                    Some(format!("Session {i}")),
+                    "/tmp/proj",
+                    Option::<String>::None,
+                    i,
+                    i, // time_updated = i, so higher i is more recent
+                    "model-a",
+                    "agent-a",
+                    0.0f64,
+                    1i64,
+                    2i64
+                ],
+            )
+            .expect("insert session");
+        }
+        drop(conn);
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+        assert_eq!(sessions.len(), DB_LIST_LIMIT as usize);
+        assert!(
+            sessions
+                .iter()
+                .any(|s| s.session_id == format!("ses_{:05}", count - 1)),
+            "the most recent session must be within the capped list"
+        );
+    }
+
+    #[test]
+    fn scan_sessions_in_db_tie_breaks_same_timestamp_by_id() {
+        // All sessions share one time_updated. With the id tie-breaker the
+        // LIMIT cutoff is deterministic: exactly the highest ids are kept.
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        let count = DB_LIST_LIMIT + 20;
+        for i in 0..count {
+            conn.execute(
+                "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    format!("ses_{i:05}"),
+                    Option::<String>::None,
+                    "/tmp/proj",
+                    Option::<String>::None,
+                    0i64,
+                    1_740_000_000_000i64, // identical time_updated for all rows
+                    "model-a",
+                    "agent-a",
+                    0.0f64,
+                    1i64,
+                    2i64
+                ],
+            )
+            .expect("insert session");
+        }
+        drop(conn);
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+        assert_eq!(sessions.len(), DB_LIST_LIMIT as usize);
+
+        // id is zero-padded so string order equals numeric order: the kept rows
+        // are exactly the DB_LIST_LIMIT highest ids, in descending id order.
+        let ids: Vec<i64> = sessions
+            .iter()
+            .map(|s| s.session_id[4..].parse::<i64>().expect("numeric id"))
+            .collect();
+        let mut sorted = ids.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(ids, sorted, "rows must be ordered by id DESC on timestamp ties");
+        assert_eq!(ids[0], count - 1, "highest id must be first");
+        assert_eq!(ids[ids.len() - 1], count - DB_LIST_LIMIT, "cutoff must be exact");
     }
 
     #[test]

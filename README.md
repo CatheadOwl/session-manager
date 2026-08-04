@@ -29,14 +29,13 @@ The project was inspired by [CC Switch's Session Manager](https://github.com/far
 - **List and fork-tree views** - switch between a flat session list and a computed fork tree for sessions that share prompt history. Clicking a fork node jumps straight to the divergence point in the detail pane.
 - **Local full-text search** - FlexSearch indexes session title, summary, project path, provider, and session id, with highlighted matches in the list/tree.
 - **In-message search** - find text within the currently open session's messages, with match count, prev/next navigation, and inline highlighting.
-- **Session detail inspection** - view full messages, compact Q&A pairs, metadata, resume command, source path, tool calls/results, and token usage when the provider exposes it.
+- **Session detail inspection** - view full messages, compact Q&A pairs, metadata, source path, tool calls/results, and token usage.
 - **Markdown rendering** - toggle between rendered Markdown (GFM + line breaks) and raw text for message content.
 - **Starred sessions** - mark important sessions and filter the list to starred items.
 - **Archive and restore** - move supported sessions between active and archived directories, including folder-level batch archive/restore.
 - **Batch delete** - select multiple sessions in list view and send them to the system trash.
 - **Safer destructive actions** - delete validates the provider root and session id before trashing the session file and any sidecar directory.
-- **Provider adapters** - each supported source is implemented as a Rust provider, while the frontend consumes one shared session API.
-- **Window state persistence** - the app restores size, position, and maximized state between launches.
+- **Auto updates** - the desktop app checks, downloads, and installs updates through Tauri's updater flow.
 
 ## Screenshots
 

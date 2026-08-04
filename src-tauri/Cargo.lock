@@ -3062,6 +3062,7 @@ version = "0.2.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
+ "log",
  "rusqlite",
  "serde",
  "serde_json",

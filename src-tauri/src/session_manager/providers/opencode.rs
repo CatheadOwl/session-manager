@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
@@ -67,15 +68,56 @@ impl SessionProvider for OpenCodeProvider {
         &self,
         handle: &SessionHandle,
     ) -> Result<Vec<SessionMessage>, String> {
+        let start = Instant::now();
+        log::debug!(
+            "opencode_message_load start session={} locator={} path={}",
+            handle.session_id,
+            handle.locator.detail_key_part(),
+            handle.display_source_path()
+        );
         match &handle.locator {
-            SessionLocator::File { path } => self.load_messages(Path::new(path)),
+            SessionLocator::File { path } => {
+                let result = self.load_messages(Path::new(path));
+                match &result {
+                    Ok(messages) => log::debug!(
+                        "opencode_message_load finish session={} message_count={} elapsed_ms={}",
+                        handle.session_id,
+                        messages.len(),
+                        start.elapsed().as_millis()
+                    ),
+                    Err(err) => log::warn!(
+                        "opencode_message_load error session={} path={} elapsed_ms={} error={}",
+                        handle.session_id,
+                        handle.display_source_path(),
+                        start.elapsed().as_millis(),
+                        err
+                    ),
+                }
+                result
+            }
             SessionLocator::Database { path, record_id } => {
                 let session_id = if record_id.is_empty() {
                     &handle.session_id
                 } else {
                     record_id
                 };
-                load_messages_from_db(Path::new(path), session_id)
+                let result = load_messages_from_db(Path::new(path), session_id);
+                match &result {
+                    Ok(messages) => log::debug!(
+                        "opencode_message_load finish session={} message_count={} elapsed_ms={}",
+                        handle.session_id,
+                        messages.len(),
+                        start.elapsed().as_millis()
+                    ),
+                    Err(err) => log::warn!(
+                        "opencode_message_load error session={} path={} elapsed_ms={} error={}",
+                        handle.session_id,
+                        handle.display_source_path(),
+                        start.elapsed().as_millis(),
+                        err
+                    ),
+                }
+                result
             }
         }
     }
@@ -131,6 +173,7 @@ fn derive_storage_base(session_path: &Path) -> PathBuf {
 // ─── Internal functions ─────────────────────────────────────────────────────
 
 fn scan_sessions_from_scan_root(root: &Path) -> Vec<SessionMeta> {
+    let start = Instant::now();
     let mut sessions = Vec::new();
 
     let db_path = if root.file_name().and_then(|name| name.to_str()) == Some("opencode.db") {
@@ -157,13 +200,21 @@ fn scan_sessions_from_scan_root(root: &Path) -> Vec<SessionMeta> {
         }
     }
 
+    log::debug!(
+        "opencode_scan finish root={} session_count={} elapsed_ms={}",
+        root.display(),
+        sessions.len(),
+        start.elapsed().as_millis()
+    );
+
     sessions
 }
 
 fn warn_opencode_scan(path: &Path, message: impl std::fmt::Display) {
-    eprintln!(
-        "Warning: failed to scan OpenCode sessions at {}: {message}",
-        path.display()
+    log::warn!(
+        "opencode_scan warning path={} error={}",
+        path.display(),
+        message
     );
 }
 
@@ -217,6 +268,7 @@ fn open_db_readonly(db_path: &Path) -> Result<Connection, String> {
 }
 
 fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
+    let start = Instant::now();
     let conn = match open_db_readonly(db_path) {
         Ok(conn) => conn,
         Err(err) => {
@@ -247,14 +299,24 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
         }
     };
 
-    rows.filter_map(|result| match result {
-        Ok(meta) => Some(meta),
-        Err(err) => {
-            warn_opencode_scan(db_path, format!("failed to read session row: {err}"));
-            None
-        }
-    })
-    .collect()
+    let sessions: Vec<_> = rows
+        .filter_map(|result| match result {
+            Ok(meta) => Some(meta),
+            Err(err) => {
+                warn_opencode_scan(db_path, format!("failed to read session row: {err}"));
+                None
+            }
+        })
+        .collect();
+
+    log::debug!(
+        "opencode_db_scan finish path={} session_count={} elapsed_ms={}",
+        db_path.display(),
+        sessions.len(),
+        start.elapsed().as_millis()
+    );
+
+    sessions
 }
 
 fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<SessionMeta> {
@@ -683,6 +745,12 @@ impl DbMessageDraft {
 }
 
 fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    let start = Instant::now();
+    log::debug!(
+        "opencode_db_detail start path={} session={}",
+        db_path.display(),
+        session_id
+    );
     let conn = open_db_readonly(db_path)?;
     let part_join = if part_table_has_session_id(&conn)? {
         "LEFT JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id"
@@ -705,11 +773,17 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Session
         .map_err(|e| format!("Failed to query OpenCode messages: {e}"))?;
     let mut drafts = Vec::new();
     let mut current: Option<DbMessageDraft> = None;
+    let mut part_row_count = 0usize;
 
     while let Some(row) = rows
         .next()
         .map_err(|e| format!("Failed to read OpenCode message row: {e}"))?
     {
+        let part_id: Option<String> = row.get(3).ok();
+        if part_id.is_some() {
+            part_row_count += 1;
+        }
+
         let message_id: String = row
             .get(0)
             .map_err(|e| format!("OpenCode message row is missing id: {e}"))?;
@@ -734,10 +808,21 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Session
         drafts.push(draft);
     }
 
-    Ok(drafts
+    let messages: Vec<_> = drafts
         .into_iter()
         .filter_map(DbMessageDraft::into_message)
-        .collect())
+        .collect();
+
+    log::debug!(
+        "opencode_db_detail finish path={} session={} message_count={} part_row_count={} elapsed_ms={}",
+        db_path.display(),
+        session_id,
+        messages.len(),
+        part_row_count,
+        start.elapsed().as_millis()
+    );
+
+    Ok(messages)
 }
 
 fn part_table_has_session_id(conn: &Connection) -> Result<bool, String> {

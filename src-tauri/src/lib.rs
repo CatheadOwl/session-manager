@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod diagnostics;
 mod fork_tree;
 mod fs_utils;
 mod session_manager;
@@ -50,6 +51,8 @@ fn clamp_window_position<R: Runtime>(
 }
 
 pub fn run() {
+    let _ = diagnostics::init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

@@ -111,6 +111,14 @@ pub fn get_fork_tree_cache_path() -> Result<PathBuf, String> {
         .join("fork-tree.json"))
 }
 
+pub fn get_app_logs_dir() -> Result<PathBuf, String> {
+    Ok(get_home_dir().join(".session-manager").join("logs"))
+}
+
+pub fn get_app_log_path() -> Result<PathBuf, String> {
+    Ok(get_app_logs_dir()?.join("session-manager.log"))
+}
+
 /// Global mutex for tests that modify environment variables.
 /// All test modules must share this single lock to prevent parallel tests
 /// from racing on `SESSION_MANAGER_TEST_HOME` / `CLAUDE_CONFIG_DIR`.
@@ -127,5 +135,16 @@ mod tests {
         std::env::set_var("CLAUDE_CONFIG_DIR", "/tmp/custom-claude");
         assert_eq!(get_claude_config_dir(), PathBuf::from("/tmp/custom-claude"));
         std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+
+    #[test]
+    fn app_log_path_uses_session_manager_dir() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+        std::env::set_var("SESSION_MANAGER_TEST_HOME", "/tmp/test-home");
+        assert_eq!(
+            get_app_log_path().expect("log path"),
+            PathBuf::from("/tmp/test-home/.session-manager/logs/session-manager.log")
+        );
+        std::env::remove_var("SESSION_MANAGER_TEST_HOME");
     }
 }

@@ -1,5 +1,6 @@
 use super::providers::ProviderRegistry;
 use super::types::{QaPair, SessionDetail, SessionHandle, SessionMessage};
+use std::time::Instant;
 
 #[allow(dead_code)]
 #[deprecated(note = "use load_messages_for_handle instead")]
@@ -22,9 +23,50 @@ pub fn load_messages_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<Vec<SessionMessage>, String> {
-    registry
-        .get(&handle.provider_id)?
-        .load_messages_for_handle(handle)
+    let start = Instant::now();
+    log::debug!(
+        "message_load start provider={} session={} locator={} path={}",
+        handle.provider_id,
+        handle.session_id,
+        handle.locator.detail_key_part(),
+        handle.display_source_path()
+    );
+
+    let provider = match registry.get(&handle.provider_id) {
+        Ok(provider) => provider,
+        Err(err) => {
+            log::warn!(
+                "message_load error provider={} session={} path={} elapsed_ms={} error={}",
+                handle.provider_id,
+                handle.session_id,
+                handle.display_source_path(),
+                start.elapsed().as_millis(),
+                err
+            );
+            return Err(err);
+        }
+    };
+    let result = provider.load_messages_for_handle(handle);
+
+    match &result {
+        Ok(messages) => log::debug!(
+            "message_load finish provider={} session={} message_count={} elapsed_ms={}",
+            handle.provider_id,
+            handle.session_id,
+            messages.len(),
+            start.elapsed().as_millis()
+        ),
+        Err(err) => log::warn!(
+            "message_load error provider={} session={} path={} elapsed_ms={} error={}",
+            handle.provider_id,
+            handle.session_id,
+            handle.display_source_path(),
+            start.elapsed().as_millis(),
+            err
+        ),
+    }
+
+    result
 }
 
 fn load_raw_content_fallback_for_handle(
@@ -57,6 +99,15 @@ pub fn load_session_detail_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<SessionDetail, String> {
+    let start = Instant::now();
+    log::debug!(
+        "detail_load start provider={} session={} locator={} path={}",
+        handle.provider_id,
+        handle.session_id,
+        handle.locator.detail_key_part(),
+        handle.display_source_path()
+    );
+
     let messages = load_messages_for_handle(registry, handle)?;
     let qa_pairs = extract_qa_pairs(&messages);
     let raw_content = if messages.is_empty() {
@@ -65,11 +116,23 @@ pub fn load_session_detail_for_handle(
         None
     };
 
-    Ok(SessionDetail {
+    let detail = SessionDetail {
         messages,
         qa_pairs,
         raw_content,
-    })
+    };
+
+    log::debug!(
+        "detail_load finish provider={} session={} message_count={} qa_pair_count={} raw_fallback={} elapsed_ms={}",
+        handle.provider_id,
+        handle.session_id,
+        detail.messages.len(),
+        detail.qa_pairs.len(),
+        detail.raw_content.is_some(),
+        start.elapsed().as_millis()
+    );
+
+    Ok(detail)
 }
 
 pub fn extract_qa_pairs(messages: &[SessionMessage]) -> Vec<QaPair> {

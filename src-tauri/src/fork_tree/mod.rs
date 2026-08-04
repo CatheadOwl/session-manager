@@ -29,6 +29,12 @@ pub fn compute_fork_tree(
     let start = Instant::now();
 
     let cache_path = config::get_fork_tree_cache_path()?;
+    log::debug!(
+        "fork_tree start scope={} project_dir_filter={:?} cache_path={}",
+        scope_label(scope),
+        project_dir_filter,
+        cache_path.display()
+    );
 
     // Get the already-filtered session list from the session manager.
     // This skips subagent sessions and other files the provider rejects.
@@ -96,9 +102,12 @@ pub fn compute_fork_tree(
         let provider = match registry.get(&session.provider_id) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!(
-                    "Warning: provider not found for session {}: {e}",
-                    source_path
+                log::warn!(
+                    "fork_tree skip provider_missing provider={} session={} path={} error={}",
+                    session.provider_id,
+                    session.session_id,
+                    source_path,
+                    e
                 );
                 continue;
             }
@@ -107,9 +116,12 @@ pub fn compute_fork_tree(
         let events = match provider.user_events(Path::new(source_path)) {
             Ok(events) => events,
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to compute fork data for {}: {e}",
-                    source_path
+                log::warn!(
+                    "fork_tree skip user_events_failed provider={} session={} path={} error={}",
+                    session.provider_id,
+                    session.session_id,
+                    source_path,
+                    e
                 );
                 continue;
             }
@@ -156,6 +168,15 @@ pub fn compute_fork_tree(
     // Save cache
     cache::save_cache(&cache_path, &cache)?;
 
+    log::debug!(
+        "fork_tree finish scope={} total_sessions={} root_count={} cache_path={} elapsed_ms={}",
+        scope_label(scope),
+        total_sessions,
+        roots.len(),
+        cache_path.display(),
+        start.elapsed().as_millis()
+    );
+
     Ok(ForkTreeResult {
         total_sessions,
         roots,
@@ -187,8 +208,18 @@ pub fn get_fork_tree() -> Result<ForkTreeResult, String> {
     let start = Instant::now();
     let cache_path = config::get_fork_tree_cache_path()?;
     let cache = cache::load_cache(&cache_path);
+    log::debug!(
+        "fork_tree_cache read path={} cached_files={}",
+        cache_path.display(),
+        cache.files.len()
+    );
 
     if cache.files.is_empty() {
+        log::debug!(
+            "fork_tree_cache empty path={} elapsed_ms={}",
+            cache_path.display(),
+            start.elapsed().as_millis()
+        );
         return Ok(ForkTreeResult {
             roots: Vec::new(),
             total_sessions: 0,
@@ -198,12 +229,26 @@ pub fn get_fork_tree() -> Result<ForkTreeResult, String> {
     }
 
     let roots = tree_builder::build_tree(&cache.files);
+    log::debug!(
+        "fork_tree_cache finish path={} total_sessions={} root_count={} elapsed_ms={}",
+        cache_path.display(),
+        cache.files.len(),
+        roots.len(),
+        start.elapsed().as_millis()
+    );
     Ok(ForkTreeResult {
         roots,
         total_sessions: cache.files.len() as u32,
         computed_from_cache: true,
         duration_ms: start.elapsed().as_millis() as u64,
     })
+}
+
+fn scope_label(scope: &session_manager::SessionScope) -> &'static str {
+    match scope {
+        session_manager::SessionScope::Active => "active",
+        session_manager::SessionScope::Archived => "archived",
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

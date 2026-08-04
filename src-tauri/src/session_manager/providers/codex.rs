@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::fs_utils;
 use crate::session_manager::types::ToolResultInfo;
 use crate::session_manager::{SessionLocator, SessionMessage, SessionMeta, ToolCallInfo};
 
@@ -44,8 +45,7 @@ impl SessionProvider for CodexProvider {
     }
 
     fn scan_sessions(&self, root: &Path) -> Vec<SessionMeta> {
-        let mut files = Vec::new();
-        collect_jsonl_files(root, &mut files);
+        let files = fs_utils::walk_jsonl_paths(root);
 
         let thread_titles = load_thread_titles();
 
@@ -77,29 +77,6 @@ impl SessionProvider for CodexProvider {
 
     fn user_events(&self, path: &Path) -> Result<Vec<String>, String> {
         user_events_from_path(path)
-    }
-}
-
-// ─── Scan helpers ───────────────────────────────────────────────────────────
-
-/// Recursively walk a directory and collect all `.jsonl` file paths.
-fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
-    if !root.exists() {
-        return;
-    }
-
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files);
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
     }
 }
 
@@ -648,6 +625,30 @@ mod tests {
         (temp, guard)
     }
 
+    #[cfg(unix)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        let link = link.to_string_lossy().replace('\'', "''");
+        let target = target.to_string_lossy().replace('\'', "''");
+        let command =
+            format!("New-Item -ItemType Junction -Path '{link}' -Target '{target}' | Out-Null");
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &command])
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "mklink /J failed",
+            ))
+        }
+    }
+
     #[test]
     fn codex_provider_trait_impl() {
         let provider = CodexProvider;
@@ -682,6 +683,24 @@ mod tests {
 
         assert!(ids.contains(&"active-id"));
         assert!(ids.contains(&"archived-id"));
+    }
+
+    #[test]
+    fn scan_sessions_skips_directory_link_cycle() {
+        let (_temp, _guard) = setup_test_env();
+
+        let root = crate::config::get_codex_sessions_dir();
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).expect("real dir");
+        write_codex_session(&real.join("session.jsonl"), "cycle-id", "Cycle session");
+
+        let link = real.join("loop");
+        create_dir_link(&real, &link).expect("create directory link");
+
+        let provider = CodexProvider;
+        let sessions = provider.scan_sessions(&root);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "cycle-id");
     }
 
     #[test]

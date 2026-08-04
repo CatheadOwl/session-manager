@@ -1718,9 +1718,16 @@ mod tests {
             .collect();
         let mut sorted = ids.clone();
         sorted.sort_by(|a, b| b.cmp(a));
-        assert_eq!(ids, sorted, "rows must be ordered by id DESC on timestamp ties");
+        assert_eq!(
+            ids, sorted,
+            "rows must be ordered by id DESC on timestamp ties"
+        );
         assert_eq!(ids[0], count - 1, "highest id must be first");
-        assert_eq!(ids[ids.len() - 1], count - DB_LIST_LIMIT, "cutoff must be exact");
+        assert_eq!(
+            ids[ids.len() - 1],
+            count - DB_LIST_LIMIT,
+            "cutoff must be exact"
+        );
     }
 
     #[test]

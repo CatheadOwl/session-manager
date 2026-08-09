@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-09
+
+### Changed
+
+- Cap the OpenCode session list to the newest 1000 sessions to keep loading fast.
+
 ### Fixed
 
+- Prevent session discovery from hanging when a session folder contains a symlink or junction loop.
 - Fix row-height glitches in the session list when search or the star filter reorders items.
 - Fix Claude and OpenCode sessions showing a blank preview in the session list.
 

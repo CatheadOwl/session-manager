@@ -113,6 +113,7 @@ export const SessionList = memo(function SessionList({
     getScrollElement: () => listScrollRef.current,
     estimateSize: () => 110,
     overscan: 5,
+    getItemKey: (index) => getSessionKey(sessions[index]),
   });
 
   return (

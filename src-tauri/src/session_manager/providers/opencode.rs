@@ -277,13 +277,29 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
         }
     };
 
-    let mut stmt = match conn.prepare(
-        "SELECT id, title, directory, parent_id, time_created, time_updated, \
-                model, agent, cost, tokens_input, tokens_output \
-         FROM session \
-         ORDER BY time_updated DESC, id DESC \
-         LIMIT ?",
-    ) {
+    let summary_query = "SELECT id, title, directory, parent_id, time_created, time_updated, \
+            model, agent, cost, tokens_input, tokens_output, \
+            (SELECT json_extract(p.data, '$.text') \
+               FROM message m \
+               JOIN part p ON p.message_id = m.id \
+              WHERE m.session_id = session.id \
+                AND json_extract(p.data, '$.type') = 'text' \
+                AND trim(coalesce(json_extract(p.data, '$.text'), '')) <> '' \
+              ORDER BY m.time_created DESC, m.id DESC, p.time_created DESC, p.id DESC \
+              LIMIT 1) AS preview_text \
+     FROM session \
+     ORDER BY time_updated DESC, id DESC \
+     LIMIT ?";
+    let session_only_query = "SELECT id, title, directory, parent_id, time_created, time_updated, \
+            model, agent, cost, tokens_input, tokens_output, NULL AS preview_text \
+     FROM session \
+     ORDER BY time_updated DESC, id DESC \
+     LIMIT ?";
+
+    let mut stmt = match conn
+        .prepare(summary_query)
+        .or_else(|_| conn.prepare(session_only_query))
+    {
         Ok(stmt) => stmt,
         Err(err) => {
             warn_opencode_scan(db_path, format!("failed to prepare session query: {err}"));
@@ -326,6 +342,7 @@ fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<Ses
     let parent_id: Option<String> = row.get(3)?;
     let created_at: Option<i64> = row.get(4)?;
     let updated_at: Option<i64> = row.get(5)?;
+    let summary: Option<String> = row.get(11)?;
     let db_path_string = db_path.to_string_lossy().to_string();
 
     Ok(SessionMeta {
@@ -335,7 +352,9 @@ fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<Ses
             .filter(|s| !s.trim().is_empty())
             .or_else(|| directory.as_deref().and_then(path_basename))
             .map(|t| truncate_summary(&t, TITLE_MAX_CHARS)),
-        summary: None,
+        summary: summary
+            .filter(|s| !s.trim().is_empty())
+            .map(|t| truncate_summary(&t, 160)),
         project_dir: directory,
         created_at,
         last_active_at: updated_at.or(created_at),
@@ -378,10 +397,13 @@ fn parse_session_file(path: &Path, storage_dir: &Path) -> Option<SessionMeta> {
         .and_then(|v| v.as_i64())
         .or(created_at);
 
+    let first_user_message = first_user_message_summary(storage_dir, &session_id);
+    let summary = latest_text_message_summary(storage_dir, &session_id);
+
     // Title priority: session JSON title > directory basename > first user message summary
     let title = title
         .or_else(|| directory.as_deref().and_then(path_basename))
-        .or_else(|| first_user_message_summary(storage_dir, &session_id));
+        .or(first_user_message);
 
     // source_path points to the session JSON file itself, consistent with other providers
     // (Claude/Codex/Gemini all set source_path to the session file path)
@@ -391,7 +413,7 @@ fn parse_session_file(path: &Path, storage_dir: &Path) -> Option<SessionMeta> {
         provider_id: PROVIDER_ID.to_string(),
         session_id: session_id.clone(),
         title: title.map(|t| truncate_summary(&t, TITLE_MAX_CHARS)),
-        summary: None,
+        summary: summary.map(|text| truncate_summary(&text, 160)),
         project_dir: directory,
         created_at,
         last_active_at,
@@ -458,18 +480,78 @@ fn first_user_message_summary(storage_dir: &Path, session_id: &str) -> Option<St
     messages.into_iter().next().map(|(_, text)| text)
 }
 
-/// Read all text parts from a part directory and join them.
-/// Entries are sorted by filename to ensure deterministic ordering across
-/// platforms (Linux ext4 does not guarantee alphabetical readdir order).
-fn read_part_text(part_dir: &Path) -> String {
-    if !part_dir.is_dir() {
-        return String::new();
+/// Read the latest text-bearing message for the compact list preview.
+fn latest_text_message_summary(storage_dir: &Path, session_id: &str) -> Option<String> {
+    let msg_dir = storage_dir.join("message").join(session_id);
+    if !msg_dir.is_dir() {
+        return None;
     }
 
-    let mut parts = Vec::new();
+    let mut messages: Vec<(i64, String)> = Vec::new();
+    let entries = std::fs::read_dir(&msg_dir).ok()?;
+
+    for entry in entries.flatten() {
+        let msg_path = entry.path();
+        if msg_path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&msg_path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let value: Value = match serde_json::from_str(&content) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let created = value
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let msg_id = match value.get("id").and_then(Value::as_str) {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+
+        let text = read_text_part_text(&storage_dir.join("part").join(&msg_id));
+        if !text.trim().is_empty() {
+            messages.push((created, text));
+        }
+    }
+
+    messages.sort_by_key(|(ts, _)| *ts);
+    messages.into_iter().next_back().map(|(_, text)| text)
+}
+
+/// Read only human-authored/generated text parts, excluding tool markers.
+fn read_text_part_text(part_dir: &Path) -> String {
+    read_part_values(part_dir)
+        .into_iter()
+        .filter_map(|value| {
+            if value.get("type").and_then(Value::as_str) != Some("text") {
+                return None;
+            }
+            value
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn read_part_values(part_dir: &Path) -> Vec<Value> {
+    if !part_dir.is_dir() {
+        return Vec::new();
+    }
+
     let entries = match std::fs::read_dir(part_dir) {
         Ok(entries) => entries,
-        Err(_) => return String::new(),
+        Err(_) => return Vec::new(),
     };
 
     let mut paths: Vec<std::path::PathBuf> = entries
@@ -479,16 +561,21 @@ fn read_part_text(part_dir: &Path) -> String {
         .collect();
     paths.sort();
 
-    for part_path in paths {
-        let content = match std::fs::read_to_string(&part_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    paths
+        .into_iter()
+        .filter_map(|part_path| {
+            let content = std::fs::read_to_string(&part_path).ok()?;
+            serde_json::from_str(&content).ok()
+        })
+        .collect()
+}
 
+/// Read all text parts from a part directory and join them.
+/// Entries are sorted by filename to ensure deterministic ordering across
+/// platforms (Linux ext4 does not guarantee alphabetical readdir order).
+fn read_part_text(part_dir: &Path) -> String {
+    let mut parts = Vec::new();
+    for value in read_part_values(part_dir) {
         match value.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(text) = value.get("text").and_then(Value::as_str) {
@@ -1451,6 +1538,132 @@ mod tests {
             .load_raw_content_fallback(Path::new("/tmp/fake.json"))
             .expect("should succeed");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn sqlite_scan_sets_summary_from_latest_text_part() {
+        let temp = tempdir().expect("tempdir");
+        let _db_path = write_sqlite_fixture(temp.path());
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+        let session = sessions
+            .iter()
+            .find(|session| session.session_id == "ses_db_1")
+            .expect("sqlite session");
+
+        assert_eq!(session.summary.as_deref(), Some("Let me inspect"));
+    }
+
+    #[test]
+    fn parse_legacy_session_sets_summary_from_latest_text_message() {
+        let ts = TestStorage::new();
+        let session_path = write_session(
+            &ts.storage,
+            "proj_abc",
+            "ses_summary",
+            Some("Summary Session"),
+            Some("/tmp"),
+            1_740_000_000_000,
+            None,
+        );
+        write_message(
+            &ts.storage,
+            "ses_summary",
+            "msg_1",
+            "user",
+            1_740_000_001_000,
+        );
+        write_text_part(&ts.storage, "msg_1", "prt_1", "First prompt");
+        write_message(
+            &ts.storage,
+            "ses_summary",
+            "msg_2",
+            "assistant",
+            1_740_000_002_000,
+        );
+        write_text_part(&ts.storage, "msg_2", "prt_2", "Latest answer");
+
+        let provider = OpenCodeProvider;
+        let meta = provider
+            .parse_session(&session_path)
+            .expect("parse session");
+
+        assert_eq!(meta.summary.as_deref(), Some("Latest answer"));
+    }
+
+    #[test]
+    fn parse_legacy_session_title_fallback_uses_first_user_not_latest_summary() {
+        let ts = TestStorage::new();
+        let session_path = write_session(
+            &ts.storage,
+            "proj_abc",
+            "ses_title_fallback",
+            None,
+            None,
+            1_740_000_000_000,
+            None,
+        );
+        write_message(
+            &ts.storage,
+            "ses_title_fallback",
+            "msg_1",
+            "user",
+            1_740_000_001_000,
+        );
+        write_text_part(&ts.storage, "msg_1", "prt_1", "Opening question");
+        write_message(
+            &ts.storage,
+            "ses_title_fallback",
+            "msg_2",
+            "assistant",
+            1_740_000_002_000,
+        );
+        write_text_part(&ts.storage, "msg_2", "prt_2", "Latest answer");
+
+        let provider = OpenCodeProvider;
+        let meta = provider
+            .parse_session(&session_path)
+            .expect("parse session");
+
+        assert_eq!(meta.title.as_deref(), Some("Opening question"));
+        assert_eq!(meta.summary.as_deref(), Some("Latest answer"));
+    }
+
+    #[test]
+    fn parse_legacy_session_summary_skips_tool_only_latest_message() {
+        let ts = TestStorage::new();
+        let session_path = write_session(
+            &ts.storage,
+            "proj_abc",
+            "ses_tool_summary",
+            Some("Tool Summary"),
+            Some("/tmp"),
+            1_740_000_000_000,
+            None,
+        );
+        write_message(
+            &ts.storage,
+            "ses_tool_summary",
+            "msg_1",
+            "assistant",
+            1_740_000_001_000,
+        );
+        write_text_part(&ts.storage, "msg_1", "prt_1", "Readable answer");
+        write_message(
+            &ts.storage,
+            "ses_tool_summary",
+            "msg_2",
+            "assistant",
+            1_740_000_002_000,
+        );
+        write_tool_part(&ts.storage, "msg_2", "prt_2", "Write");
+
+        let provider = OpenCodeProvider;
+        let meta = provider
+            .parse_session(&session_path)
+            .expect("parse session");
+
+        assert_eq!(meta.summary.as_deref(), Some("Readable answer"));
     }
 
     #[test]

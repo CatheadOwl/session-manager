@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Fix row-height glitches in the session list when search or the star filter reorders items.
+- Fix Claude and OpenCode sessions showing a blank preview in the session list.
+
 ## [0.2.2] - 2026-08-03
 
 ### Fixed

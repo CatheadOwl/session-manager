@@ -224,6 +224,45 @@ pub fn load_raw_content_fallback(path: &Path) -> Result<Option<String>, String> 
     }
 }
 
+fn extract_preview_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.trim().to_string(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(extract_preview_text_from_item)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn extract_preview_text_from_item(item: &Value) -> Option<String> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    if matches!(item_type, "tool_use" | "tool_result" | "thinking") {
+        return None;
+    }
+
+    for key in ["text", "input_text", "output_text"] {
+        if let Some(text) = item.get(key).and_then(Value::as_str) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    item.get("content")
+        .map(extract_preview_text)
+        .filter(|text| !text.trim().is_empty())
+}
+
 pub fn parse_session_at(path: &Path) -> Option<SessionMeta> {
     if is_agent_session(path) {
         return None;
@@ -321,6 +360,7 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
 
     let mut last_active_at: Option<i64> = None;
     let mut summary: Option<String> = None;
+    let mut last_prompt: Option<String> = None;
     let mut custom_title: Option<String> = None;
 
     for line in tail.iter().rev() {
@@ -340,18 +380,28 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
         }
-        if summary.is_none() {
+        if last_prompt.is_none() {
+            last_prompt = value
+                .get("lastPrompt")
+                .and_then(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        if summary.is_none() && last_prompt.is_none() {
             if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
             if let Some(message) = value.get("message") {
-                let text = message.get("content").map(extract_text).unwrap_or_default();
+                let text = message
+                    .get("content")
+                    .map(extract_preview_text)
+                    .unwrap_or_default();
                 if !text.trim().is_empty() {
                     summary = Some(text);
                 }
             }
         }
-        if last_active_at.is_some() && summary.is_some() && custom_title.is_some() {
+        if last_active_at.is_some() && (summary.is_some() || last_prompt.is_some()) {
             break;
         }
     }
@@ -370,10 +420,17 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
 
     let title = custom_title
         .map(|t| truncate_summary(&t, TITLE_MAX_CHARS))
-        .or_else(|| first_user_message.map(|t| truncate_summary(&t, TITLE_MAX_CHARS)))
+        .or_else(|| {
+            first_user_message
+                .clone()
+                .map(|t| truncate_summary(&t, TITLE_MAX_CHARS))
+        })
         .or_else(|| project_dir.as_deref().and_then(path_basename));
 
-    let summary = summary.map(|text| truncate_summary(&text, 160));
+    let summary = summary
+        .or(last_prompt)
+        .or_else(|| first_user_message.clone())
+        .map(|text| truncate_summary(&text, 160));
 
     Some(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
@@ -618,6 +675,29 @@ mod tests {
             meta.resume_command.as_deref(),
             Some("claude --resume session-abc")
         );
+    }
+
+    #[test]
+    fn parse_session_uses_last_prompt_preview_when_tail_has_only_tool_content() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session-abc.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"sessionId\":\"session-abc\",\"cwd\":\"/tmp/project\",\"timestamp\":\"2026-03-06T10:00:00Z\"}\n",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Initial question\"},\"sessionId\":\"session-abc\",\"timestamp\":\"2026-03-06T10:01:00Z\"}\n",
+                "{\"type\":\"last-prompt\",\"lastPrompt\":\"Use plan A+B\",\"sessionId\":\"session-abc\",\"timestamp\":\"2026-03-06T10:02:00Z\"}\n",
+                "{\"type\":\"ai-title\",\"aiTitle\":\"Plan title\",\"sessionId\":\"session-abc\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\"}]},\"sessionId\":\"session-abc\",\"timestamp\":\"2026-03-06T10:03:00Z\"}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"content\":\"large plan\"}}]},\"sessionId\":\"session-abc\",\"timestamp\":\"2026-03-06T10:04:00Z\"}\n",
+            ),
+        )
+        .expect("write");
+
+        let meta = parse_session(&path).unwrap();
+
+        assert_eq!(meta.title.as_deref(), Some("Initial question"));
+        assert_eq!(meta.summary.as_deref(), Some("Use plan A+B"));
     }
 
     #[test]

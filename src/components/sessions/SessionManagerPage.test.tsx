@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionDetail, SessionMeta } from "@/types";
 import { SessionManagerPage } from "./SessionManagerPage";
 
@@ -41,8 +41,19 @@ vi.mock("./FolderFilter", () => ({
 }));
 
 vi.mock("./SessionList", () => ({
-  SessionList: ({ sessions, onSelect }: { sessions: SessionMeta[]; onSelect: (session: SessionMeta) => void }) => (
+  SessionList: ({
+    sessions,
+    onSelect,
+    onRefresh,
+  }: {
+    sessions: SessionMeta[];
+    onSelect: (session: SessionMeta) => void;
+    onRefresh: () => void;
+  }) => (
     <div>
+      <button type="button" onClick={onRefresh}>
+        Refresh
+      </button>
       {sessions.map((session) => (
         <button key={session.sessionId} type="button" onClick={() => onSelect(session)}>
           {session.title}
@@ -86,6 +97,10 @@ describe("SessionManagerPage", () => {
     });
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("updates MessagesSection when selecting a different OpenCode DB session", async () => {
     const sessions = [
       session("ses_a", "Session A"),
@@ -126,5 +141,45 @@ describe("SessionManagerPage", () => {
       expect(screen.getByText("message from B")).toBeInTheDocument();
     });
     expect(screen.queryByText("message from A")).not.toBeInTheDocument();
+  });
+
+  it("refreshes the selected session detail without switching selection", async () => {
+    const sessions = [session("ses_a", "Session A")];
+    const detailResponses = [detail("old message"), detail("new message")];
+    let detailCalls = 0;
+
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "list_sessions") return Promise.resolve(sessions);
+      if (command === "get_app_metadata") return Promise.resolve({ sessions: {}, pinned_folders: [] });
+      if (command === "compute_fork_tree") {
+        return Promise.resolve({
+          roots: [],
+          totalSessions: 0,
+          computedFromCache: false,
+          durationMs: 0,
+        });
+      }
+      if (command === "get_session_detail") {
+        const response = detailResponses[Math.min(detailCalls, detailResponses.length - 1)];
+        detailCalls += 1;
+        return Promise.resolve(response);
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<SessionManagerPage />, { wrapper });
+
+    await screen.findByRole("button", { name: "Session A" });
+    await waitFor(() => {
+      expect(screen.getByText("old message")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("new message")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("old message")).not.toBeInTheDocument();
+    expect(detailCalls).toBe(2);
   });
 });

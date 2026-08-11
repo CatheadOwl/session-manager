@@ -171,10 +171,19 @@ export function SessionManagerPage() {
 
   const handleRefresh = useCallback(() => {
     void queries.sessionsQuery.refetch();
+    if (queries.selectedSession) {
+      void queries.sessionDetailQuery.refetch();
+    }
     if (ui.viewMode === "tree") {
       void queries.forkTreeQuery.refetch();
     }
-  }, [queries.sessionsQuery.refetch, queries.forkTreeQuery.refetch, ui.viewMode]);
+  }, [
+    queries.sessionsQuery.refetch,
+    queries.selectedSession,
+    queries.sessionDetailQuery.refetch,
+    queries.forkTreeQuery.refetch,
+    ui.viewMode,
+  ]);
 
   return (
     <div

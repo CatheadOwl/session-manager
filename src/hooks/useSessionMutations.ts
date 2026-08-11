@@ -14,6 +14,8 @@ import type { SessionMeta } from "@/types";
 import { normalizeProjectDir } from "@/utils/format";
 import { getLifecycleOperationOptions, getMetadataKey } from "@/lib/domain";
 
+export type FolderLifecycleAction = "archive" | "restore";
+
 interface UseSessionMutationsOptions {
   onSessionDeleted: () => void;
   onSessionArchived: () => void;
@@ -46,9 +48,9 @@ export function useSessionMutations(
 
   // ─── Data helpers ─────────────────────────────────────────────────
   const getFolderOperationItems = useCallback(
-    (folder: string): { items: DeleteSessionOptions[]; skippedCount: number } => {
+    (folder: string, sourceSessions: SessionMeta[] = sessions): { items: DeleteSessionOptions[]; skippedCount: number } => {
       if (folder === "all" || folder === "Unknown") return { items: [], skippedCount: 0 };
-      const folderSessions = sessions
+      const folderSessions = sourceSessions
         .filter((session) => normalizeProjectDir(session.projectDir) === folder)
       const items = folderSessions
         .map(getLifecycleOperationOptions)
@@ -120,38 +122,16 @@ export function useSessionMutations(
   );
 
   // ─── Folder-level handlers ────────────────────────────────────────
-  const handleFolderAction = useCallback(
-    (folder: string, action: "archive" | "restore") => {
-      const { items, skippedCount } = getFolderOperationItems(folder);
-      if (items.length === 0) {
-        window.alert("No sessions that support this operation were found in this folder.");
-        return;
-      }
-
-      const verb = action === "archive" ? "Archive" : "Restore";
-      const skipped = skippedCount > 0 ? `\n\n${skippedCount} read-only session(s) will be skipped.` : "";
-      const ok = window.confirm(
-        `${verb} ${items.length} sessions from this folder?${skipped}\n\n${folder}\n\nPinned folders are not changed.`,
-      );
-      if (!ok) return;
-
+  const executeFolderOperation = useCallback(
+    (action: FolderLifecycleAction, items: DeleteSessionOptions[]) => {
+      if (items.length === 0) return;
       const mutate = action === "archive" ? archiveSessionsMutation : restoreSessionsMutation;
       mutate.mutate(items, {
         onSuccess: onFolderOperationComplete,
         onError: (error) => window.alert(error.message),
       });
     },
-    [archiveSessionsMutation, restoreSessionsMutation, getFolderOperationItems, onFolderOperationComplete],
-  );
-
-  const handleArchiveFolder = useCallback(
-    (folder: string) => handleFolderAction(folder, "archive"),
-    [handleFolderAction],
-  );
-
-  const handleRestoreFolder = useCallback(
-    (folder: string) => handleFolderAction(folder, "restore"),
-    [handleFolderAction],
+    [archiveSessionsMutation, restoreSessionsMutation, onFolderOperationComplete],
   );
 
   // ─── Star / Pin handlers ──────────────────────────────────────────
@@ -180,8 +160,8 @@ export function useSessionMutations(
     executeBatchDelete,
     handleArchive,
     handleRestore,
-    handleArchiveFolder,
-    handleRestoreFolder,
+    getFolderOperationItems,
+    executeFolderOperation,
     handleToggleStar,
     handleTogglePin,
     isDeletePending: deleteMutation.isPending,

@@ -7,7 +7,8 @@ import { useUpdater } from "@/hooks/useUpdater";
 import type { DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
 import { getLifecycleOperationOptions, getMetadataKey, getSessionKey, type SessionLifecycleOperationOptions } from "@/lib/domain";
-import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from "./ConfirmDeleteDialog";
+import { normalizeProjectDir } from "@/utils/format";
+import { ConfirmActionDialog, type ConfirmActionTarget } from "./ConfirmDeleteDialog";
 
 // Filter a session list down to those eligible for file-lifecycle deletion
 const getDeletableSessions = (sessions: SessionMeta[]): SessionLifecycleOperationOptions[] =>
@@ -79,21 +80,36 @@ export function SessionManagerPage() {
   );
 
   // Batch delete dialog payload: deletable count + read-only skips, derived from the pending session list
-  const batchDeleteTarget = useMemo<ConfirmDeleteTarget | null>(() => {
+  const batchDeleteTarget = useMemo<ConfirmActionTarget | null>(() => {
     const pending = ui.batchDeletePending;
     if (!pending || pending.length === 0) return null;
     const items = getDeletableSessions(pending);
     return {
-      kind: "batch",
+      kind: "delete-batch",
       count: items.length,
       skippedCount: pending.length - items.length,
     };
   }, [ui.batchDeletePending]);
 
-  // At most one delete dialog renders — single takes precedence over batch
-  const deleteTarget = ui.sessionPendingDelete
-    ? { kind: "single" as const, session: ui.sessionPendingDelete }
+  const folderOperationTarget = useMemo<ConfirmActionTarget | null>(() => {
+    const pending = ui.folderOperationPending;
+    if (!pending) return null;
+    const { items, skippedCount } = mutations.getFolderOperationItems(pending.folder, pending.sessions);
+    if (items.length === 0) return null;
+    return {
+      kind: "folder-lifecycle",
+      action: pending.action,
+      folder: pending.folder,
+      count: items.length,
+      skippedCount,
+    };
+  }, [mutations, ui.folderOperationPending]);
+
+  // At most one confirmation dialog renders — delete takes precedence over folder operations
+  const confirmTarget = ui.sessionPendingDelete
+    ? { kind: "delete-single" as const, session: ui.sessionPendingDelete }
     : batchDeleteTarget;
+  const actionTarget = confirmTarget ?? folderOperationTarget;
 
   const handleBatchDelete = useCallback(() => {
     const keys = selectedKeysRef.current;
@@ -169,6 +185,42 @@ export function SessionManagerPage() {
     [ui.setBatchDeletePending],
   );
 
+  const requestFolderOperation = useCallback(
+    (folder: string, action: "archive" | "restore") => {
+      const folderSessions = queries.sessions.filter((session) => normalizeProjectDir(session.projectDir) === folder);
+      const items = getDeletableSessions(folderSessions);
+      if (items.length === 0) {
+        window.alert("No sessions that support this operation were found in this folder.");
+        return;
+      }
+      ui.setFolderOperationPending({ folder, action, sessions: folderSessions });
+    },
+    [queries.sessions, ui.setFolderOperationPending],
+  );
+
+  const handleArchiveFolder = useCallback(
+    (folder: string) => requestFolderOperation(folder, "archive"),
+    [requestFolderOperation],
+  );
+
+  const handleRestoreFolder = useCallback(
+    (folder: string) => requestFolderOperation(folder, "restore"),
+    [requestFolderOperation],
+  );
+
+  const handleConfirmFolderOperation = useCallback(() => {
+    const pending = ui.folderOperationPending;
+    if (!pending) return;
+    const { items } = mutations.getFolderOperationItems(pending.folder, pending.sessions);
+    ui.setFolderOperationPending(null);
+    mutations.executeFolderOperation(pending.action, items);
+  }, [mutations, ui.folderOperationPending, ui.setFolderOperationPending]);
+
+  const handleCancelFolderOperation = useCallback(
+    () => ui.setFolderOperationPending(null),
+    [ui.setFolderOperationPending],
+  );
+
   const handleRefresh = useCallback(() => {
     void queries.sessionsQuery.refetch();
     if (queries.selectedSession) {
@@ -199,8 +251,8 @@ export function SessionManagerPage() {
         onToggleCollapse={ui.toggleFolderColumn}
         scope={ui.scope}
         onScopeChange={ui.setScope}
-        onArchiveFolder={mutations.handleArchiveFolder}
-        onRestoreFolder={mutations.handleRestoreFolder}
+        onArchiveFolder={handleArchiveFolder}
+        onRestoreFolder={handleRestoreFolder}
         isFolderOperationPending={mutations.isFolderOperationPending}
         updateStatus={updater.status}
         updateVersion={updater.update?.version}
@@ -252,12 +304,24 @@ export function SessionManagerPage() {
         onRestore={mutations.handleRestore}
         forkJumpIndex={ui.forkJumpIndex}
       />
-      {deleteTarget ? (
-        <ConfirmDeleteDialog
-          target={deleteTarget}
-          isDeleting={false}
-          onConfirm={deleteTarget.kind === "single" ? handleConfirmDelete : handleConfirmBatchDelete}
-          onCancel={deleteTarget.kind === "single" ? handleCancelDelete : handleCancelBatchDelete}
+      {actionTarget ? (
+        <ConfirmActionDialog
+          target={actionTarget}
+          isWorking={false}
+          onConfirm={
+            actionTarget.kind === "delete-single"
+              ? handleConfirmDelete
+              : actionTarget.kind === "delete-batch"
+                ? handleConfirmBatchDelete
+                : handleConfirmFolderOperation
+          }
+          onCancel={
+            actionTarget.kind === "delete-single"
+              ? handleCancelDelete
+              : actionTarget.kind === "delete-batch"
+                ? handleCancelBatchDelete
+                : handleCancelFolderOperation
+          }
         />
       ) : null}
     </div>

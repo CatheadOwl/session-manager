@@ -2,6 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import type { SessionMeta } from "@/types";
 
+export interface PendingFolderOperation {
+  folder: string;
+  action: "archive" | "restore";
+  sessions: SessionMeta[];
+}
+
 /**
  * Pure UI state for the session manager: no queries, no mutations, no business logic.
  * All state here is local component state that could be persisted or reset independently.
@@ -17,6 +23,7 @@ export function useSessionUIState() {
   const [forkJumpIndex, setForkJumpIndex] = useState<number | undefined>(undefined);
   const [sessionPendingDelete, setSessionPendingDelete] = useState<SessionMeta | null>(null);
   const [batchDeletePending, setBatchDeletePending] = useState<SessionMeta[] | null>(null);
+  const [folderOperationPending, setFolderOperationPending] = useState<PendingFolderOperation | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedSessionKeys, setSelectedSessionKeys] = useState<string[]>([]);
 
@@ -58,6 +65,7 @@ export function useSessionUIState() {
   // Reset folder selection when switching scope
   useEffect(() => {
     setSelectedFolder("all");
+    setFolderOperationPending(null);
   }, [scope]);
 
   // Exit selection mode when switching view mode
@@ -87,6 +95,8 @@ export function useSessionUIState() {
     setSessionPendingDelete,
     batchDeletePending,
     setBatchDeletePending,
+    folderOperationPending,
+    setFolderOperationPending,
     selectionMode,
     toggleSelectionMode,
     selectedSessionKeys,

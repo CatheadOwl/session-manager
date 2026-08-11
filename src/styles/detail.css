@@ -213,6 +213,11 @@
   line-height: 1;
 }
 
+.confirm-dialog-icon.neutral {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .confirm-dialog-content {
   min-width: 0;
 }

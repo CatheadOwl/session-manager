@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add a Q&A table-of-contents popover for jumping between question-answer pairs in long sessions.
+
+### Fixed
+
+- Fix Claude/Qoder fork-tree detection to persist user-event UUID chains, preventing identical prompt templates from being grouped as forks.
+- Refresh now also reloads the currently viewed session detail instead of leaving a stale pane.
+
 ## [0.2.3] - 2026-08-09
 
 ### Changed

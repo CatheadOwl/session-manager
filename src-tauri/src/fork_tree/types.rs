@@ -71,7 +71,6 @@ pub(crate) struct ForkTreeCache {
     pub(crate) files: Vec<CachedFileData>,
 }
 
-/// Bumped to 8 in the session-key-format alignment: version 7 caches store
-/// keys without the `file:` locator segment, which no longer match the
-/// frontend `getSessionKey` (see fork_tree/mod.rs::fork_tree_session_key).
-pub(crate) const CACHE_VERSION: u32 = 8;
+/// Bumped to 9 when the main compute path started storing provider UUID chains;
+/// version 8 caches may contain Claude/Qoder entries with empty `uuid_chain`.
+pub(crate) const CACHE_VERSION: u32 = 9;

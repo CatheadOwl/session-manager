@@ -98,7 +98,9 @@ pub fn compute_fork_tree(
             continue;
         }
 
-        // Compute hash chain for this session
+        // Compute fork-chain data for this session. Providers that expose
+        // stable user-event UUIDs (Claude/Qoder) can then use uuid-chain LCP
+        // instead of falling back to content-hash LCP.
         let provider = match registry.get(&session.provider_id) {
             Ok(p) => p,
             Err(e) => {
@@ -113,11 +115,11 @@ pub fn compute_fork_tree(
             }
         };
 
-        let events = match provider.user_events(Path::new(source_path)) {
+        let events_with_uuid = match provider.user_events_with_uuid(Path::new(source_path)) {
             Ok(events) => events,
             Err(e) => {
                 log::warn!(
-                    "fork_tree skip user_events_failed provider={} session={} path={} error={}",
+                    "fork_tree skip user_events_with_uuid_failed provider={} session={} path={} error={}",
                     session.provider_id,
                     session.session_id,
                     source_path,
@@ -127,6 +129,16 @@ pub fn compute_fork_tree(
             }
         };
 
+        let events: Vec<String> = events_with_uuid
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect();
+        let uuid_chain: Vec<String> = events_with_uuid.into_iter().map(|(_, uuid)| uuid).collect();
+        let uuid_chain = if uuid_chain.iter().any(|uuid| !uuid.is_empty()) {
+            uuid_chain
+        } else {
+            vec![]
+        };
         let (hash_chain, user_texts, kept_indices) = hash_chain::hash_events(&events);
 
         let file_data = CachedFileData {
@@ -143,7 +155,7 @@ pub fn compute_fork_tree(
             user_texts,
             kept_indices,
             forked_from_id: session.forked_from_id.clone(),
-            uuid_chain: vec![],
+            uuid_chain,
         };
 
         current_files.push(file_data.clone());
@@ -260,14 +272,14 @@ mod tests {
     };
     use super::tree_builder::build_tree;
     use super::types::{CachedFileData, TreeNodeData};
-    use super::{compute_fork_tree, get_fork_tree, supports_fork_tree};
+    use super::{cache, compute_fork_tree, get_fork_tree, supports_fork_tree};
 
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
-    use crate::config::TEST_ENV_LOCK;
+    use crate::config::{self, TEST_ENV_LOCK};
     use crate::session_manager;
     use crate::session_manager::build_provider_registry;
     use crate::session_manager::{SessionLocator, SessionMeta};
@@ -689,40 +701,35 @@ mod tests {
         // Isolate from other tests that may have left SESSION_MANAGER_TEST_HOME set
         std::env::set_var("SESSION_MANAGER_TEST_HOME", test_home.path());
 
-        // Create two sessions that share the first user event
+        // Create two sessions with identical meaningful user text but different
+        // Claude event UUIDs. Hash-chain LCP would falsely parent them; UUID
+        // LCP must keep them as separate roots.
         let projects = claude_dir.join("projects");
         fs::create_dir_all(&projects).expect("create dirs");
+        let shared_prompt = "You are filling search hints for an agent that searches a Tekla Structures API corpus before answering.";
 
-        // Session A: [user("hello"), user("world")]
+        // Session A: [user(shared_prompt, uuid u-a-1)]
         {
             let path = projects.join("a.jsonl");
             let mut f = fs::File::create(&path).expect("create");
             writeln!(f, "{{\"sessionId\":\"a\",\"cwd\":\"/tmp\"}}").expect("write");
             writeln!(
                 f,
-                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"hello\"}}]}}}}"
-            )
-            .expect("write");
-            writeln!(
-                f,
-                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"world\"}}]}}}}"
+                "{{\"type\":\"user\",\"uuid\":\"u-a-1\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}}}",
+                shared_prompt
             )
             .expect("write");
         }
 
-        // Session B: [user("hello"), user("different")]
+        // Session B: [user(shared_prompt, uuid u-b-1)]
         {
             let path = projects.join("b.jsonl");
             let mut f = fs::File::create(&path).expect("create");
             writeln!(f, "{{\"sessionId\":\"b\",\"cwd\":\"/tmp\"}}").expect("write");
             writeln!(
                 f,
-                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"hello\"}}]}}}}"
-            )
-            .expect("write");
-            writeln!(
-                f,
-                "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"different\"}}]}}}}"
+                "{{\"type\":\"user\",\"uuid\":\"u-b-1\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}}}",
+                shared_prompt
             )
             .expect("write");
         }
@@ -732,6 +739,12 @@ mod tests {
             .expect("compute");
         assert_eq!(result.total_sessions, 2);
         assert!(!result.computed_from_cache);
+        let cache_path = config::get_fork_tree_cache_path().expect("cache path");
+        let cache = cache::load_cache(&cache_path);
+        assert!(
+            cache.files.iter().all(|file| !file.uuid_chain.is_empty()),
+            "compute_fork_tree cache miss path must persist Claude uuid_chain"
+        );
 
         // Regression guard: tree session keys must match the frontend
         // `getSessionKey` (`providerId:sessionId:file:<sourcePath>`), or
@@ -742,9 +755,8 @@ mod tests {
             result.roots[0].session_key
         );
 
-        // No forked_from_id for Claude sessions.
-        // A and B both start with "hello" which is filtered as a greeting,
-        // leaving "world" vs "different" — no LCP match → both roots.
+        // No forked_from_id for Claude sessions. Their text hash chains match,
+        // but their uuid chains do not, so Path B keeps both as roots.
         assert_eq!(result.roots.len(), 2);
         assert_eq!(result.roots[0].children.len(), 0);
         assert_eq!(result.roots[1].children.len(), 0);

@@ -47,7 +47,7 @@ const removeSingleSessionFromCache = (
 
 /**
  * Create a mutation that operates on a single session.
- * Removes the session from the source scope cache and invalidates both active/archived queries.
+ * Removes the session from the source scope cache and invalidates the configured targets.
  */
 export function useSingleSessionMutation(
   apiMethod: (input: DeleteSessionOptions) => Promise<void>,
@@ -72,7 +72,7 @@ export function useSingleSessionMutation(
 
 /**
  * Create a mutation that operates on multiple sessions.
- * Removes successful sessions from the source scope cache and invalidates both active/archived queries.
+ * Removes successful sessions from the source scope cache and invalidates the configured targets.
  */
 export function useBatchSessionMutation(
   apiMethod: (items: DeleteSessionOptions[]) => Promise<DeleteSessionResult[]>,

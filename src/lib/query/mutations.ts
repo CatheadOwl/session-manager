@@ -3,11 +3,11 @@ import { sessionsApi, type DeleteSessionOptions, type AppMetadata } from "@/lib/
 import { queryKeys } from "./keys";
 import { useSingleSessionMutation, useBatchSessionMutation } from "./mutation-factory";
 
-export const useDeleteSessionMutation = () =>
+export const useDeleteSessionMutation = (sourceScope: "active" | "archived") =>
   useSingleSessionMutation(
     async (input: DeleteSessionOptions) => { await sessionsApi.delete(input); },
-    "active",
-    ["active"],
+    sourceScope,
+    [sourceScope],
   );
 
 export const useArchiveSessionMutation = () =>
@@ -24,11 +24,11 @@ export const useRestoreSessionMutation = () =>
     ["active", "archived"],
   );
 
-export const useDeleteSessionsMutation = () =>
+export const useDeleteSessionsMutation = (sourceScope: "active" | "archived") =>
   useBatchSessionMutation(
     async (items: DeleteSessionOptions[]) => sessionsApi.deleteMany(items),
-    "active",
-    ["active"],
+    sourceScope,
+    [sourceScope],
   );
 
 export const useArchiveSessionsMutation = () =>

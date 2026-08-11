@@ -47,6 +47,7 @@ export function SessionManagerPage() {
   );
 
   const mutations = useSessionMutations(
+    ui.scope,
     queries.sessions,
     queries.pinnedFolders,
     queries.starredMap,

@@ -29,6 +29,7 @@ interface UseSessionMutationsOptions {
  * keeping the hook free of direct UI state management.
  */
 export function useSessionMutations(
+  scope: "active" | "archived",
   sessions: SessionMeta[],
   pinnedFolders: string[],
   starredMap: Map<string, boolean>,
@@ -37,8 +38,8 @@ export function useSessionMutations(
   const { onSessionDeleted, onSessionArchived, onSessionRestored, onFolderOperationComplete } = options;
 
   // ─── Raw mutations ────────────────────────────────────────────────
-  const deleteMutation = useDeleteSessionMutation();
-  const deleteSessionsMutation = useDeleteSessionsMutation();
+  const deleteMutation = useDeleteSessionMutation(scope);
+  const deleteSessionsMutation = useDeleteSessionsMutation(scope);
   const archiveMutation = useArchiveSessionMutation();
   const restoreMutation = useRestoreSessionMutation();
   const archiveSessionsMutation = useArchiveSessionsMutation();

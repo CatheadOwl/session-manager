@@ -37,6 +37,19 @@ describe("useMessageSearch", () => {
     expect(result.current.currentMsgIndex).toBe(-1);
   });
 
+  it("limits matches to searchable message indexes when provided", () => {
+    const { result } = renderHook(() => useMessageSearch({
+      messages,
+      enabled: true,
+      searchableMessageIndices: new Set([0]),
+    }));
+
+    act(() => result.current.setQuery("hello"));
+
+    expect(result.current.matchIndices).toEqual([0]);
+    expect(result.current.currentMsgIndex).toBe(0);
+  });
+
   it("returns no matches for a query that hits nothing", () => {
     const { result } = setup();
     act(() => result.current.setQuery("zzz"));

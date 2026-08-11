@@ -538,12 +538,14 @@
 }
 
 /* Search match indicators on message cards */
-.message-item.search-match {
+.message-item.search-match,
+.qa-message.search-match {
   border-color: rgba(37, 99, 235, 0.4);
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
 }
 
-.message-item.search-match-current {
+.message-item.search-match-current,
+.qa-message.search-match-current {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.3);
   background: rgba(219, 234, 254, 0.35);

@@ -113,7 +113,15 @@ export const SessionDetail = memo(function SessionDetail({
 
   // ─── Find-in-page message search ───────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
-  const msgSearch = useMessageSearch({ messages, enabled: searchOpen });
+  const qaSearchableMessageIndices = useMemo(
+    () => new Set(qaPairs.flatMap((pair) => [pair.questionIdx, pair.answerIdx])),
+    [qaPairs],
+  );
+  const msgSearch = useMessageSearch({
+    messages,
+    enabled: searchOpen,
+    searchableMessageIndices: messageMode === "qa" ? qaSearchableMessageIndices : undefined,
+  });
   const searchMatchSet = useMemo(() => new Set(msgSearch.matchIndices), [msgSearch.matchIndices]);
 
   // Debounce text-level highlight to avoid DOM thrashing on rapid typing
@@ -216,9 +224,7 @@ export const SessionDetail = memo(function SessionDetail({
     if (messageMode === "full") {
       rowVirtualizer.scrollToIndex(idx, { align: "center" });
     } else if (qaListRef.current) {
-      // QA mode: find the QA pair whose question is at or before this message
-      const el = qaListRef.current.querySelector(`[data-qa-question-idx="${idx}"]`)
-        ?? qaListRef.current.querySelector(`[data-msg-idx="${idx}"]`);
+      const el = qaListRef.current.querySelector(`[data-msg-idx="${idx}"]`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [msgSearch.currentMsgIndex, msgSearch.currentMatch, messageMode, rowVirtualizer]);
@@ -481,6 +487,11 @@ export const SessionDetail = memo(function SessionDetail({
                     tocTargetId={qaTocItems[index]?.id}
                     tocHighlighted={index === tocHighlightIndex}
                     tocHighlightNonce={index === tocHighlightIndex ? tocHighlightNonce : undefined}
+                    questionSearchActive={searchOpen && searchMatchSet.has(pair.questionIdx)}
+                    questionSearchCurrent={searchOpen && pair.questionIdx === msgSearch.currentMsgIndex}
+                    answerSearchActive={searchOpen && searchMatchSet.has(pair.answerIdx)}
+                    answerSearchCurrent={searchOpen && pair.answerIdx === msgSearch.currentMsgIndex}
+                    searchQuery={debouncedQuery}
                   />
                 ))
               )}

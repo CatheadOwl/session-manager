@@ -7,6 +7,7 @@ import { extractSystemBlocks } from "@/utils/system-blocks";
 import { CopyButton } from "./CopyButton";
 import { MarkdownContent } from "./MarkdownContent";
 import { SystemBlockCard } from "./SessionMessageItem";
+import { highlightText } from "./highlight";
 
 interface SessionQaPairProps {
   pair: QaPair;
@@ -17,6 +18,11 @@ interface SessionQaPairProps {
   tocTargetId?: string;
   tocHighlighted?: boolean;
   tocHighlightNonce?: number;
+  questionSearchActive?: boolean;
+  questionSearchCurrent?: boolean;
+  answerSearchActive?: boolean;
+  answerSearchCurrent?: boolean;
+  searchQuery?: string;
 }
 
 export const SessionQaPair = memo(function SessionQaPair({
@@ -28,6 +34,11 @@ export const SessionQaPair = memo(function SessionQaPair({
   tocTargetId,
   tocHighlighted,
   tocHighlightNonce,
+  questionSearchActive,
+  questionSearchCurrent,
+  answerSearchActive,
+  answerSearchCurrent,
+  searchQuery,
 }: SessionQaPairProps) {
   const question = messages[pair.questionIdx];
   const answer = messages[pair.answerIdx];
@@ -51,6 +62,20 @@ export const SessionQaPair = memo(function SessionQaPair({
       : null,
     [answer.cumulativeUsage],
   );
+  const questionSearchClass = questionSearchCurrent
+    ? " search-match-current"
+    : questionSearchActive
+      ? " search-match"
+      : "";
+  const answerSearchClass = answerSearchCurrent
+    ? " search-match-current"
+    : answerSearchActive
+      ? " search-match"
+      : "";
+  const trimmedSearchQuery = searchQuery?.trim() ? searchQuery : undefined;
+  const answerDisplayContent = answerSearchActive ? answerText : displayContent;
+  const answerCollapseClass =
+    shouldCollapse && !expanded && !answerSearchActive ? " collapsed-preview" : "";
 
   return (
     <>
@@ -63,7 +88,11 @@ export const SessionQaPair = memo(function SessionQaPair({
       <div className="qa-pair-header">
         <span className="qa-pair-number">Pair #{index + 1}</span>
       </div>
-      <div className="qa-message qa-question" data-qa-question-idx={questionJumpIndex}>
+      <div
+        className={`qa-message qa-question${questionSearchClass}`}
+        data-qa-question-idx={questionJumpIndex}
+        data-msg-idx={pair.questionIdx}
+      >
         <div className="message-header qa-message-header">
           <span className="role-badge">User</span>
           <span className="message-time">{formatTimestamp(question.ts)}</span>
@@ -71,10 +100,17 @@ export const SessionQaPair = memo(function SessionQaPair({
         </div>
         {showRendered ? (
           <div className="message-content rendered">
-            <MarkdownContent content={questionText} />
+            <MarkdownContent
+              content={questionText}
+              highlightQuery={questionSearchActive ? trimmedSearchQuery : undefined}
+            />
           </div>
         ) : (
-          <pre className="message-content">{questionText}</pre>
+          <pre className="message-content">
+            {questionSearchActive && trimmedSearchQuery
+              ? highlightText(questionText, trimmedSearchQuery)
+              : questionText}
+          </pre>
         )}
         {systemBlocks.length > 0 ? (
           <div className="system-blocks-section">
@@ -84,19 +120,27 @@ export const SessionQaPair = memo(function SessionQaPair({
           </div>
         ) : null}
       </div>
-      <div className="qa-message qa-answer">
+      <div
+        className={`qa-message qa-answer${answerSearchClass}`}
+        data-msg-idx={pair.answerIdx}
+      >
         <div className="message-header qa-message-header">
           <span className="role-badge">Assistant</span>
           <span className="message-time">{formatTimestamp(answer.ts)}</span>
           <CopyButton text={answer.content} />
         </div>
         {showRendered ? (
-          <div className={`message-content rendered${shouldCollapse && !expanded ? " collapsed-preview" : ""}`}>
-            <MarkdownContent content={displayContent} />
+          <div className={`message-content rendered${answerCollapseClass}`}>
+            <MarkdownContent
+              content={answerDisplayContent}
+              highlightQuery={answerSearchActive ? trimmedSearchQuery : undefined}
+            />
           </div>
         ) : (
-          <pre className={`message-content${shouldCollapse && !expanded ? " collapsed-preview" : ""}`}>
-            {displayContent}
+          <pre className={`message-content${answerCollapseClass}`}>
+            {answerSearchActive && trimmedSearchQuery
+              ? highlightText(answerDisplayContent, trimmedSearchQuery)
+              : answerDisplayContent}
           </pre>
         )}
         {shouldCollapse ? (

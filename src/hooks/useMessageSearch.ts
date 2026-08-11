@@ -4,6 +4,7 @@ import type { SessionMessage } from "@/types";
 interface UseMessageSearchOptions {
   messages: SessionMessage[];
   enabled: boolean;
+  searchableMessageIndices?: Set<number>;
 }
 
 interface UseMessageSearchResult {
@@ -24,7 +25,11 @@ interface UseMessageSearchResult {
  * Find-in-page style search over session messages.
  * Case-insensitive substring match against message content.
  */
-export function useMessageSearch({ messages, enabled }: UseMessageSearchOptions): UseMessageSearchResult {
+export function useMessageSearch({
+  messages,
+  enabled,
+  searchableMessageIndices,
+}: UseMessageSearchOptions): UseMessageSearchResult {
   const [query, setQuery] = useState("");
   const [currentMatch, setCurrentMatch] = useState(-1);
 
@@ -33,12 +38,13 @@ export function useMessageSearch({ messages, enabled }: UseMessageSearchOptions)
     if (!needle || !enabled) return [];
     const result: number[] = [];
     for (let i = 0; i < messages.length; i++) {
+      if (searchableMessageIndices && !searchableMessageIndices.has(i)) continue;
       if (messages[i].content.toLowerCase().includes(needle)) {
         result.push(i);
       }
     }
     return result;
-  }, [messages, query, enabled]);
+  }, [messages, query, enabled, searchableMessageIndices]);
 
   // Clamp currentMatch when matches change
   const clamped = matchIndices.length === 0 ? -1 : Math.min(currentMatch, matchIndices.length - 1);

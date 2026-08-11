@@ -14,9 +14,21 @@ interface SessionQaPairProps {
   index: number;
   questionJumpIndex?: number;
   showRendered: boolean;
+  tocTargetId?: string;
+  tocHighlighted?: boolean;
+  tocHighlightNonce?: number;
 }
 
-export const SessionQaPair = memo(function SessionQaPair({ pair, messages, index, questionJumpIndex, showRendered }: SessionQaPairProps) {
+export const SessionQaPair = memo(function SessionQaPair({
+  pair,
+  messages,
+  index,
+  questionJumpIndex,
+  showRendered,
+  tocTargetId,
+  tocHighlighted,
+  tocHighlightNonce,
+}: SessionQaPairProps) {
   const question = messages[pair.questionIdx];
   const answer = messages[pair.answerIdx];
 
@@ -42,7 +54,12 @@ export const SessionQaPair = memo(function SessionQaPair({ pair, messages, index
 
   return (
     <>
-      <article className="qa-pair">
+      <article
+        id={tocTargetId}
+        key={tocHighlighted ? tocHighlightNonce : undefined}
+        className={`qa-pair${tocHighlighted ? " qa-toc-jump-highlight" : ""}`}
+        data-qa-pair-index={index}
+      >
       <div className="qa-pair-header">
         <span className="qa-pair-number">Pair #{index + 1}</span>
       </div>

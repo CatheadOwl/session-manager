@@ -1,19 +1,19 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useContentCollapse } from "@/hooks/useContentCollapse";
 import { useMessageSearch } from "@/hooks/useMessageSearch";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import type { QaPair, SessionMessage, SessionMeta } from "@/types";
 import { SessionMessageItem } from "./SessionMessageItem";
 import { SessionQaPair } from "./SessionQaPair";
 import { MessageSearchBar } from "./MessageSearchBar";
+import { QATocPopover, type QATocItem } from "./QATocPopover";
 import { CopyButton } from "./CopyButton";
 import { getProviderDisplay } from "./provider-display";
 import { StarButton } from "./StarButton";
 import { SegmentedControl } from "./SegmentedControl";
 import { RawSessionContent } from "./RawSessionContent";
 import { formatSessionTitle, formatTimestamp } from "@/utils/format";
-import { getLegacyCollapsedMessage } from "@/utils/content-collapse";
+import { extractSystemBlocks } from "@/utils/system-blocks";
 import { supportsLifecycleOperations } from "@/lib/domain";
 
 interface SessionDetailProps {
@@ -105,6 +105,11 @@ export const SessionDetail = memo(function SessionDetail({
   const qaListRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [tocInitialIndex, setTocInitialIndex] = useState(0);
+  const [tocSelectedIndex, setTocSelectedIndex] = useState(0);
+  const [tocHighlightIndex, setTocHighlightIndex] = useState(-1);
+  const [tocHighlightNonce, setTocHighlightNonce] = useState(0);
+  const tocHighlightTimerRef = useRef<number | null>(null);
 
   // ─── Find-in-page message search ───────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
@@ -132,6 +137,77 @@ export const SessionDetail = memo(function SessionDetail({
     estimateSize: () => 200,
     overscan: 5,
   });
+
+  const qaTocItems = useMemo<QATocItem[]>(() => (
+    qaPairs.map((pair, index) => {
+      const question = messages[pair.questionIdx];
+      const label = question ? extractSystemBlocks(question.content).text.replace(/\s+/g, " ").trim() : "";
+      const fallback = `Pair #${index + 1}`;
+      const summary = label || fallback;
+      return {
+        id: `qa-pair-${index}`,
+        label: summary.length > 120 ? `${summary.slice(0, 117)}...` : summary,
+      };
+    })
+  ), [messages, qaPairs]);
+
+  const getNearestQaPairIndex = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    const listEl = qaListRef.current;
+    if (!scrollEl || !listEl) return 0;
+
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const viewportCenter = scrollRect.top + scrollRect.height / 2;
+    const pairEls = Array.from(listEl.querySelectorAll<HTMLElement>("[data-qa-pair-index]"));
+    let nearestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (const pairEl of pairEls) {
+      const index = Number(pairEl.dataset.qaPairIndex);
+      if (!Number.isFinite(index)) continue;
+      const rect = pairEl.getBoundingClientRect();
+      const pairCenter = rect.top + rect.height / 2;
+      const distance = Math.abs(pairCenter - viewportCenter);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    }
+
+    return nearestIndex;
+  }, []);
+
+  const prepareQATocOpen = useCallback(() => {
+    const index = getNearestQaPairIndex();
+    setTocInitialIndex(index);
+    setTocSelectedIndex(index);
+  }, [getNearestQaPairIndex]);
+
+  const jumpToQAPair = useCallback((index: number) => {
+    const target = qaListRef.current?.querySelector<HTMLElement>(`[data-qa-pair-index="${index}"]`);
+    if (!target) return;
+    setTocSelectedIndex(index);
+    setTocHighlightIndex(-1);
+    requestAnimationFrame(() => {
+      setTocHighlightIndex(index);
+      setTocHighlightNonce((nonce) => nonce + 1);
+    });
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightIdx(-1);
+    if (tocHighlightTimerRef.current != null) {
+      window.clearTimeout(tocHighlightTimerRef.current);
+    }
+    tocHighlightTimerRef.current = window.setTimeout(() => {
+      setTocHighlightIndex(-1);
+      tocHighlightTimerRef.current = null;
+    }, 1800);
+  }, []);
+
+  useEffect(() => () => {
+    if (tocHighlightTimerRef.current != null) {
+      window.clearTimeout(tocHighlightTimerRef.current);
+    }
+  }, []);
 
   // Scroll to current match whenever it changes
   useEffect(() => {
@@ -402,6 +478,9 @@ export const SessionDetail = memo(function SessionDetail({
                     index={index}
                     questionJumpIndex={qaQuestionMsgIndices[index]}
                     showRendered={showRendered}
+                    tocTargetId={qaTocItems[index]?.id}
+                    tocHighlighted={index === tocHighlightIndex}
+                    tocHighlightNonce={index === tocHighlightIndex ? tocHighlightNonce : undefined}
                   />
                 ))
               )}
@@ -441,6 +520,15 @@ export const SessionDetail = memo(function SessionDetail({
               })}
             </div>
           )
+        ) : null}
+        {messageMode === "qa" && qaTocItems.length > 1 ? (
+          <QATocPopover
+            items={qaTocItems}
+            initialIndex={tocInitialIndex}
+            selectedIndex={tocSelectedIndex}
+            onOpen={prepareQATocOpen}
+            onJump={jumpToQAPair}
+          />
         ) : null}
       </section>
     </main>

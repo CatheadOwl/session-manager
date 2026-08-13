@@ -3058,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "session-manager"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

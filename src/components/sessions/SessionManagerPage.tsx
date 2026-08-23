@@ -71,6 +71,11 @@ export function SessionManagerPage() {
     [queries.filteredSessions, queries.starredMap, ui.showStarredOnly],
   );
 
+  const visibleSessionKeys = useMemo(
+    () => displaySessions.map(getSessionKey),
+    [displaySessions],
+  );
+
   // Keep a ref to always read the latest selected keys, avoiding handleBatchDelete re-creation on selectedSessionKeys change
   const selectedKeysRef = useRef(ui.selectedSessionKeys);
   selectedKeysRef.current = ui.selectedSessionKeys;
@@ -285,6 +290,9 @@ export function SessionManagerPage() {
         selectedKeysSet={selectedKeysSet}
         onToggleSelectionMode={ui.toggleSelectionMode}
         onToggleSessionSelection={ui.toggleSessionSelection}
+        visibleSessionKeys={visibleSessionKeys}
+        onSelectSessionKeys={ui.selectSessionKeys}
+        onUnselectSessionKeys={ui.unselectSessionKeys}
         onBatchDelete={handleBatchDelete}
       />
       <SessionDetail

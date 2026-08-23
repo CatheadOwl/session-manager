@@ -57,6 +57,33 @@ export function useSessionUIState() {
     });
   }, []);
 
+  const selectSessionKeys = useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+    setSelectedSessionKeys((prev) => {
+      const seen = new Set(prev);
+      const next = [...prev];
+      let changed = false;
+
+      for (const key of keys) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push(key);
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const unselectSessionKeys = useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+    const remove = new Set(keys);
+    setSelectedSessionKeys((prev) => {
+      const next = prev.filter((key) => !remove.has(key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelectedSessionKeys([]);
     setSelectionMode(false);
@@ -101,6 +128,8 @@ export function useSessionUIState() {
     toggleSelectionMode,
     selectedSessionKeys,
     toggleSessionSelection,
+    selectSessionKeys,
+    unselectSessionKeys,
     clearSelection,
   };
 }

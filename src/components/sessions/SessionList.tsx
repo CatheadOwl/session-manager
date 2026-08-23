@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useMemo, useRef } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RefreshCw, Star } from "lucide-react";
 import type { SessionMeta } from "@/types";
@@ -51,6 +51,9 @@ interface SessionListProps {
   selectedKeysSet: Set<string>;
   onToggleSelectionMode: () => void;
   onToggleSessionSelection: (key: string) => void;
+  visibleSessionKeys: string[];
+  onSelectSessionKeys: (keys: string[]) => void;
+  onUnselectSessionKeys: (keys: string[]) => void;
   onBatchDelete: () => void;
 }
 
@@ -80,6 +83,9 @@ export const SessionList = memo(function SessionList({
   selectedKeysSet,
   onToggleSelectionMode,
   onToggleSessionSelection,
+  visibleSessionKeys,
+  onSelectSessionKeys,
+  onUnselectSessionKeys,
   onBatchDelete,
 }: SessionListProps) {
   // Ref-based context: mode toggle won't trigger re-render of context consumers
@@ -105,6 +111,19 @@ export const SessionList = memo(function SessionList({
     }
     return count;
   }, [selectedKeysSet, sessionMap]);
+
+  const allVisibleSelected =
+    visibleSessionKeys.length > 0 &&
+    visibleSessionKeys.every((key) => selectedKeysSet.has(key));
+  const someVisibleSelected =
+    visibleSessionKeys.some((key) => selectedKeysSet.has(key)) && !allVisibleSelected;
+  const bulkSelectionRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (bulkSelectionRef.current) {
+      bulkSelectionRef.current.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected]);
 
   const listScrollRef = useRef<HTMLDivElement>(null);
 
@@ -179,23 +198,52 @@ export const SessionList = memo(function SessionList({
         {/* Row 3 (list view only): Selection mode */}
         {viewMode === "flat" ? (
           <div className="selection-row">
-            <button
-              type="button"
-              className={`selection-toggle-btn${selectionMode ? " active" : ""}`}
-              onClick={onToggleSelectionMode}
-            >
-              {selectionMode ? "Cancel" : "Select"}
-            </button>
             {selectionMode ? (
+              <>
+                <div className="selection-row-main">
+                  <input
+                    ref={bulkSelectionRef}
+                    type="checkbox"
+                    className="selection-all-checkbox"
+                    checked={allVisibleSelected}
+                    disabled={visibleSessionKeys.length === 0}
+                    onChange={() => {
+                      if (allVisibleSelected) {
+                        onUnselectSessionKeys(visibleSessionKeys);
+                      } else {
+                        onSelectSessionKeys(visibleSessionKeys);
+                      }
+                    }}
+                    aria-label="Select all visible sessions"
+                    aria-checked={someVisibleSelected ? "mixed" : allVisibleSelected}
+                    title="Select all visible sessions"
+                  />
+                  <button
+                    type="button"
+                    className={`selection-toggle-btn${selectionMode ? " active" : ""}`}
+                    onClick={onToggleSelectionMode}
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="batch-delete-btn"
+                  disabled={selectedOperationCount === 0}
+                  onClick={onBatchDelete}
+                >
+                  Delete{selectedOperationCount > 0 ? ` (${selectedOperationCount})` : ""}
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
-                className="batch-delete-btn"
-                disabled={selectedOperationCount === 0}
-                onClick={onBatchDelete}
+                className={`selection-toggle-btn${selectionMode ? " active" : ""}`}
+                onClick={onToggleSelectionMode}
               >
-                Delete{selectedOperationCount > 0 ? ` (${selectedOperationCount})` : ""}
+                Select
               </button>
-            ) : null}
+            )}
           </div>
         ) : null}
 

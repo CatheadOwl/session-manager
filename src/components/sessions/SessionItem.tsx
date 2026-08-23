@@ -56,7 +56,10 @@ export const SessionItem = memo(function SessionItem({
       onClick={handleClick}
     >
       <div className="session-item-header">
-        <span className={`selection-checkbox${isSelectionSelected ? " checked" : ""}`}>{isSelectionSelected ? "✓" : ""}</span>
+        <span
+          className={`selection-checkbox${isSelectionSelected ? " checked" : ""}`}
+          aria-hidden="true"
+        />
         <span className="session-title">{highlightedTitle}</span>
         <span className="session-provider-badge" title={session.providerId}>
           <ProviderIcon providerId={session.providerId} size={14} />

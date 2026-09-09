@@ -34,10 +34,6 @@ export function SessionManagerPage() {
   const updater = useUpdater();
   const qaExport = useQaExport(ui.scope);
 
-  const handleExportQa = useCallback(() => {
-    void qaExport.exportRange(queries.exportRange);
-  }, [qaExport, queries.exportRange]);
-
   // ─── Folder operation result handler ──────────────────────────────
   const handleFolderOperationResult = useCallback(
     (outcomes: DeleteSessionResult[]) => {
@@ -84,6 +80,12 @@ export function SessionManagerPage() {
         : queries.filteredSessions,
     [queries.filteredSessions, queries.starredMap, ui.showStarredOnly],
   );
+
+  // Export what you see: the visible list already carries folder, search,
+  // star, and time filters.
+  const handleExportQa = useCallback(() => {
+    void qaExport.exportRange(queries.exportRange, displaySessions);
+  }, [qaExport, queries.exportRange, displaySessions]);
 
   const visibleSessionKeys = useMemo(
     () => displaySessions.map(getSessionKey),

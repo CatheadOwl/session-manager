@@ -48,36 +48,7 @@ pub fn export_qa_sessions(
     let mut skipped = Vec::new();
 
     for meta in &selected {
-        let Some(handle) = handle_from_meta(meta) else {
-            skipped.push(ExportSkippedItem {
-                provider_id: meta.provider_id.clone(),
-                session_id: meta.session_id.clone(),
-                error: "session has no loadable locator".to_string(),
-            });
-            continue;
-        };
-        match load_messages_for_handle(registry, &handle) {
-            Ok(messages) => {
-                let qa = extract_qa_entries(&messages);
-                sessions.push(QaSessionExport {
-                    provenance: provenance_from_meta(meta),
-                    qa,
-                });
-            }
-            Err(err) => {
-                log::warn!(
-                    "qa_export skip provider={} session={} error={}",
-                    meta.provider_id,
-                    meta.session_id,
-                    err
-                );
-                skipped.push(ExportSkippedItem {
-                    provider_id: meta.provider_id.clone(),
-                    session_id: meta.session_id.clone(),
-                    error: err,
-                });
-            }
-        }
+        export_one(registry, meta, &mut sessions, &mut skipped);
     }
 
     log::debug!(
@@ -90,6 +61,75 @@ pub fn export_qa_sessions(
     );
 
     QaExportBatch { sessions, skipped }
+}
+
+/// Export an explicit, already-filtered session list ("export what you see"):
+/// the UI adapter (folder/search/star/time filters) selects the sessions and
+/// passes their `SessionMeta`; this core only distills and assembles
+/// provenance. Selection logic stays out of the core by design.
+pub fn export_qa_sessions_for_metas(
+    registry: &ProviderRegistry,
+    metas: &[SessionMeta],
+) -> QaExportBatch {
+    let start = Instant::now();
+    log::debug!("qa_export_for_metas start count={}", metas.len());
+
+    let mut sessions = Vec::with_capacity(metas.len());
+    let mut skipped = Vec::new();
+
+    for meta in metas {
+        export_one(registry, meta, &mut sessions, &mut skipped);
+    }
+
+    log::debug!(
+        "qa_export_for_metas finish selected={} exported={} skipped={} elapsed_ms={}",
+        metas.len(),
+        sessions.len(),
+        skipped.len(),
+        start.elapsed().as_millis()
+    );
+
+    QaExportBatch { sessions, skipped }
+}
+
+/// Load, distill, and append one session's export; record failures in
+/// `skipped` without aborting the batch.
+fn export_one(
+    registry: &ProviderRegistry,
+    meta: &SessionMeta,
+    sessions: &mut Vec<QaSessionExport>,
+    skipped: &mut Vec<ExportSkippedItem>,
+) {
+    let Some(handle) = handle_from_meta(meta) else {
+        skipped.push(ExportSkippedItem {
+            provider_id: meta.provider_id.clone(),
+            session_id: meta.session_id.clone(),
+            error: "session has no loadable locator".to_string(),
+        });
+        return;
+    };
+    match load_messages_for_handle(registry, &handle) {
+        Ok(messages) => {
+            let qa = extract_qa_entries(&messages);
+            sessions.push(QaSessionExport {
+                provenance: provenance_from_meta(meta),
+                qa,
+            });
+        }
+        Err(err) => {
+            log::warn!(
+                "qa_export skip provider={} session={} error={}",
+                meta.provider_id,
+                meta.session_id,
+                err
+            );
+            skipped.push(ExportSkippedItem {
+                provider_id: meta.provider_id.clone(),
+                session_id: meta.session_id.clone(),
+                error: err,
+            });
+        }
+    }
 }
 
 /// Distill messages into materialized Q&A entries using merge semantics:
@@ -425,6 +465,64 @@ mod tests {
             ),
         )
         .expect("write source");
+    }
+
+    #[test]
+    fn export_for_metas_exports_explicit_list_and_skips_broken() {
+        use crate::config::TEST_ENV_LOCK;
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+
+        struct EnvVarGuard {
+            key: &'static str,
+            old_value: Option<std::ffi::OsString>,
+        }
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                if let Some(v) = &self.old_value {
+                    std::env::set_var(self.key, v);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+
+        let test_home = tempfile::tempdir().expect("tempdir");
+        let old = std::env::var_os("SESSION_MANAGER_TEST_HOME");
+        std::env::set_var("SESSION_MANAGER_TEST_HOME", test_home.path());
+        let _guard_env = EnvVarGuard { key: "SESSION_MANAGER_TEST_HOME", old_value: old };
+
+        let projects = test_home.path().join(".claude").join("projects").join("folder");
+        let ts = "2026-09-09T10:00:00Z";
+        write_claude_session_with_ts(&projects.join("picked.jsonl"), "picked", ts);
+
+        let meta = |provider: &str, id: &str, path: Option<String>| SessionMeta {
+            provider_id: provider.to_string(),
+            session_id: id.to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: Some(1),
+            last_active_at: Some(2),
+            source_path: path.clone(),
+            locator: path.map(|p| SessionLocator::File { path: p }),
+            resume_command: None,
+            forked_from_id: None,
+        };
+
+        let registry = super::super::build_provider_registry();
+        let batch = export_qa_sessions_for_metas(
+            &registry,
+            &[
+                meta("claude", "picked", Some(projects.join("picked.jsonl").to_string_lossy().into_owned())),
+                meta("claude", "missing-file", Some(projects.join("gone.jsonl").to_string_lossy().into_owned())),
+            ],
+        );
+
+        assert_eq!(batch.sessions.len(), 1);
+        assert_eq!(batch.sessions[0].provenance.session_id, "picked");
+        assert_eq!(batch.sessions[0].qa.len(), 1);
+        assert_eq!(batch.skipped.len(), 1);
+        assert_eq!(batch.skipped[0].session_id, "missing-file");
     }
 
     #[test]

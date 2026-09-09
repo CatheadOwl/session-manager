@@ -106,6 +106,12 @@ export interface ExportQaSessionsOptions {
   from: number;
   to: number;
   providers?: string[];
+  /**
+   * Explicit pre-filtered session list ("export what you see"): the UI has
+   * already applied folder/search/star/time filters. When omitted the
+   * backend falls back to scanning by the time window.
+   */
+  sessions?: SessionMeta[];
   /** Absolute destination file path (from the native save dialog). */
   destPath: string;
   format?: "json" | "markdown";

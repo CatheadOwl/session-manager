@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { sessionsApi } from "@/lib/api/sessions";
 import type { ExportOutcome } from "@/types";
+import type { SessionMeta } from "@/types";
 import type { ResolvedRange } from "@/utils/time-range";
 
 export interface QaExportStatus {
@@ -14,14 +15,20 @@ const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
 /**
  * Q&A export orchestration: native save dialog → backend export command →
  * status feedback. Contains no distill logic — the Rust core owns that.
+ * The exported set is "what you see": the caller passes the visible session
+ * list (folder/search/star/time filters already applied by the UI).
  */
 export function useQaExport(scope: "active" | "archived") {
   const [status, setStatus] = useState<QaExportStatus>(DEFAULT_STATUS);
 
   const exportRange = useCallback(
-    async (range: ResolvedRange | null) => {
+    async (range: ResolvedRange | null, sessions: SessionMeta[]) => {
       if (!range) {
         setStatus({ state: "error", message: "Choose a time range first (not “All”)." });
+        return;
+      }
+      if (sessions.length === 0) {
+        setStatus({ state: "error", message: "No visible sessions to export." });
         return;
       }
 
@@ -44,6 +51,7 @@ export function useQaExport(scope: "active" | "archived") {
           scope,
           from: range.from,
           to: range.to,
+          sessions,
           destPath,
           format,
         });

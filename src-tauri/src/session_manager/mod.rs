@@ -46,7 +46,10 @@ pub use operations::{
 pub use scan::scan_sessions_with_scope;
 
 // Q&A export capability (time-ranged, session-level, provenance-preserving).
-pub use export::{export_qa_sessions, render_export, write_export_file, QaExportFormat};
+pub use export::{
+    export_qa_sessions, export_qa_sessions_for_metas, render_export, write_export_file,
+    QaExportFormat,
+};
 
 /// Build and return the provider registry with all built-in providers registered.
 /// Called once during Tauri setup.

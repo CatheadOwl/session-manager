@@ -196,6 +196,11 @@ pub struct ExportQaSessionsOptions {
     pub dest_path: String,
     #[serde(default = "default_export_format")]
     pub format: String,
+    /// Explicit pre-filtered session list ("export what you see": the UI has
+    /// already applied folder/search/star/time filters). When absent, the
+    /// core falls back to scanning by the time window (future CLI path).
+    #[serde(default)]
+    pub sessions: Option<Vec<session_manager::SessionMeta>>,
 }
 
 fn default_export_format() -> String {
@@ -218,13 +223,18 @@ pub async fn export_qa_sessions(
     let batch = run_blocking!(
         registry,
         reg,
-        session_manager::export_qa_sessions(
-            &reg,
-            &session_scope,
-            options.from,
-            options.to,
-            options.providers.as_deref(),
-        )
+        match options.sessions {
+            Some(ref sessions) => {
+                session_manager::export_qa_sessions_for_metas(&reg, sessions)
+            }
+            None => session_manager::export_qa_sessions(
+                &reg,
+                &session_scope,
+                options.from,
+                options.to,
+                options.providers.as_deref(),
+            ),
+        }
     );
 
     let content = session_manager::render_export(&batch, options.from, options.to, format)?;

@@ -93,12 +93,18 @@ pub enum CliCommand {
 }
 
 /// True when the process should run in CLI mode: the first argument is a
-/// known subcommand. Anything else (including stray flags) falls through to
-/// the GUI so GUI launches never break on unexpected args.
+/// known subcommand or a root help/version flag. Anything else (including
+/// stray flags) falls through to the GUI so GUI launches never break on
+/// unexpected args — but root `--help`/`--version` must answer on the
+/// console, never open a window.
 pub fn is_cli_invocation() -> bool {
+    is_cli_arg(std::env::args().nth(1).as_deref())
+}
+
+fn is_cli_arg(arg: Option<&str>) -> bool {
     matches!(
-        std::env::args().nth(1).as_deref(),
-        Some("export") | Some("agents")
+        arg,
+        Some("export") | Some("agents") | Some("--help") | Some("-h") | Some("--version") | Some("-V")
     )
 }
 
@@ -219,6 +225,7 @@ fn run_agents() -> i32 {
 #[derive(Debug, Parser)]
 #[command(
     name = "session-manager",
+    version,
     about = "Browse, search, inspect, archive, and clean up local AI coding-agent sessions",
     subcommand_negates_reqs = true
 )]
@@ -298,5 +305,25 @@ mod tests {
         assert!(w.to - w.from <= 7 * 86_400_000 + 1_000);
         let w = resolve_window(None, Some(100), Some(200));
         assert_eq!((w.from, w.to), (100, 200));
+    }
+
+    #[test]
+    fn cli_dispatch_whitelist() {
+        for arg in ["export", "agents", "--help", "-h", "--version", "-V"] {
+            assert!(is_cli_arg(Some(arg)), "{arg} should be CLI");
+        }
+        // Stray flags and file paths must fall through to the GUI.
+        for arg in ["--foo", "some-path.json", ""] {
+            assert!(!is_cli_arg(Some(arg)), "{arg} must stay GUI");
+        }
+        assert!(!is_cli_arg(None));
+    }
+
+    #[test]
+    fn root_help_and_version_parse_and_exit_in_clap() {
+        // clap handles --help/--version by exiting during parse; from the
+        // parser's perspective they are errors of kind DisplayHelp/Version.
+        let err = Cli::try_parse_from(["session-manager", "--version"]).expect_err("exits");
+        assert!(err.to_string().contains("0.2"), "unexpected: {err}");
     }
 }

@@ -182,9 +182,12 @@ impl SessionHandle {
         self.locator.display_source_path()
     }
 
-    /// Stable identity string (provider:session:locator). Test-only today;
-    /// keep/retire conditions live in the cognition doc (types.rs.md) —
-    /// search "detail_key() status note".
+    /// Stable identity string (provider:session:locator). Currently asserted
+    /// only by the handle-distinctness tests in mod.rs (cfg(test)) — hence
+    /// the allow. Kept rather than deleted because the tests would otherwise
+    /// reimplement the format inline, and because this is the natural shape
+    /// for a future IPC detail key. If a real consumer appears, drop the
+    /// allow; if those tests are ever removed, delete this method with them.
     #[allow(dead_code)]
     pub fn detail_key(&self) -> String {
         format!(

@@ -221,6 +221,7 @@ fn scope_label(scope: &SessionScope) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QaExportFormat {
     Json,
+    Jsonl,
     Markdown,
 }
 
@@ -228,8 +229,11 @@ impl QaExportFormat {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value.to_lowercase().as_str() {
             "json" => Ok(Self::Json),
+            "jsonl" | "ndjson" => Ok(Self::Jsonl),
             "markdown" | "md" => Ok(Self::Markdown),
-            other => Err(format!("Unknown export format: {other} (expected json or markdown)")),
+            other => Err(format!(
+                "Unknown export format: {other} (expected json, jsonl, or markdown)"
+            )),
         }
     }
 }
@@ -248,8 +252,35 @@ pub fn render_export(
     let exported_at = chrono::Utc::now().timestamp();
     match format {
         QaExportFormat::Json => render_json(batch, from, to, exported_at, include_provenance),
-        QaExportFormat::Markdown => Ok(render_markdown(batch, from, to, exported_at, include_provenance)),
+        QaExportFormat::Jsonl => render_jsonl(batch, include_provenance),
+        QaExportFormat::Markdown => {
+            Ok(render_markdown(batch, from, to, exported_at, include_provenance))
+        }
     }
+}
+
+/// NDJSON rendering: one session per line, so repeated runs can be appended
+/// with `>>` and the file stays valid JSON Lines. Per-run envelope metadata
+/// (range, timestamp, skips) is NOT embedded — skips go to stderr in the
+/// CLI adapter; append-safety is the framing contract.
+fn render_jsonl(batch: &QaExportBatch, include_provenance: bool) -> Result<String, String> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for session in &batch.sessions {
+        let line = if include_provenance {
+            serde_json::to_string(session)
+        } else {
+            #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct BareSession<'a> {
+                qa: &'a [QaEntry],
+            }
+            serde_json::to_string(&BareSession { qa: &session.qa })
+        };
+        let line = line.map_err(|e| format!("Failed to serialize export: {e}"))?;
+        let _ = writeln!(out, "{line}");
+    }
+    Ok(out)
 }
 
 fn render_json(

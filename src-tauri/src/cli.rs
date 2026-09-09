@@ -50,6 +50,7 @@ impl AgentArg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
     Json,
+    Jsonl,
     Markdown,
 }
 
@@ -57,9 +58,27 @@ impl From<FormatArg> for session_manager::QaExportFormat {
     fn from(value: FormatArg) -> Self {
         match value {
             FormatArg::Json => Self::Json,
+            FormatArg::Jsonl => Self::Jsonl,
             FormatArg::Markdown => Self::Markdown,
         }
     }
+}
+
+/// Parse a time bound: epoch milliseconds (integer, app-wide unit) or an
+/// RFC3339 timestamp (converted to epoch ms, zero new dependencies — chrono
+/// is already in the tree). RFC3339 removes the hand-computed-epoch friction
+/// for calendar windows (evals/cli Case B).
+pub fn parse_epoch_ms(value: &str) -> Result<i64, String> {
+    if let Ok(ms) = value.parse::<i64>() {
+        return Ok(ms);
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.timestamp_millis())
+        .map_err(|_| {
+            format!(
+                "invalid time bound '{value}': expected epoch milliseconds or RFC3339 (e.g. 2026-08-01T00:00:00Z)"
+            )
+        })
 }
 
 #[derive(Debug, Subcommand)]
@@ -69,16 +88,16 @@ pub enum CliCommand {
         /// Time window of N x 24h back from now (omit all window flags for all-time)
         #[arg(long, conflicts_with_all = ["from", "to"])]
         days: Option<u32>,
-        /// Window start, epoch milliseconds (inclusive)
-        #[arg(long, conflicts_with = "days", requires = "to")]
+        /// Window start: epoch milliseconds or RFC3339 timestamp (inclusive)
+        #[arg(long, conflicts_with = "days", requires = "to", value_parser = parse_epoch_ms)]
         from: Option<i64>,
-        /// Window end, epoch milliseconds (inclusive)
-        #[arg(long, conflicts_with = "days", requires = "from")]
+        /// Window end: epoch milliseconds or RFC3339 timestamp (inclusive)
+        #[arg(long, conflicts_with = "days", requires = "from", value_parser = parse_epoch_ms)]
         to: Option<i64>,
         /// Restrict to these agents (repeatable; default: all)
         #[arg(long = "agent", value_enum)]
         agents: Vec<AgentArg>,
-        /// Output format
+        /// Output format (jsonl: one session per line, safe for `>>` appends)
         #[arg(long, value_enum, default_value_t = FormatArg::Json)]
         format: FormatArg,
         /// Omit provenance metadata (source tracing)
@@ -205,7 +224,10 @@ fn run_export(
             );
         }
         None => {
-            println!("{content}");
+            // Exactly one trailing newline: renderers may or may not end
+            // with one (jsonl does via writeln, pretty json does not) —
+            // normalize so `>>` appends never produce blank separator lines.
+            println!("{}", content.trim_end_matches('\n'));
         }
     }
     0
@@ -350,9 +372,11 @@ mod tests {
             .to_string();
         for expected in [
             "epoch milliseconds",
+            "RFC3339",
             "inclusive",
             "all-time",
             "refuses to overwrite",
+            "jsonl",
         ] {
             assert!(export_help.contains(expected), "missing '{expected}' in export help");
         }
@@ -363,5 +387,48 @@ mod tests {
         // clap's built-in `help` subcommand (clig.dev: git-style help access).
         let err = Cli::try_parse_from(["session-manager", "help", "export"]).expect_err("displays help");
         assert!(err.to_string().contains("Usage"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn epoch_bounds_accept_ms_and_rfc3339() {
+        assert_eq!(parse_epoch_ms("1785542400000").expect("ms"), 1_785_542_400_000);
+        assert_eq!(
+            parse_epoch_ms("2026-08-01T00:00:00Z").expect("rfc3339"),
+            1_785_542_400_000
+        );
+        // Offset-aware RFC3339 converts to absolute epoch ms.
+        assert_eq!(
+            parse_epoch_ms("2026-08-01T02:00:00+02:00").expect("offset"),
+            1_785_542_400_000
+        );
+        assert!(parse_epoch_ms("august").is_err());
+        assert!(parse_epoch_ms("").is_err());
+    }
+
+    #[test]
+    fn rfc3339_window_parses_end_to_end() {
+        let Some(CliCommand::Export { from: Some(from), to: Some(to), .. }) = parse(&[
+            "export",
+            "--from",
+            "2026-08-01T00:00:00Z",
+            "--to",
+            "2026-08-31T23:59:59Z",
+        ])
+        .expect("parse")
+        else {
+            panic!("expected export subcommand");
+        };
+        assert_eq!(from, 1_785_542_400_000);
+        assert_eq!(to, 1_788_220_799_000);
+    }
+
+    #[test]
+    fn jsonl_format_is_selectable() {
+        let Some(CliCommand::Export { format, .. }) =
+            parse(&["export", "--days", "1", "--format", "jsonl"]).expect("parse")
+        else {
+            panic!("expected export subcommand");
+        };
+        assert_eq!(format, FormatArg::Jsonl);
     }
 }

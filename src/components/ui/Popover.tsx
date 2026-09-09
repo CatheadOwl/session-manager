@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type KeyboardEvent, type ReactNode } from "react";
 import { useClickOutside } from "@/hooks/useClickOutside";
 
 export interface PopoverProps {
@@ -11,6 +11,9 @@ export interface PopoverProps {
   align?: "left" | "right";
   role?: "dialog" | "menu";
   id?: string;
+  /** Ref to the panel element (for keyboard-navigation hosts like Menu). */
+  panelRef?: { current: HTMLDivElement | null };
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   children: ReactNode;
 }
 
@@ -28,20 +31,25 @@ export function Popover({
   align = "left",
   role = "dialog",
   id,
+  panelRef,
+  onKeyDown,
   children,
 }: PopoverProps) {
-  const ref = useClickOutside<HTMLDivElement>({ isOpen: open, onClose });
+  const clickOutsideRef = useClickOutside<HTMLDivElement>({ isOpen: open, onClose });
 
   if (!open) return null;
 
   return (
     <div
-      ref={ref}
-      id={id}
+      ref={(node) => {
+        clickOutsideRef.current = node;
+        if (panelRef) panelRef.current = node;
+      }}      id={id}
       className={`ui-panel${className ? ` ${className}` : ""}`}
       data-align={align}
       role={role}
       aria-label={label}
+      onKeyDown={onKeyDown}
     >
       {children}
     </div>

@@ -128,6 +128,11 @@
   align-items: center;
   gap: 0.3rem;
   height: 1.9rem;
+  padding: 0 0.7rem;
+  border-radius: 0.55rem;
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1;
   white-space: nowrap;
 }
 

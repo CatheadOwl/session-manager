@@ -89,21 +89,85 @@
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   box-shadow: var(--shadow);
-  padding: 0.6rem;
+  padding: 0.7rem;
 }
 
 .export-calendar-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.4rem;
-  margin-top: 0.4rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
 }
 
-/* react-day-picker visual alignment with app variables */
-.export-calendar-popover .rdp {
+/*
+ * react-day-picker v10 skin — root class is .rdp-root (a bare `.rdp` override
+ * never matches). Compact 30px cells, flat accent fills instead of the
+ * default blue + #f0f0ff + gradient pills, all colors from app tokens.
+ */
+.export-calendar-popover .rdp-root {
   --rdp-accent-color: var(--accent);
-  --rdp-today-color: var(--accent);
-  font-size: 0.8rem;
+  --rdp-accent-background-color: var(--accent-soft);
+  --rdp-day-height: 30px;
+  --rdp-day-width: 30px;
+  --rdp-day_button-height: 28px;
+  --rdp-day_button-width: 28px;
+  --rdp-day_button-border-radius: 0.5rem;
+  --rdp-day_button-border: 1px solid transparent;
+  --rdp-selected-border: 1px solid var(--accent);
+  --rdp-months-gap: 1.2rem;
+  --rdp-nav_button-height: 1.8rem;
+  --rdp-nav_button-width: 1.8rem;
+  --rdp-nav-height: 2.1rem;
+  font-size: 0.76rem;
+  color: inherit;
+}
+
+/* Flat accent fills for range endpoints (default is a gradient pill) */
+.export-calendar-popover .rdp-root {
+  --rdp-range_start-background: none;
+  --rdp-range_end-background: none;
+}
+
+.export-calendar-popover .rdp-month_grid {
+  border-collapse: separate;
+  border-spacing: 0.1rem;
+}
+
+.export-calendar-popover .rdp-weekday {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.export-calendar-popover .rdp-caption_label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: inherit;
+}
+
+.export-calendar-popover .rdp-day_button:hover:not(:disabled) {
+  background: var(--panel-strong);
+}
+
+.export-calendar-popover .rdp-today {
+  font-weight: 650;
+}
+
+.export-calendar-popover .rdp-button_next,
+.export-calendar-popover .rdp-button_previous {
+  border-radius: 0.5rem;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.export-calendar-popover .rdp-button_next:hover:not(:disabled),
+.export-calendar-popover .rdp-button_previous:hover:not(:disabled) {
+  background: var(--panel-strong);
+  color: var(--accent);
 }
 
 /* Floating export result toast (bottom-right, transient) */

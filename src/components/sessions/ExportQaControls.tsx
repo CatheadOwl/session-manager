@@ -1,7 +1,8 @@
 import { memo, useCallback, useState } from "react";
 import { CalendarClock, Check, ChevronDown, Download } from "lucide-react";
 import { DayPicker, type DateRange } from "react-day-picker";
-import { useClickOutside } from "@/hooks/useClickOutside";
+import { Menu, MenuItem } from "@/components/ui/Menu";
+import { Popover } from "@/components/ui/Popover";
 import type { QaExportStatus } from "@/hooks/useQaExport";
 import {
   dayStartToEpochMs,
@@ -39,22 +40,11 @@ export const ExportQaControls = memo(function ExportQaControls({
   onExport,
   exportStatus,
 }: ExportQaControlsProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [draftRange, setDraftRange] = useState<DateRange | undefined>(undefined);
-  // One outside-click guard covers both the preset menu and the calendar
-  // popover — they live in the same container.
-  const calendarRef = useClickOutside<HTMLDivElement>({
-    isOpen: menuOpen || calendarOpen,
-    onClose: () => {
-      setMenuOpen(false);
-      setCalendarOpen(false);
-    },
-  });
 
   const choosePreset = useCallback(
     (preset: TimeRangePreset) => {
-      setMenuOpen(false);
       if (preset === "custom") {
         setCalendarOpen(true);
         return;
@@ -82,72 +72,66 @@ export const ExportQaControls = memo(function ExportQaControls({
 
   return (
     <div className="export-row">
-      <div className="export-row-main" ref={calendarRef}>
-        <div className="export-range">
-          <button
-            type="button"
-            className={`export-range-pill${hasResolvedRange ? " is-filtering" : ""}`}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="Filter sessions by time"
-            onClick={() => setMenuOpen((open) => !open)}
-            title={hasResolvedRange ? `List filtered by: ${presetLabel}` : undefined}
-          >
-            <CalendarClock size={13} className="export-range-icon" aria-hidden="true" />
-            <span className="export-range-value">{presetLabel}</span>
-            <ChevronDown size={13} className="export-range-chevron" aria-hidden="true" />
-          </button>
+      <div className="export-row-main">
+        <Menu
+          label="Time range presets"
+          className="export-range"
+          renderTrigger={(triggerProps) => (
+            <button
+              type="button"
+              className={`export-range-pill${hasResolvedRange ? " is-filtering" : ""}`}
+              title={hasResolvedRange ? `List filtered by: ${presetLabel}` : undefined}
+              {...triggerProps}
+            >
+              <CalendarClock size={13} className="export-range-icon" aria-hidden="true" />
+              <span className="export-range-value">{presetLabel}</span>
+              <ChevronDown size={13} className="export-range-chevron" aria-hidden="true" />
+            </button>
+          )}
+        >
+          {PRESETS.map((preset) => (
+            <MenuItem
+              key={preset.value}
+              checked={timeRange.preset === preset.value}
+              active={timeRange.preset === preset.value}
+              onClick={() => choosePreset(preset.value)}
+            >
+              <span className="export-range-item-label">{preset.label}</span>
+              {timeRange.preset === preset.value ? <Check size={13} aria-hidden="true" /> : null}
+            </MenuItem>
+          ))}
+        </Menu>
 
-          {menuOpen ? (
-            <div className="export-range-menu" role="menu" aria-label="Time range presets">
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={timeRange.preset === preset.value}
-                  className={`export-range-item${
-                    timeRange.preset === preset.value ? " active" : ""
-                  }`}
-                  onClick={() => choosePreset(preset.value)}
-                >
-                  <span className="export-range-item-label">{preset.label}</span>
-                  {timeRange.preset === preset.value ? (
-                    <Check size={13} aria-hidden="true" />
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        {calendarOpen ? (
-          <div className="export-calendar-popover" role="dialog" aria-label="Custom time range">
-            <DayPicker
-              mode="range"
-              selected={draftRange}
-              onSelect={(range) => setDraftRange(range)}
-              numberOfMonths={2}
-            />
-            <div className="export-calendar-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setCalendarOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={applyDraftRange}
-                disabled={!draftRange?.from || !draftRange.to}
-              >
-                Apply
-              </button>
-            </div>
+        <Popover
+          open={calendarOpen}
+          onClose={() => setCalendarOpen(false)}
+          label="Custom time range"
+          className="export-calendar-popover"
+        >
+          <DayPicker
+            mode="range"
+            selected={draftRange}
+            onSelect={(range) => setDraftRange(range)}
+            numberOfMonths={2}
+          />
+          <div className="export-calendar-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setCalendarOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={applyDraftRange}
+              disabled={!draftRange?.from || !draftRange.to}
+            >
+              Apply
+            </button>
           </div>
-        ) : null}
+        </Popover>
       </div>
 
       <button

@@ -56,18 +56,13 @@
   min-width: 0;
 }
 
+/* Base button classes live in ui.css (self-sufficient: typography, height,
+   radius). This scope only tweaks the detail bar's pill shape. */
 .detail-actions .secondary-button,
+.detail-actions .primary-button,
 .detail-actions .danger-button,
 .detail-actions .ghost-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 1.72rem;
-  padding: 0 0.62rem;
   border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 650;
-  line-height: 1;
 }
 
 .detail-actions .ghost-button.star-btn {
@@ -103,23 +98,6 @@
   color: #1d4ed8;
   font-size: 0.78rem;
   font-weight: 700;
-}
-
-.secondary-button,
-.danger-button,
-.ghost-button,
-.link-button {
-  border: 1px solid var(--border);
-  border-radius: 0.7rem;
-  padding: 0.52rem 0.72rem;
-  background: rgba(241, 245, 249, 0.88);
-  color: inherit;
-}
-
-.secondary-button:hover,
-.ghost-button:hover,
-.link-button:hover {
-  border-color: var(--accent);
 }
 
 .refresh-button {

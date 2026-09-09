@@ -1,8 +1,8 @@
 import { memo, useEffect, useState } from "react";
-import { useClickOutside } from "@/hooks/useClickOutside";
 import { getBaseName } from "@/utils/format";
 import type { FolderGroup } from "@/lib/domain";
 import type { UpdateStatus } from "@/hooks/useUpdater";
+import { Menu, MenuItem } from "@/components/ui/Menu";
 import { SegmentedControl } from "./SegmentedControl";
 import { UpdateToast } from "./UpdateToast";
 
@@ -57,14 +57,6 @@ export const FolderFilter = memo(function FolderFilter({
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isSortOpen, setIsSortOpen] = useState(false);
   const [sortKey, setSortKey] = useState<FolderSortKey>("recent");
-  const actionsRef = useClickOutside<HTMLDivElement>({
-    isOpen: isActionsOpen,
-    onClose: () => setIsActionsOpen(false),
-  });
-  const sortRef = useClickOutside<HTMLDivElement>({
-    isOpen: isSortOpen,
-    onClose: () => setIsSortOpen(false),
-  });
   const canMoveSelectedFolder = selectedFolder !== "all" && selectedFolder !== "Unknown";
   const folderActionLabel = scope === "active" ? "Archive folder" : "Restore folder";
 
@@ -148,69 +140,59 @@ export const FolderFilter = memo(function FolderFilter({
               onChange={(v) => onScopeChange(v)}
             />
           </div>
-          <div className="folder-actions" ref={actionsRef}>
-            <button
-              type="button"
-              className="folder-actions-trigger"
-              onClick={() => setIsActionsOpen((open) => !open)}
-              aria-label="Folder actions"
-              aria-haspopup="menu"
-              aria-expanded={isActionsOpen}
-              aria-controls="folder-actions-menu"
-              title="Folder actions"
+          <Menu
+            label="Folder actions"
+            align="right"
+            open={isActionsOpen}
+            onOpenChange={setIsActionsOpen}
+            className="folder-actions"
+            renderTrigger={(triggerProps) => (
+              <button
+                type="button"
+                className="folder-actions-trigger"
+                title="Folder actions"
+                {...triggerProps}
+              >
+                <MoreHorizontalIcon />
+              </button>
+            )}
+          >
+            <MenuItem
+              onClick={handleFolderAction}
+              disabled={!canMoveSelectedFolder || isFolderOperationPending}
+              title={canMoveSelectedFolder ? `${folderActionLabel}: ${selectedFolder}` : "Select a folder first"}
             >
-              <MoreHorizontalIcon />
-            </button>
-            {isActionsOpen ? (
-              <div className="folder-actions-menu" id="folder-actions-menu" role="menu">
-                <button
-                  type="button"
-                  className="folder-actions-item"
-                  role="menuitem"
-                  onClick={handleFolderAction}
-                  disabled={!canMoveSelectedFolder || isFolderOperationPending}
-                  title={canMoveSelectedFolder ? `${folderActionLabel}: ${selectedFolder}` : "Select a folder first"}
-                >
-                  {folderActionLabel}
-                </button>
-              </div>
-            ) : null}
-          </div>
+              {folderActionLabel}
+            </MenuItem>
+          </Menu>
         </div>
       </div>
 
-      <div className="folder-sort" ref={sortRef}>
-        <button
-          type="button"
-          className="folder-sort-trigger"
-          onClick={() => setIsSortOpen((open) => !open)}
-          aria-haspopup="menu"
-          aria-expanded={isSortOpen}
-          aria-controls="folder-sort-menu"
-          aria-label={`Sort folders: ${SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}`}
-        >
-          <span className="folder-sort-label">
-            {SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}
-          </span>
-          <ChevronDownIcon />
-        </button>
-        {isSortOpen ? (
-          <div className="folder-sort-menu" id="folder-sort-menu" role="menu">
-            {SORT_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`folder-sort-item${sortKey === option.value ? " active" : ""}`}
-                role="menuitemradio"
-                aria-checked={sortKey === option.value}
-                onClick={() => handleSortSelect(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      <Menu
+        label={`Sort folders: ${SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}`}
+        open={isSortOpen}
+        onOpenChange={setIsSortOpen}
+        className="folder-sort"
+        renderTrigger={(triggerProps) => (
+          <button type="button" className="folder-sort-trigger" {...triggerProps}>
+            <span className="folder-sort-label">
+              {SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? sortKey}
+            </span>
+            <ChevronDownIcon />
+          </button>
+        )}
+      >
+        {SORT_OPTIONS.map((option) => (
+          <MenuItem
+            key={option.value}
+            checked={sortKey === option.value}
+            active={sortKey === option.value}
+            onClick={() => handleSortSelect(option.value)}
+          >
+            {option.label}
+          </MenuItem>
+        ))}
+      </Menu>
 
       <div className={`folder-item${selectedFolder === "all" ? " selected" : ""}`}>
         <span

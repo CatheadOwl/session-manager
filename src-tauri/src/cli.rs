@@ -86,7 +86,7 @@ pub enum CliCommand {
     /// Export Q&A-distilled sessions (Active, non-archived only) to stdout or a file
     Export {
         /// Time window of N x 24h back from now (omit all window flags for all-time)
-        #[arg(long, conflicts_with_all = ["from", "to"])]
+        #[arg(short, long, conflicts_with_all = ["from", "to"])]
         days: Option<u32>,
         /// Window start: epoch milliseconds or RFC3339 timestamp (inclusive)
         #[arg(long, conflicts_with = "days", requires = "to", value_parser = parse_epoch_ms)]
@@ -95,16 +95,16 @@ pub enum CliCommand {
         #[arg(long, conflicts_with = "days", requires = "from", value_parser = parse_epoch_ms)]
         to: Option<i64>,
         /// Restrict to these agents (repeatable; default: all)
-        #[arg(long = "agent", value_enum)]
+        #[arg(short = 'a', long = "agent", value_enum)]
         agents: Vec<AgentArg>,
         /// Output format (jsonl: one session per line, safe for `>>` appends)
-        #[arg(long, value_enum, default_value_t = FormatArg::Json)]
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Json)]
         format: FormatArg,
         /// Omit provenance metadata (source tracing)
         #[arg(long, default_value_t = false)]
         no_metadata: bool,
         /// Write to this file instead of stdout (refuses to overwrite an existing file)
-        #[arg(long)]
+        #[arg(short, long)]
         out: Option<PathBuf>,
     },
     /// List available agent (provider) ids
@@ -430,5 +430,26 @@ mod tests {
             panic!("expected export subcommand");
         };
         assert_eq!(format, FormatArg::Jsonl);
+    }
+
+    #[test]
+    fn short_flags_parse_equivalently() {
+        // -d/-a/-f/-o mirror their long forms; --no-metadata stays long-only
+        // by decision (negative-semantics short flags are cryptic).
+        let Some(CliCommand::Export { days, agents, format, no_metadata, out, .. }) =
+            parse(&["export", "-d", "7", "-a", "codex", "-f", "jsonl", "-o", "w.json"])
+                .expect("parse")
+        else {
+            panic!("expected export subcommand");
+        };
+        assert_eq!(days, Some(7));
+        assert_eq!(agents, vec![AgentArg::Codex]);
+        assert_eq!(format, FormatArg::Jsonl);
+        assert!(!no_metadata);
+        assert_eq!(out, Some(PathBuf::from("w.json")));
+
+        // Short flags participate in the same validation as long ones.
+        let err = parse(&["export", "-d", "7", "--from", "1"]).expect_err("must conflict");
+        assert!(err.contains("--days"), "unexpected: {err}");
     }
 }

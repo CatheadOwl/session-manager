@@ -64,9 +64,9 @@ impl From<FormatArg> for session_manager::QaExportFormat {
 
 #[derive(Debug, Subcommand)]
 pub enum CliCommand {
-    /// Export Q&A-distilled sessions to stdout or a file
+    /// Export Q&A-distilled sessions (Active, non-archived only) to stdout or a file
     Export {
-        /// Time window in days back from now
+        /// Time window of N x 24h back from now (omit all window flags for all-time)
         #[arg(long, conflicts_with_all = ["from", "to"])]
         days: Option<u32>,
         /// Window start, epoch milliseconds (inclusive)
@@ -84,7 +84,7 @@ pub enum CliCommand {
         /// Omit provenance metadata (source tracing)
         #[arg(long, default_value_t = false)]
         no_metadata: bool,
-        /// Write to this file instead of stdout (refuses to overwrite)
+        /// Write to this file instead of stdout (refuses to overwrite an existing file)
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -325,5 +325,43 @@ mod tests {
         // parser's perspective they are errors of kind DisplayHelp/Version.
         let err = Cli::try_parse_from(["session-manager", "--version"]).expect_err("exits");
         assert!(err.to_string().contains("0.2"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn bare_export_means_all_time() {
+        // The documented default: no window flags = full range.
+        let w = resolve_window(None, None, None);
+        assert_eq!((w.from, w.to), (i64::MIN, i64::MAX));
+    }
+
+    #[test]
+    fn help_text_documents_load_bearing_semantics() {
+        // Guards the eval-driven wording (clig.dev review + evals/cli
+        // baseline): scope, units, bounds, and default window must stay
+        // discoverable from --help alone.
+        use clap::CommandFactory;
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains("Active, non-archived"), "scope must be documented: {help}");
+        let export_help = Cli::command()
+            .find_subcommand("export")
+            .expect("export subcommand")
+            .clone()
+            .render_help()
+            .to_string();
+        for expected in [
+            "epoch milliseconds",
+            "inclusive",
+            "all-time",
+            "refuses to overwrite",
+        ] {
+            assert!(export_help.contains(expected), "missing '{expected}' in export help");
+        }
+    }
+
+    #[test]
+    fn help_subcommand_is_available() {
+        // clap's built-in `help` subcommand (clig.dev: git-style help access).
+        let err = Cli::try_parse_from(["session-manager", "help", "export"]).expect_err("displays help");
+        assert!(err.to_string().contains("Usage"), "unexpected: {err}");
     }
 }

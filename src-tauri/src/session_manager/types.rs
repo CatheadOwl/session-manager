@@ -182,9 +182,9 @@ impl SessionHandle {
         self.locator.display_source_path()
     }
 
-    /// Stable identity string (provider:session:locator). Currently asserted
-    /// only by the handle-distinctness tests; also the natural shape for a
-    /// future IPC detail key — keep rather than reimplement inline in tests.
+    /// Stable identity string (provider:session:locator). Test-only today;
+    /// keep/retire conditions live in the cognition doc (types.rs.md) —
+    /// search "detail_key() status note".
     #[allow(dead_code)]
     pub fn detail_key(&self) -> String {
         format!(

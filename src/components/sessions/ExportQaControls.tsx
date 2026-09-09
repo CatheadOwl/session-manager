@@ -1,8 +1,8 @@
 import { memo, useCallback, useState } from "react";
-import { CalendarClock, ChevronDown, Download } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, Download } from "lucide-react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import { useClickOutside } from "@/hooks/useClickOutside";
-import type { QaExportStatus } from "@/hooks/useQaExport"; // type-only: busy state for the button
+import type { QaExportStatus } from "@/hooks/useQaExport";
 import {
   dayStartToEpochMs,
   resolveTimeRange,
@@ -39,20 +39,26 @@ export const ExportQaControls = memo(function ExportQaControls({
   onExport,
   exportStatus,
 }: ExportQaControlsProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [draftRange, setDraftRange] = useState<DateRange | undefined>(undefined);
+  // One outside-click guard covers both the preset menu and the calendar
+  // popover — they live in the same container.
   const calendarRef = useClickOutside<HTMLDivElement>({
-    isOpen: calendarOpen,
-    onClose: () => setCalendarOpen(false),
+    isOpen: menuOpen || calendarOpen,
+    onClose: () => {
+      setMenuOpen(false);
+      setCalendarOpen(false);
+    },
   });
 
-  const handlePresetChange = useCallback(
+  const choosePreset = useCallback(
     (preset: TimeRangePreset) => {
+      setMenuOpen(false);
       if (preset === "custom") {
         setCalendarOpen(true);
         return;
       }
-      setCalendarOpen(false);
       onPresetChange(preset);
     },
     [onPresetChange],
@@ -77,25 +83,42 @@ export const ExportQaControls = memo(function ExportQaControls({
   return (
     <div className="export-row">
       <div className="export-row-main" ref={calendarRef}>
-        <div
-          className={`export-range-pill${hasResolvedRange ? " is-filtering" : ""}`}
-          title={hasResolvedRange ? `List filtered by: ${presetLabel}` : undefined}
-        >
-          <CalendarClock size={13} className="export-range-icon" aria-hidden="true" />
-          <select
-            id="export-time-range"
-            className="export-range-select"
-            value={timeRange.preset}
-            onChange={(event) => handlePresetChange(event.target.value as TimeRangePreset)}
+        <div className="export-range">
+          <button
+            type="button"
+            className={`export-range-pill${hasResolvedRange ? " is-filtering" : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             aria-label="Filter sessions by time"
+            onClick={() => setMenuOpen((open) => !open)}
+            title={hasResolvedRange ? `List filtered by: ${presetLabel}` : undefined}
           >
-            {PRESETS.map((preset) => (
-              <option key={preset.value} value={preset.value}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={13} className="export-range-chevron" aria-hidden="true" />
+            <CalendarClock size={13} className="export-range-icon" aria-hidden="true" />
+            <span className="export-range-value">{presetLabel}</span>
+            <ChevronDown size={13} className="export-range-chevron" aria-hidden="true" />
+          </button>
+
+          {menuOpen ? (
+            <div className="export-range-menu" role="menu" aria-label="Time range presets">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={timeRange.preset === preset.value}
+                  className={`export-range-item${
+                    timeRange.preset === preset.value ? " active" : ""
+                  }`}
+                  onClick={() => choosePreset(preset.value)}
+                >
+                  <span className="export-range-item-label">{preset.label}</span>
+                  {timeRange.preset === preset.value ? (
+                    <Check size={13} aria-hidden="true" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {calendarOpen ? (

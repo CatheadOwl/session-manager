@@ -196,6 +196,12 @@ pub struct ExportQaSessionsOptions {
     pub dest_path: String,
     #[serde(default = "default_export_format")]
     pub format: String,
+    /// Whether writing may overwrite an existing destination file. The UI
+    /// adapter passes `true` because the native save dialog has already
+    /// asked the user to confirm replacement; non-interactive adapters
+    /// should keep the safe default (refuse).
+    #[serde(default)]
+    pub overwrite: bool,
     /// Explicit pre-filtered session list ("export what you see": the UI has
     /// already applied folder/search/star/time filters). When absent, the
     /// core falls back to scanning by the time window (future CLI path).
@@ -239,7 +245,7 @@ pub async fn export_qa_sessions(
 
     let content = session_manager::render_export(&batch, options.from, options.to, format)?;
     let dest = std::path::PathBuf::from(&options.dest_path);
-    session_manager::write_export_file(&dest, &content)?;
+    session_manager::write_export_file(&dest, &content, options.overwrite)?;
 
     Ok(session_manager::ExportOutcome {
         count: batch.sessions.len(),

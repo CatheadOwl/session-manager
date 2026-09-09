@@ -115,6 +115,12 @@ export interface ExportQaSessionsOptions {
   /** Absolute destination file path (from the native save dialog). */
   destPath: string;
   format?: "json" | "markdown";
+  /**
+   * Allow overwriting an existing destination. The native save dialog has
+   * already confirmed replacement with the user when it returns a path, so
+   * the UI adapter passes true; the backend default is refuse.
+   */
+  overwrite?: boolean;
 }
 
 export const sessionsApi = {

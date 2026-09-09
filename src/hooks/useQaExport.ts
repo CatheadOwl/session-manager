@@ -54,6 +54,9 @@ export function useQaExport(scope: "active" | "archived") {
           sessions,
           destPath,
           format,
+          // The native save dialog already asked "replace file?" — a returned
+          // path with an existing file means the user confirmed replacement.
+          overwrite: true,
         });
         if (outcome.count === 0) {
           setStatus({

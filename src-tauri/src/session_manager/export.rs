@@ -308,9 +308,13 @@ fn render_markdown(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) 
     out
 }
 
-/// Write the rendered export to `path`. Refuses to overwrite an existing file.
-pub fn write_export_file(path: &Path, content: &str) -> Result<(), String> {
-    if path.exists() {
+/// Write the rendered export to `path`. Refuses to overwrite an existing
+/// destination unless `overwrite` is explicitly set — the default refusal is
+/// the adapter-independent safety rule (a CLI has no save dialog to confirm);
+/// interactive adapters may pass `overwrite: true` when the native dialog has
+/// already obtained the user's confirmation.
+pub fn write_export_file(path: &Path, content: &str, overwrite: bool) -> Result<(), String> {
+    if path.exists() && !overwrite {
         return Err(format!(
             "Destination file already exists: {} (choose another name)",
             path.display()
@@ -443,12 +447,14 @@ mod tests {
     }
 
     #[test]
-    fn write_export_file_refuses_overwrite() {
+    fn write_export_file_overwrite_semantics() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("export.json");
-        write_export_file(&path, "{}").expect("first write");
-        let err = write_export_file(&path, "{}").expect_err("should refuse overwrite");
+        write_export_file(&path, "{}", false).expect("first write");
+        let err = write_export_file(&path, "{}", false).expect_err("should refuse overwrite");
         assert!(err.contains("already exists"), "unexpected: {err}");
+        write_export_file(&path, "{\"v\":2}", true).expect("explicit overwrite allowed");
+        assert_eq!(std::fs::read_to_string(&path).expect("reread"), "{\"v\":2}");
     }
 
     // ─── End-to-end over a real provider scan ───────────────────────────

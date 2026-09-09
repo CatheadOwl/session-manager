@@ -102,7 +102,7 @@ export interface ForkTreeOptions {
 
 export interface ExportQaSessionsOptions {
   scope?: "active" | "archived";
-  /** Inclusive epoch-seconds window. */
+  /** Inclusive epoch-milliseconds window (app-wide timestamp unit). */
   from: number;
   to: number;
   providers?: string[];

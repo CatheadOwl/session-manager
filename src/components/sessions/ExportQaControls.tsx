@@ -5,6 +5,7 @@ import { useClickOutside } from "@/hooks/useClickOutside";
 import type { QaExportStatus } from "@/hooks/useQaExport";
 import {
   dayStartToEpochMs,
+  resolveTimeRange,
   type TimeRange,
   type TimeRangePreset,
 } from "@/utils/time-range";
@@ -64,6 +65,9 @@ export const ExportQaControls = memo(function ExportQaControls({
   }, [draftRange, onCustomRange]);
 
   const isExporting = exportStatus.state === "exporting";
+  // Export needs a concrete window; "All time" (or an incomplete custom
+  // range) resolves to null — disable instead of failing after the click.
+  const hasResolvedRange = resolveTimeRange(timeRange) !== null;
 
   const presetLabel =
     timeRange.preset === "custom" && timeRange.customFrom !== undefined
@@ -123,8 +127,12 @@ export const ExportQaControls = memo(function ExportQaControls({
         type="button"
         className="secondary-button export-button"
         onClick={onExport}
-        disabled={isExporting}
-        title={`Export Q&A sessions (${presetLabel}) to a file`}
+        disabled={isExporting || !hasResolvedRange}
+        title={
+          hasResolvedRange
+            ? `Export Q&A sessions (${presetLabel}) to a file`
+            : "Pick a time range first — “All time” cannot be exported"
+        }
       >
         <Download size={14} aria-hidden="true" />
         {isExporting ? "Exporting…" : "Export Q&A"}

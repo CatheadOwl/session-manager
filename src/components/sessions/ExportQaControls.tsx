@@ -1,5 +1,5 @@
 import { memo, useCallback, useState } from "react";
-import { Download } from "lucide-react";
+import { CalendarClock, ChevronDown, Download } from "lucide-react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import type { QaExportStatus } from "@/hooks/useQaExport"; // type-only: busy state for the button
@@ -77,22 +77,26 @@ export const ExportQaControls = memo(function ExportQaControls({
   return (
     <div className="export-row">
       <div className="export-row-main" ref={calendarRef}>
-        <label className="export-range-label" htmlFor="export-time-range">
-          Time
-        </label>
-        <select
-          id="export-time-range"
-          className="export-range-select"
-          value={timeRange.preset}
-          onChange={(event) => handlePresetChange(event.target.value as TimeRangePreset)}
-          aria-label="Filter sessions by time"
+        <div
+          className={`export-range-pill${hasResolvedRange ? " is-filtering" : ""}`}
+          title={hasResolvedRange ? `List filtered by: ${presetLabel}` : undefined}
         >
-          {PRESETS.map((preset) => (
-            <option key={preset.value} value={preset.value}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
+          <CalendarClock size={13} className="export-range-icon" aria-hidden="true" />
+          <select
+            id="export-time-range"
+            className="export-range-select"
+            value={timeRange.preset}
+            onChange={(event) => handlePresetChange(event.target.value as TimeRangePreset)}
+            aria-label="Filter sessions by time"
+          >
+            {PRESETS.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={13} className="export-range-chevron" aria-hidden="true" />
+        </div>
 
         {calendarOpen ? (
           <div className="export-calendar-popover" role="dialog" aria-label="Custom time range">

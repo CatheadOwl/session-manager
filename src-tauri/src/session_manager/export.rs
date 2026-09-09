@@ -235,21 +235,30 @@ impl QaExportFormat {
 }
 
 /// Render the batch plus export envelope (range, timestamp) into the
-/// requested file format.
+/// requested file format. `include_provenance: false` omits provenance
+/// blocks/fields entirely (CLI `--no-metadata`); provenance is on by
+/// default.
 pub fn render_export(
     batch: &QaExportBatch,
     from: i64,
     to: i64,
     format: QaExportFormat,
+    include_provenance: bool,
 ) -> Result<String, String> {
     let exported_at = chrono::Utc::now().timestamp();
     match format {
-        QaExportFormat::Json => render_json(batch, from, to, exported_at),
-        QaExportFormat::Markdown => Ok(render_markdown(batch, from, to, exported_at)),
+        QaExportFormat::Json => render_json(batch, from, to, exported_at, include_provenance),
+        QaExportFormat::Markdown => Ok(render_markdown(batch, from, to, exported_at, include_provenance)),
     }
 }
 
-fn render_json(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) -> Result<String, String> {
+fn render_json(
+    batch: &QaExportBatch,
+    from: i64,
+    to: i64,
+    exported_at: i64,
+    include_provenance: bool,
+) -> Result<String, String> {
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Envelope<'a> {
@@ -264,10 +273,44 @@ fn render_json(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) -> R
         sessions: &batch.sessions,
         skipped: &batch.skipped,
     };
-    serde_json::to_string_pretty(&envelope).map_err(|e| format!("Failed to serialize export: {e}"))
+    if include_provenance {
+        return serde_json::to_string_pretty(&envelope)
+            .map_err(|e| format!("Failed to serialize export: {e}"));
+    }
+    // Provenance-free view: sessions rendered as bare Q&A lists.
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct BareSession<'a> {
+        qa: &'a [QaEntry],
+    }
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct BareEnvelope<'a> {
+        exported_at: i64,
+        range: (i64, i64),
+        sessions: Vec<BareSession<'a>>,
+        skipped: &'a [ExportSkippedItem],
+    }
+    let bare = BareEnvelope {
+        exported_at,
+        range: (from, to),
+        sessions: batch
+            .sessions
+            .iter()
+            .map(|s| BareSession { qa: &s.qa })
+            .collect(),
+        skipped: &batch.skipped,
+    };
+    serde_json::to_string_pretty(&bare).map_err(|e| format!("Failed to serialize export: {e}"))
 }
 
-fn render_markdown(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) -> String {
+fn render_markdown(
+    batch: &QaExportBatch,
+    from: i64,
+    to: i64,
+    exported_at: i64,
+    include_provenance: bool,
+) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(
@@ -278,8 +321,11 @@ fn render_markdown(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) 
     );
 
     for session in &batch.sessions {
-        let p = &session.provenance;
-        let title = p.title.as_deref().unwrap_or(&p.session_id);
+        let title = session
+            .provenance
+            .title
+            .as_deref()
+            .unwrap_or(&session.provenance.session_id);
         let _ = writeln!(out, "## {title}\n");
         for entry in &session.qa {
             let _ = writeln!(out, "**Q:** {}\n", entry.question);
@@ -288,22 +334,25 @@ fn render_markdown(batch: &QaExportBatch, from: i64, to: i64, exported_at: i64) 
         if session.qa.is_empty() {
             let _ = writeln!(out, "_(no Q&A pairs)_\n");
         }
-        let _ = writeln!(out, "<details><summary>Provenance</summary>\n");
-        let _ = writeln!(out, "- provider: `{}`", p.provider_id);
-        let _ = writeln!(out, "- session: `{}`", p.session_id);
-        if let Some(dir) = &p.project_dir {
-            let _ = writeln!(out, "- project: `{dir}`");
+        if include_provenance {
+            let p = &session.provenance;
+            let _ = writeln!(out, "<details><summary>Provenance</summary>\n");
+            let _ = writeln!(out, "- provider: `{}`", p.provider_id);
+            let _ = writeln!(out, "- session: `{}`", p.session_id);
+            if let Some(dir) = &p.project_dir {
+                let _ = writeln!(out, "- project: `{dir}`");
+            }
+            if let Some(ts) = p.created_at {
+                let _ = writeln!(out, "- createdAt: `{ts}`");
+            }
+            if let Some(ts) = p.last_active_at {
+                let _ = writeln!(out, "- lastActiveAt: `{ts}`");
+            }
+            if let Some(locator) = &p.locator {
+                let _ = writeln!(out, "- locator: `{}`", locator.detail_key_part());
+            }
+            let _ = writeln!(out, "\n</details>\n");
         }
-        if let Some(ts) = p.created_at {
-            let _ = writeln!(out, "- createdAt: `{ts}`");
-        }
-        if let Some(ts) = p.last_active_at {
-            let _ = writeln!(out, "- lastActiveAt: `{ts}`");
-        }
-        if let Some(locator) = &p.locator {
-            let _ = writeln!(out, "- locator: `{}`", locator.detail_key_part());
-        }
-        let _ = writeln!(out, "\n</details>\n");
     }
     out
 }
@@ -439,7 +488,7 @@ mod tests {
             }],
             skipped: vec![],
         };
-        let json = render_export(&batch, 0, 10, QaExportFormat::Json).expect("render");
+        let json = render_export(&batch, 0, 10, QaExportFormat::Json, true).expect("render");
         let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
         assert_eq!(value["range"][0], 0);
         assert_eq!(value["sessions"][0]["provenance"]["sessionId"], "s1");

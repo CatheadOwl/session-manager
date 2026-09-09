@@ -151,4 +151,9 @@ impl ProviderRegistry {
     pub fn len(&self) -> usize {
         self.providers.len()
     }
+
+    /// Registered provider ids in registration order (CLI agent listing).
+    pub fn ids(&self) -> impl Iterator<Item = &String> {
+        self.order.iter()
+    }
 }

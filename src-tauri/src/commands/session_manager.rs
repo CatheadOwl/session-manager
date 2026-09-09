@@ -243,7 +243,7 @@ pub async fn export_qa_sessions(
         }
     );
 
-    let content = session_manager::render_export(&batch, options.from, options.to, format)?;
+    let content = session_manager::render_export(&batch, options.from, options.to, format, true)?;
     let dest = std::path::PathBuf::from(&options.dest_path);
     session_manager::write_export_file(&dest, &content, options.overwrite)?;
 

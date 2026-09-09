@@ -1,3 +1,4 @@
+mod cli;
 mod commands;
 mod config;
 mod diagnostics;
@@ -51,6 +52,13 @@ fn clamp_window_position<R: Runtime>(
 }
 
 pub fn run() {
+    // CLI mode (ADR 0005): a known subcommand as the first argument runs the
+    // CLI path and exits before any Tauri init — no window flash. Anything
+    // else launches the GUI unchanged.
+    if cli::is_cli_invocation() {
+        std::process::exit(cli::run_cli());
+    }
+
     let _ = diagnostics::init();
 
     tauri::Builder::default()

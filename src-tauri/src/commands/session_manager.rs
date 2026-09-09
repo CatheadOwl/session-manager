@@ -254,6 +254,57 @@ pub async fn export_qa_sessions(
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The IPC wire format is camelCase; verify the option bundle round-trips
+    /// with the fields the frontend actually sends, and that optional fields
+    /// (`sessions`, `providers`, `overwrite`) default safely.
+    #[test]
+    fn export_options_deserialize_camel_case_wire() {
+        let full: ExportQaSessionsOptions = serde_json::from_str(
+            r#"{
+                "scope": "archived",
+                "from": 1000,
+                "to": 2000,
+                "providers": ["claude"],
+                "sessions": [
+                    {
+                        "providerId": "claude",
+                        "sessionId": "s1",
+                        "locator": { "kind": "file", "path": "/tmp/s1.jsonl" }
+                    }
+                ],
+                "destPath": "/tmp/out.json",
+                "format": "markdown",
+                "overwrite": true
+            }"#,
+        )
+        .expect("full payload");
+
+        assert_eq!(full.scope, "archived");
+        assert_eq!(full.from, 1000);
+        assert_eq!(full.providers.as_deref(), Some(&["claude".to_string()][..]));
+        let sessions = full.sessions.expect("sessions present");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "s1");
+        assert_eq!(full.dest_path, "/tmp/out.json");
+        assert_eq!(full.format, "markdown");
+        assert!(full.overwrite);
+
+        let minimal: ExportQaSessionsOptions = serde_json::from_str(
+            r#"{ "from": 0, "to": 1, "destPath": "/tmp/out.json" }"#,
+        )
+        .expect("minimal payload");
+        assert_eq!(minimal.scope, "active");
+        assert_eq!(minimal.format, "json");
+        assert!(minimal.providers.is_none());
+        assert!(minimal.sessions.is_none());
+        assert!(!minimal.overwrite);
+    }
+}
+
 #[tauri::command]
 pub async fn get_app_metadata(
     manager: tauri::State<'_, MetadataManager>,

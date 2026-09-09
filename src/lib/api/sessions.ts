@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SessionDetail, SessionLocator, SessionMessage, SessionMeta } from "@/types";
+import type {
+  ExportOutcome,
+  SessionDetail,
+  SessionLocator,
+  SessionMessage,
+  SessionMeta,
+} from "@/types";
 import { normalizePinnedFolders } from "@/lib/domain";
 
 export interface SessionHandleOptions {
@@ -94,6 +100,17 @@ export interface ForkTreeOptions {
   projectDir?: string;
 }
 
+export interface ExportQaSessionsOptions {
+  scope?: "active" | "archived";
+  /** Inclusive epoch-seconds window. */
+  from: number;
+  to: number;
+  providers?: string[];
+  /** Absolute destination file path (from the native save dialog). */
+  destPath: string;
+  format?: "json" | "markdown";
+}
+
 export const sessionsApi = {
   async list(options?: ListSessionsOptions): Promise<SessionMeta[]> {
     return await invoke("list_sessions", { options });
@@ -186,5 +203,13 @@ export const sessionsApi = {
 
   async getForkTree(): Promise<ForkTreeResult> {
     return await invoke("get_fork_tree", {});
+  },
+
+  /**
+   * Export Q&A-distilled sessions for a time window to a file. Adapter-only:
+   * filtering, distilling, and provenance assembly all happen in Rust.
+   */
+  async exportQaSessions(options: ExportQaSessionsOptions): Promise<ExportOutcome> {
+    return await invoke("export_qa_sessions", { options });
   },
 };

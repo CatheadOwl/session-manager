@@ -5,7 +5,10 @@ import type { SessionMeta } from "@/types";
 import type { TreeNodeData } from "@/lib/api/sessions";
 import { SessionItem } from "./SessionItem";
 import { TreeView } from "./TreeView";
+import { ExportQaControls } from "./ExportQaControls";
 import { getSessionKey, supportsLifecycleOperations } from "@/lib/domain";
+import type { QaExportStatus } from "@/hooks/useQaExport";
+import type { TimeRange, TimeRangePreset } from "@/utils/time-range";
 
 // ─── Selection context (ref-based, avoids re-render on mode toggle) ────────
 
@@ -55,6 +58,12 @@ interface SessionListProps {
   onSelectSessionKeys: (keys: string[]) => void;
   onUnselectSessionKeys: (keys: string[]) => void;
   onBatchDelete: () => void;
+  // Q&A export props
+  timeRange: TimeRange;
+  onTimeRangePresetChange: (preset: TimeRangePreset) => void;
+  onCustomTimeRange: (from: number, to: number) => void;
+  onExportQa: () => void;
+  exportStatus: QaExportStatus;
 }
 
 export const SessionList = memo(function SessionList({
@@ -87,6 +96,11 @@ export const SessionList = memo(function SessionList({
   onSelectSessionKeys,
   onUnselectSessionKeys,
   onBatchDelete,
+  timeRange,
+  onTimeRangePresetChange,
+  onCustomTimeRange,
+  onExportQa,
+  exportStatus,
 }: SessionListProps) {
   // Ref-based context: mode toggle won't trigger re-render of context consumers
   const modeRef = useRef(selectionMode);
@@ -194,6 +208,15 @@ export const SessionList = memo(function SessionList({
             </button>
           </div>
         </div>
+
+        {/* Row 2.5: Time filter + Q&A export */}
+        <ExportQaControls
+          timeRange={timeRange}
+          onPresetChange={onTimeRangePresetChange}
+          onCustomRange={onCustomTimeRange}
+          onExport={onExportQa}
+          exportStatus={exportStatus}
+        />
 
         {/* Row 3 (list view only): Selection mode */}
         {viewMode === "flat" ? (

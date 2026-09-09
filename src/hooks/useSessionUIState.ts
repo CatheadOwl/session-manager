@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import type { SessionMeta } from "@/types";
+import { type TimeRange, type TimeRangePreset } from "@/utils/time-range";
 
 export interface PendingFolderOperation {
   folder: string;
@@ -20,6 +21,7 @@ export function useSessionUIState() {
   const [scope, setScope] = useState<"active" | "archived">("active");
   const [viewMode, setViewMode] = usePersistentState<"flat" | "tree">("sm:view-mode", "flat");
   const [showStarredOnly, setShowStarredOnly] = useState(false);
+  const [timeRange, setTimeRange] = useState<TimeRange>({ preset: "all" });
   const [forkJumpIndex, setForkJumpIndex] = useState<number | undefined>(undefined);
   const [sessionPendingDelete, setSessionPendingDelete] = useState<SessionMeta | null>(null);
   const [batchDeletePending, setBatchDeletePending] = useState<SessionMeta[] | null>(null);
@@ -37,6 +39,14 @@ export function useSessionUIState() {
 
   const toggleStarFilter = useCallback(() => {
     setShowStarredOnly((prev) => !prev);
+  }, []);
+
+  const setTimeRangePreset = useCallback((preset: TimeRangePreset) => {
+    setTimeRange({ preset });
+  }, []);
+
+  const setCustomTimeRange = useCallback((from: number, to: number) => {
+    setTimeRange({ preset: "custom", customFrom: from, customTo: to });
   }, []);
 
   const toggleSelectionMode = useCallback(() => {
@@ -116,6 +126,9 @@ export function useSessionUIState() {
     toggleViewMode,
     showStarredOnly,
     toggleStarFilter,
+    timeRange,
+    setTimeRangePreset,
+    setCustomTimeRange,
     forkJumpIndex,
     setForkJumpIndex,
     sessionPendingDelete,

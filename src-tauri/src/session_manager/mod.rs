@@ -1,6 +1,7 @@
 pub mod metadata;
 pub mod providers;
 
+mod export;
 mod messages;
 mod operations;
 mod scan;
@@ -24,9 +25,10 @@ pub fn parse_session_meta(registry: &ProviderRegistry, path: &Path) -> Option<Se
 
 // Re-export public types and functions
 pub use types::{
-    CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, SessionDetail, SessionHandle,
-    SessionHandleRequest, SessionLocator, SessionMessage, SessionMeta, SessionScope, TokenUsage,
-    ToolCallInfo,
+    CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, ExportOutcome,
+    ExportSkippedItem, QaEntry, QaSessionExport, SessionDetail, SessionHandle,
+    SessionHandleRequest, SessionLocator, SessionMessage, SessionMeta, SessionProvenance,
+    SessionScope, TokenUsage, ToolCallInfo,
 };
 
 // Registry-aware re-exports: these functions now require a registry reference.
@@ -42,6 +44,9 @@ pub use operations::{
     restore_sessions,
 };
 pub use scan::scan_sessions_with_scope;
+
+// Q&A export capability (time-ranged, session-level, provenance-preserving).
+pub use export::{export_qa_sessions, render_export, write_export_file, QaExportFormat};
 
 /// Build and return the provider registry with all built-in providers registered.
 /// Called once during Tauri setup.

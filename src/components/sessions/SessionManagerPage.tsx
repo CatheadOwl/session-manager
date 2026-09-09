@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { getSessionFromMap } from "@/lib/session-map";
+import { useQaExport } from "@/hooks/useQaExport";
 import { useSessionMutations } from "@/hooks/useSessionMutations";
 import { useSessionQueries } from "@/hooks/useSessionQueries";
 import { useSessionUIState } from "@/hooks/useSessionUIState";
@@ -21,8 +22,20 @@ import { SessionList } from "./SessionList";
 
 export function SessionManagerPage() {
   const ui = useSessionUIState();
-  const queries = useSessionQueries(ui.scope, ui.selectedFolder, ui.selectedKey, ui.search, ui.viewMode === "tree");
+  const queries = useSessionQueries(
+    ui.scope,
+    ui.selectedFolder,
+    ui.selectedKey,
+    ui.search,
+    ui.viewMode === "tree",
+    ui.timeRange,
+  );
   const updater = useUpdater();
+  const qaExport = useQaExport(ui.scope);
+
+  const handleExportQa = useCallback(() => {
+    void qaExport.exportRange(queries.exportRange);
+  }, [qaExport, queries.exportRange]);
 
   // ─── Folder operation result handler ──────────────────────────────
   const handleFolderOperationResult = useCallback(
@@ -294,6 +307,11 @@ export function SessionManagerPage() {
         onSelectSessionKeys={ui.selectSessionKeys}
         onUnselectSessionKeys={ui.unselectSessionKeys}
         onBatchDelete={handleBatchDelete}
+        timeRange={ui.timeRange}
+        onTimeRangePresetChange={ui.setTimeRangePreset}
+        onCustomTimeRange={ui.setCustomTimeRange}
+        onExportQa={handleExportQa}
+        exportStatus={qaExport.status}
       />
       <SessionDetail
         session={queries.selectedSession}

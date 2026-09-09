@@ -59,3 +59,38 @@ export interface SessionDetail {
   qaPairs: QaPair[];
   rawContent?: string | null;
 }
+
+// ─── Q&A export (time-ranged, session-level, provenance-preserving) ─────────
+
+export interface QaEntry {
+  question: string;
+  answer: string;
+  ts?: number;
+}
+
+export interface SessionProvenance {
+  providerId: string;
+  sessionId: string;
+  title?: string;
+  projectDir?: string | null;
+  createdAt?: number;
+  lastActiveAt?: number;
+  locator?: SessionLocator;
+}
+
+export interface QaSessionExport {
+  provenance: SessionProvenance;
+  qa: QaEntry[];
+}
+
+export interface ExportSkippedItem {
+  providerId: string;
+  sessionId: string;
+  error: string;
+}
+
+export interface ExportOutcome {
+  count: number;
+  skipped: ExportSkippedItem[];
+  destPath: string;
+}

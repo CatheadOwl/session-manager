@@ -58,6 +58,11 @@ describe("SessionList", () => {
           onSelectSessionKeys={vi.fn()}
           onUnselectSessionKeys={vi.fn()}
           onBatchDelete={vi.fn()}
+          timeRange={{ preset: "all" }}
+          onTimeRangePresetChange={vi.fn()}
+          onCustomTimeRange={vi.fn()}
+          onExportQa={vi.fn()}
+          exportStatus={{ state: "idle", message: "" }}
         />
       </QueryClientProvider>,
     );
@@ -119,6 +124,11 @@ describe("SessionList", () => {
               onSelectSessionKeys={handleSelectKeys}
               onUnselectSessionKeys={handleUnselectKeys}
               onBatchDelete={vi.fn()}
+              timeRange={{ preset: "all" }}
+              onTimeRangePresetChange={vi.fn()}
+              onCustomTimeRange={vi.fn()}
+              onExportQa={vi.fn()}
+              exportStatus={{ state: "idle", message: "" }}
             />
           </QueryClientProvider>
           <div data-testid="selected-keys">{selectedKeys.join(",")}</div>

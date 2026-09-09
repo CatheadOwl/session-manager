@@ -262,6 +262,75 @@ pub enum SessionScope {
     Archived,
 }
 
+/// One distilled question-answer pair with materialized content (export shape).
+///
+/// Unlike `QaPair` (index pair for the detail view), `QaEntry` carries the
+/// actual text so export consumers never need the original message list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaEntry {
+    pub question: String,
+    /// Same-turn assistant texts joined with a blank line (merge semantics).
+    pub answer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts: Option<i64>,
+}
+
+/// Provenance metadata kept alongside distilled content for source tracing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProvenance {
+    pub provider_id: String,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<SessionLocator>,
+}
+
+/// A single session's distilled Q&A plus its provenance.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaSessionExport {
+    pub provenance: SessionProvenance,
+    pub qa: Vec<QaEntry>,
+}
+
+/// A session that was selected by the time filter but failed to load.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSkippedItem {
+    pub provider_id: String,
+    pub session_id: String,
+    pub error: String,
+}
+
+/// Batch result of an export run: distilled sessions plus skip bookkeeping.
+///
+/// An empty time window is a success with zero sessions; individual load
+/// failures are recorded in `skipped` instead of failing the whole batch.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QaExportBatch {
+    pub sessions: Vec<QaSessionExport>,
+    pub skipped: Vec<ExportSkippedItem>,
+}
+
+/// Final outcome after writing the export file to disk.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOutcome {
+    pub count: usize,
+    pub skipped: Vec<ExportSkippedItem>,
+    pub dest_path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -182,6 +182,62 @@ pub async fn restore_session(
     )
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportQaSessionsOptions {
+    #[serde(default = "super::default_scope")]
+    pub scope: String,
+    /// Inclusive epoch-milliseconds window (app-wide timestamp unit).
+    pub from: i64,
+    pub to: i64,
+    #[serde(default)]
+    pub providers: Option<Vec<String>>,
+    /// Absolute destination file path chosen via the native save dialog.
+    pub dest_path: String,
+    #[serde(default = "default_export_format")]
+    pub format: String,
+}
+
+fn default_export_format() -> String {
+    "json".to_string()
+}
+
+/// Adapter for the export core: translates parameters, delegates all logic
+/// to `session_manager::export_qa_sessions`, renders, and writes the file.
+#[tauri::command]
+pub async fn export_qa_sessions(
+    registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    options: ExportQaSessionsOptions,
+) -> Result<session_manager::ExportOutcome, String> {
+    let session_scope = match options.scope.as_str() {
+        "archived" => session_manager::SessionScope::Archived,
+        _ => session_manager::SessionScope::Active,
+    };
+    let format = session_manager::QaExportFormat::parse(&options.format)?;
+
+    let batch = run_blocking!(
+        registry,
+        reg,
+        session_manager::export_qa_sessions(
+            &reg,
+            &session_scope,
+            options.from,
+            options.to,
+            options.providers.as_deref(),
+        )
+    );
+
+    let content = session_manager::render_export(&batch, options.from, options.to, format)?;
+    let dest = std::path::PathBuf::from(&options.dest_path);
+    session_manager::write_export_file(&dest, &content)?;
+
+    Ok(session_manager::ExportOutcome {
+        count: batch.sessions.len(),
+        skipped: batch.skipped,
+        dest_path: options.dest_path,
+    })
+}
+
 #[tauri::command]
 pub async fn get_app_metadata(
     manager: tauri::State<'_, MetadataManager>,

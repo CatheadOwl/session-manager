@@ -56,6 +56,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let metadata_path =
                 crate::config::get_app_metadata_path().expect("Failed to resolve metadata path");
@@ -135,6 +136,7 @@ pub fn run() {
             commands::session_manager::set_pinned_folders,
             commands::session_manager::archive_session,
             commands::session_manager::restore_session,
+            commands::session_manager::export_qa_sessions,
             commands::fork_tree::compute_fork_tree,
             commands::fork_tree::get_fork_tree,
         ])

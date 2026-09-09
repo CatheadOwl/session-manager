@@ -18,6 +18,7 @@ const getDeletableSessions = (sessions: SessionMeta[]): SessionLifecycleOperatio
     .filter((item): item is SessionLifecycleOperationOptions => Boolean(item));
 import { FolderFilter } from "./FolderFilter";
 import { SessionDetail } from "./SessionDetail";
+import { ExportToast } from "./ExportToast";
 import { SessionList } from "./SessionList";
 
 export function SessionManagerPage() {
@@ -351,6 +352,7 @@ export function SessionManagerPage() {
           }
         />
       ) : null}
+      <ExportToast status={qaExport.status} onDismiss={qaExport.clearStatus} />
     </div>
   );
 }

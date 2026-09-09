@@ -42,21 +42,6 @@
   white-space: nowrap;
 }
 
-.export-status-ok {
-  flex-basis: 100%;
-  font-size: 0.72rem;
-  opacity: 0.85;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.export-status-ok + .error-box,
-.export-row .error-box {
-  flex-basis: 100%;
-  font-size: 0.72rem;
-}
-
 /* Custom range calendar popover */
 .export-calendar-popover {
   position: absolute;
@@ -82,4 +67,51 @@
   --rdp-accent-color: var(--accent-color, #4a90d9);
   --rdp-today-color: var(--accent-color, #4a90d9);
   font-size: 0.8rem;
+}
+
+/* Floating export result toast (bottom-right, transient) */
+.qa-export-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 26rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #ccc);
+  border-left: 3px solid var(--accent-color, #4a90d9);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: 0.8rem;
+}
+
+.qa-export-toast-error {
+  border-left-color: var(--danger-color, #d9534f);
+}
+
+.qa-export-toast-message {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-export-toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.qa-export-toast-close:hover {
+  color: var(--text-primary, #333);
+  background: var(--bg-secondary, #f0f0f0);
 }

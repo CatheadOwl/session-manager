@@ -2,7 +2,7 @@ import { memo, useCallback, useState } from "react";
 import { Download } from "lucide-react";
 import { DayPicker, type DateRange } from "react-day-picker";
 import { useClickOutside } from "@/hooks/useClickOutside";
-import type { QaExportStatus } from "@/hooks/useQaExport";
+import type { QaExportStatus } from "@/hooks/useQaExport"; // type-only: busy state for the button
 import {
   dayStartToEpochMs,
   resolveTimeRange,
@@ -137,16 +137,8 @@ export const ExportQaControls = memo(function ExportQaControls({
         <Download size={14} aria-hidden="true" />
         {isExporting ? "Exporting…" : "Export Q&A"}
       </button>
-
-      {exportStatus.message && exportStatus.state !== "exporting" ? (
-        <div
-          className={`export-status ${exportStatus.state === "error" ? "error-box" : "export-status-ok"}`}
-          role="status"
-          title={exportStatus.message}
-        >
-          {exportStatus.message}
-        </div>
-      ) : null}
+      {/* Result feedback lives in ExportToast (bottom-right); this toolbar
+          only conveys busy state via the button itself. */}
     </div>
   );
 });

@@ -34,6 +34,7 @@ The project was inspired by [CC Switch's Session Manager](https://github.com/far
 - **Starred sessions** - mark important sessions and filter the list to starred items.
 - **Archive and restore** - move supported sessions between active and archived directories, including folder-level batch archive/restore.
 - **Batch delete** - select multiple sessions in list view and send them to the system trash.
+- **Time-ranged Q&A export** - filter the list by time presets or a custom range and export the visible sessions as Q&A-distilled JSON or Markdown with full provenance (ADR 0002/0003).
 - **Safer destructive actions** - delete validates the provider root and session id before trashing the session file and any sidecar directory.
 - **Auto updates** - the desktop app checks, downloads, and installs updates through Tauri's updater flow.
 

@@ -182,6 +182,10 @@ impl SessionHandle {
         self.locator.display_source_path()
     }
 
+    /// Stable identity string (provider:session:locator). Currently asserted
+    /// only by the handle-distinctness tests; also the natural shape for a
+    /// future IPC detail key — keep rather than reimplement inline in tests.
+    #[allow(dead_code)]
     pub fn detail_key(&self) -> String {
         format!(
             "{}:{}:{}",

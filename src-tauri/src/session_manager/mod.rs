@@ -26,9 +26,8 @@ pub fn parse_session_meta(registry: &ProviderRegistry, path: &Path) -> Option<Se
 // Re-export public types and functions
 pub use types::{
     CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, ExportOutcome,
-    ExportSkippedItem, QaEntry, QaSessionExport, SessionDetail, SessionHandle,
-    SessionHandleRequest, SessionLocator, SessionMessage, SessionMeta, SessionProvenance,
-    SessionScope, TokenUsage, ToolCallInfo,
+    SessionDetail, SessionHandle, SessionHandleRequest, SessionLocator, SessionMessage,
+    SessionMeta, SessionScope, TokenUsage, ToolCallInfo,
 };
 
 // Registry-aware re-exports: these functions now require a registry reference.

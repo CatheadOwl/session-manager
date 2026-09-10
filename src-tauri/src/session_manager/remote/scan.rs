@@ -455,6 +455,19 @@ pub fn scan_remote_source_with_home(
             source_id: source.id.clone(),
             path: blob.path.clone(),
         });
+        // Display normalization: prefix project_dir with the source id so
+        // folder grouping (whole-string equality on the normalized dir)
+        // never merges the same-named project across machines, and the
+        // group name tells the user WHICH machine it belongs to
+        // (`ali:/home/admin/projects/GaaS_meta`). Keyed by the entry id,
+        // not the auth alias or label: the id is the stable, unique anchor
+        // shared by both auth modes (sshConfig and manual). Grouping never
+        // parses the prefix, so ids containing ':' are unambiguous. The
+        // provider-parsed cwd itself is NOT rewritten — this is the same
+        // layer and rationale as the locator re-anchoring above.
+        if let Some(dir) = meta.project_dir.take() {
+            meta.project_dir = Some(format!("{}:{}", source.id, dir));
+        }
         sessions.push(meta);
     }
     // The tempdir (and every bridge file) is dropped here — scratch by
@@ -640,6 +653,13 @@ mod tests {
             if !first.contains(&marker) {
                 return None;
             }
+            // Optional `"project":"<dir>"` marker exercises the project_dir
+            // plumbing (source-id prefix) without a real provider format.
+            let project_dir = first
+                .split("\"project\":\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_string);
             let session_id = path.file_stem()?.to_str()?.to_string();
             let file = path.to_string_lossy().into_owned();
             Some(SessionMeta {
@@ -647,7 +667,7 @@ mod tests {
                 session_id,
                 title: Some(self.id.to_string()),
                 summary: None,
-                project_dir: None,
+                project_dir,
                 created_at: None,
                 last_active_at: None,
                 source_path: Some(file.clone()),
@@ -909,6 +929,78 @@ mod tests {
     }
 
     // ── scan core: per-root provider ownership, locators, skip semantics
+
+    #[test]
+    fn scan_prefixes_project_dir_with_source_id_and_keeps_none() {
+        // Display normalization: remote project_dir gains the source-id
+        // prefix so the same-named project on two machines never merges in
+        // folder grouping (whole-string equality); None stays None. The
+        // same content scanned under two source ids yields two distinct
+        // dirs — grouping isolation by construction.
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![home.path().join(".alpha")],
+        }]);
+        let mut contents = HashMap::new();
+        contents.insert(
+            "/r/proj.jsonl".to_string(),
+            session_bytes(
+                "{\"provider\":\"alpha\",\"project\":\"/home/admin/projects/GaaS_meta\"}",
+                20,
+                5,
+            ),
+        );
+        contents.insert(
+            "/r/bare.jsonl".to_string(),
+            session_bytes("{\"provider\":\"alpha\"}", 20, 5),
+        );
+        let fetch = FakeFetch::new(
+            vec![
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/proj.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/bare.jsonl".to_string(),
+                },
+            ],
+            contents,
+        );
+
+        let find = |id: &str| {
+            scan_remote_source_with_home(
+                &registry,
+                &fetch,
+                &ssh_source(id),
+                &SessionScope::Active,
+                home.path(),
+            )
+            .expect("scan")
+            .into_iter()
+            .map(|m| m.project_dir)
+            .collect::<Vec<_>>()
+        };
+
+        let mut ali = find("ali");
+        ali.sort();
+        assert_eq!(
+            ali,
+            vec![
+                None,
+                Some("ali:/home/admin/projects/GaaS_meta".to_string())
+            ]
+        );
+        let office = find("office");
+        assert_eq!(
+            office,
+            vec![
+                None,
+                Some("office:/home/admin/projects/GaaS_meta".to_string())
+            ]
+        );
+    }
 
     #[test]
     fn scan_routes_each_file_to_its_roots_provider_and_anchors_remote_locators() {

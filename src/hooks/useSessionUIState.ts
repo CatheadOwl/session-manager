@@ -94,6 +94,19 @@ export function useSessionUIState() {
     });
   }, []);
 
+  // Drop every checked key that is not in the retain list. The page runs
+  // this whenever the visible list changes, keeping the checked set a
+  // subset of the visible list — so every selection consumer (batch
+  // delete, Q&A export) operates on one scope and no action can target a
+  // session outside the current view.
+  const retainSessionKeys = useCallback((retainKeys: string[]) => {
+    const keep = new Set(retainKeys);
+    setSelectedSessionKeys((prev) => {
+      const next = prev.filter((key) => keep.has(key));
+      return next.length === prev.length ? prev : next;
+    });
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelectedSessionKeys([]);
     setSelectionMode(false);
@@ -143,6 +156,7 @@ export function useSessionUIState() {
     toggleSessionSelection,
     selectSessionKeys,
     unselectSessionKeys,
+    retainSessionKeys,
     clearSelection,
   };
 }

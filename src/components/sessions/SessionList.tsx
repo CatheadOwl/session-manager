@@ -8,6 +8,7 @@ import { TreeView } from "./TreeView";
 import { ExportQaControls } from "./ExportQaControls";
 import { getSessionKey, supportsLifecycleOperations } from "@/lib/domain";
 import type { QaExportStatus } from "@/hooks/useQaExport";
+import { filterExportableSessions } from "@/hooks/useQaExport";
 import type { TimeRange, TimeRangePreset } from "@/utils/time-range";
 
 // ─── Selection context (ref-based, avoids re-render on mode toggle) ────────
@@ -59,6 +60,10 @@ interface SessionListProps {
   onUnselectSessionKeys: (keys: string[]) => void;
   onBatchDelete: () => void;
   // Q&A export props
+  /** Resolved export list from the page: the visible list, narrowed to the
+   *  checked sessions when selection mode is on. Single source for both the
+   *  export call and the hover count, so display and export cannot drift. */
+  exportSessions: SessionMeta[];
   timeRange: TimeRange;
   onTimeRangePresetChange: (preset: TimeRangePreset) => void;
   onCustomTimeRange: (from: number, to: number) => void;
@@ -96,6 +101,7 @@ export const SessionList = memo(function SessionList({
   onSelectSessionKeys,
   onUnselectSessionKeys,
   onBatchDelete,
+  exportSessions,
   timeRange,
   onTimeRangePresetChange,
   onCustomTimeRange,
@@ -105,6 +111,20 @@ export const SessionList = memo(function SessionList({
   // Ref-based context: mode toggle won't trigger re-render of context consumers
   const modeRef = useRef(selectionMode);
   modeRef.current = selectionMode;
+
+  // Hover transparency for the export button: the same pre-filter
+  // (filterExportableSessions) that useQaExport applies when building the
+  // request — remote sessions are excluded before export, so the hover count
+  // must match what the backend will actually receive. Counts derive from
+  // exportSessions (the page's resolved list), not the full visible list, so
+  // selection-mode narrowing is reflected here. The checked set is itself
+  // kept inside the visible list by the page, so there is no hidden
+  // selection to account for.
+  const exportableCount = useMemo(
+    () => filterExportableSessions(exportSessions).length,
+    [exportSessions],
+  );
+  const remoteExcludedCount = exportSessions.length - exportableCount;
 
   const ctxValue = useMemo<SelectionCtxValue>(
     () => ({ modeRef, toggleSessionSelection: onToggleSessionSelection }),
@@ -216,6 +236,9 @@ export const SessionList = memo(function SessionList({
           onCustomRange={onCustomTimeRange}
           onExport={onExportQa}
           exportStatus={exportStatus}
+          exportableCount={exportableCount}
+          remoteExcludedCount={remoteExcludedCount}
+          selectionMode={selectionMode}
         />
 
         {/* Row 3 (list view only): Selection mode */}

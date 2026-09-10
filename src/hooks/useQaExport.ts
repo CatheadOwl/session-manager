@@ -35,8 +35,11 @@ export const filterExportableSessions = (sessions: SessionMeta[]): SessionMeta[]
 /**
  * Q&A export orchestration: native save dialog → backend export command →
  * status feedback. Contains no distill logic — the Rust core owns that.
- * The exported set is "what you see": the caller passes the visible session
- * list (folder/search/star/time filters already applied by the UI).
+ * The exported set is "what you see": the caller passes the resolved export
+ * list — the visible session list (folder/search/star/time filters already
+ * applied by the UI), narrowed to the checked sessions when selection mode
+ * is on. Selection resolution is the caller's job; this hook exports
+ * exactly what it receives.
  */
 export function useQaExport(scope: "active" | "archived") {
   const [status, setStatus] = useState<QaExportStatus>(DEFAULT_STATUS);

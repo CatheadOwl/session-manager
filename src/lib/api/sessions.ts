@@ -108,8 +108,9 @@ export interface ExportQaSessionsOptions {
   providers?: string[];
   /**
    * Explicit pre-filtered session list ("export what you see"): the UI has
-   * already applied folder/search/star/time filters. When omitted the
-   * backend falls back to scanning by the time window.
+   * already applied folder/search/star/time filters, and narrowed to the
+   * checked sessions when selection mode is on. When omitted the backend
+   * falls back to scanning by the time window.
    */
   sessions?: SessionMeta[];
   /** Absolute destination file path (from the native save dialog). */

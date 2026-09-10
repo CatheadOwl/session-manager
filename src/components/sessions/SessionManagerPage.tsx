@@ -88,19 +88,12 @@ export function SessionManagerPage() {
     [queries.filteredSessions, queries.starredMap, ui.showStarredOnly],
   );
 
-  // Export what you see: the visible list already carries folder, search,
-  // star, and time filters. "All time" maps to a full-history window
-  // (resolveExportRange) — the size guard is the >50 confirm in useQaExport.
-  const handleExportQa = useCallback(() => {
-    void qaExport.exportRange(resolveExportRange(ui.timeRange), displaySessions);
-  }, [qaExport, ui.timeRange, displaySessions]);
-
   const visibleSessionKeys = useMemo(
     () => displaySessions.map(getSessionKey),
     [displaySessions],
   );
 
-  // Keep a ref to always read the latest selected keys, avoiding handleBatchDelete re-creation on selectedSessionKeys change
+  // Keep a ref to always read the latest keys, avoiding handleBatchDelete re-creation on selectedSessionKeys change
   const selectedKeysRef = useRef(ui.selectedSessionKeys);
   selectedKeysRef.current = ui.selectedSessionKeys;
 
@@ -108,6 +101,36 @@ export function SessionManagerPage() {
     () => new Set(ui.selectedSessionKeys),
     [ui.selectedSessionKeys],
   );
+
+  // The checked set is re-scoped to the visible list whenever the list
+  // changes (folder/search/time/star/scope switch, or a rescan): keys
+  // that fall out of view are dropped. Batch delete and Q&A export then
+  // share one scope — no operation can target a session the user cannot
+  // currently see. Enforcing the invariant on the visible-list value (not
+  // in each filter setter) means future filters cannot bypass it.
+  useEffect(() => {
+    ui.retainSessionKeys(visibleSessionKeys);
+  }, [ui.retainSessionKeys, visibleSessionKeys]);
+
+  // Export what you see: the visible list already carries folder, search,
+  // star, and time filters. In selection mode it narrows once more to the
+  // checked sessions. The retain effect above keeps the checked set
+  // inside the visible list, so this intersect is defense in depth, not a
+  // load-bearing filter. exportSessions is the single source for the
+  // export call and the SessionList hover count — they cannot drift.
+  // "All time" maps to a full-history window (resolveExportRange) — the
+  // size guard is the >50 confirm in useQaExport.
+  const exportSessions = useMemo(
+    () =>
+      ui.selectionMode
+        ? displaySessions.filter((s) => selectedKeysSet.has(getSessionKey(s)))
+        : displaySessions,
+    [ui.selectionMode, displaySessions, selectedKeysSet],
+  );
+
+  const handleExportQa = useCallback(() => {
+    void qaExport.exportRange(resolveExportRange(ui.timeRange), exportSessions);
+  }, [qaExport, ui.timeRange, exportSessions]);
 
   // Batch delete dialog payload: deletable count + read-only skips, derived from the pending session list
   const batchDeleteTarget = useMemo<ConfirmActionTarget | null>(() => {
@@ -319,6 +342,7 @@ export function SessionManagerPage() {
         onSelectSessionKeys={ui.selectSessionKeys}
         onUnselectSessionKeys={ui.unselectSessionKeys}
         onBatchDelete={handleBatchDelete}
+        exportSessions={exportSessions}
         timeRange={ui.timeRange}
         onTimeRangePresetChange={ui.setTimeRangePreset}
         onCustomTimeRange={ui.setCustomTimeRange}

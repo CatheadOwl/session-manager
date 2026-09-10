@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Q&A export now follows manual selection: in selection mode, export covers the checked sessions (the button hover states the count; nothing checked disables export).
+
+### Changed
+
+- Manual selection is now scoped to the visible list: switching folder, search, time range, star filter, or scope drops checks that fall out of view (ADR 0012). Batch delete therefore acts only on what is currently visible — previously it resolved all checked sessions across folders, as if the folder filter were "all".
+
+### Removed
+
+- Cross-folder batch selection: checks no longer persist when the visible list changes.
+
 ## [0.2.4] - 2026-08-13
 
 ### Added

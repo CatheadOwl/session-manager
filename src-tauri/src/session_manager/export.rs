@@ -69,9 +69,10 @@ pub fn export_qa_sessions(
 }
 
 /// Export an explicit, already-filtered session list ("export what you see"):
-/// the UI adapter (folder/search/star/time filters) selects the sessions and
-/// passes their `SessionMeta`; this core only distills and assembles
-/// provenance. Selection logic stays out of the core by design.
+/// the UI adapter (folder/search/star/time filters, plus the checked-session
+/// narrowing in selection mode) selects the sessions and passes their
+/// `SessionMeta`; this core only distills and assembles provenance.
+/// Selection logic stays out of the core by design.
 pub fn export_qa_sessions_for_metas(
     registry: &ProviderRegistry,
     metas: &[SessionMeta],

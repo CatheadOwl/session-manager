@@ -26,6 +26,14 @@ interface ExportQaControlsProps {
   onCustomRange: (from: number, to: number) => void;
   onExport: () => void;
   exportStatus: QaExportStatus;
+  /** Hover transparency: how many visible sessions the export will contain
+   *  (remote sessions are pre-filtered out by useQaExport). */
+  exportableCount?: number;
+  /** How many visible sessions were excluded because they are remote-backed. */
+  remoteExcludedCount?: number;
+  /** Selection mode is on: the export follows the checked sessions instead
+   *  of the whole visible list. */
+  selectionMode?: boolean;
 }
 
 /**
@@ -39,6 +47,9 @@ export const ExportQaControls = memo(function ExportQaControls({
   onCustomRange,
   onExport,
   exportStatus,
+  exportableCount,
+  remoteExcludedCount,
+  selectionMode = false,
 }: ExportQaControlsProps) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [draftRange, setDraftRange] = useState<DateRange | undefined>(undefined);
@@ -71,6 +82,24 @@ export const ExportQaControls = memo(function ExportQaControls({
     timeRange.preset === "custom" && timeRange.customFrom !== undefined
       ? "Custom range"
       : (PRESETS.find((p) => p.value === timeRange.preset)?.label ?? "All time");
+
+  // Hover states up front what the export will contain: the visible count is
+  // pre-filtered (remote sessions never enter the export request), so surface
+  // both numbers instead of letting remote exclusions happen silently. In
+  // selection mode the scope narrows to the checked sessions (the checked
+  // set is kept inside the visible list by the page, so nothing is hidden).
+  const selectedInVisibleCount =
+    exportableCount === undefined ? undefined : exportableCount + (remoteExcludedCount ?? 0);
+  // Blocked only when nothing at all is checked: checking only remote
+  // sessions keeps the button enabled — the hover discloses the exclusion
+  // and the click surfaces the remote error toast from useQaExport.
+  const selectionBlocked = selectionMode && selectedInVisibleCount === 0;
+
+  const exportCountLabel =
+    exportableCount === undefined
+      ? ""
+      : `${exportableCount} session(s)${selectionMode ? " selected" : ""}` +
+        `${remoteExcludedCount ? ` (+${remoteExcludedCount} remote, excluded)` : ""}`;
 
   return (
     <div className="export-row">
@@ -140,11 +169,13 @@ export const ExportQaControls = memo(function ExportQaControls({
         type="button"
         className="secondary-button export-button"
         onClick={onExport}
-        disabled={isExporting || !hasResolvedRange}
+        disabled={isExporting || !hasResolvedRange || selectionBlocked}
         title={
-          hasResolvedRange
-            ? `Export Q&A sessions (${presetLabel}) to a file`
-            : "Pick a complete time range first (both dates)"
+          selectionBlocked
+            ? "Export follows the selected sessions — select sessions first"
+            : hasResolvedRange
+              ? `Export Q&A sessions (${presetLabel})${exportCountLabel ? ` — ${exportCountLabel}` : ""} to a file`
+              : "Pick a complete time range first (both dates)"
         }
       >
         <Download size={14} aria-hidden="true" />

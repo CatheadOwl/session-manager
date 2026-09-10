@@ -292,7 +292,8 @@ pub struct ExportQaSessionsOptions {
     #[serde(default)]
     pub overwrite: bool,
     /// Explicit pre-filtered session list ("export what you see": the UI has
-    /// already applied folder/search/star/time filters). When absent, the
+    /// already applied folder/search/star/time filters, and narrowed it to
+    /// the checked sessions when selection mode is on). When absent, the
     /// core falls back to scanning by the time window (future CLI path).
     #[serde(default)]
     pub sessions: Option<Vec<session_manager::SessionMeta>>,

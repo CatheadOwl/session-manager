@@ -178,6 +178,25 @@
   max-width: 60%;
 }
 
+/*
+ * Full-width variant (ADR 0011): for list-type settings whose control is
+ * an editor that needs the whole row — text stacks on top, control spans
+ * the full width below. Bool rows keep the two-column rhythm above.
+ */
+.setting-row--full {
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.setting-row--full .setting-row-text {
+  flex: 0 0 auto;
+}
+
+.setting-row--full .setting-control {
+  width: 100%;
+  max-width: 100%;
+}
+
 /* Boolean switch (ui/ToggleRow + source-row enabled toggle). */
 .setting-toggle {
   position: relative;
@@ -256,7 +275,9 @@
 
 .setting-source-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  /* Local row (ADR 0011): path input + enabled toggle + remove — no
+   * provider column anymore. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.4rem;
 }
@@ -266,16 +287,17 @@
   margin-top: 0;
 }
 
-/* ADR 0008: read-only SSH summary row (badge + identity + hand-edit note). */
+/*
+ * ADR 0008: SSH row — same one-line rhythm as a local row (badge +
+ * single-line identity + toggle + Remove); the identity itself stays
+ * read-only (Add flow / hand editing owns it).
+ */
 .setting-source-row--ssh {
-  grid-template-columns: auto minmax(0, 1fr);
-  padding: 0.4rem 0.55rem;
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
 }
 
 .setting-source-kind-badge {
-  align-self: start;
+  align-self: center;
   padding: 0.05rem 0.4rem;
   border-radius: 0.4rem;
   background: var(--accent-soft);
@@ -289,11 +311,11 @@
 .setting-source-ssh-summary {
   display: flex;
   min-width: 0;
-  flex-basis: 100%;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  gap: 0.35rem 0.7rem;
+  gap: 0.35rem;
   font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .setting-source-ssh-title {
@@ -304,16 +326,18 @@
   white-space: nowrap;
 }
 
-.setting-source-ssh-host {
+.setting-source-ssh-sep {
   color: var(--muted);
   font-weight: 550;
 }
 
-.setting-source-ssh-note {
-  flex-basis: 100%;
+.setting-source-ssh-host {
+  overflow: hidden;
+  min-width: 0;
   color: var(--muted);
-  font-size: 0.7rem;
   font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .setting-source-input {

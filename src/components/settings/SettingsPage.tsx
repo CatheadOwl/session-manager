@@ -9,7 +9,7 @@ import {
   type SourceEntry,
 } from "@/lib/api/settings";
 import { queryKeys } from "@/lib/query/keys";
-import { useProvidersQuery, useSettingsQuery } from "@/lib/query/queries";
+import { useSettingsQuery } from "@/lib/query/queries";
 import { SettingRow } from "@/components/ui/SettingRow";
 import { SourcesEditor } from "@/components/ui/SourcesEditor";
 import { ToggleRow } from "@/components/ui/ToggleRow";
@@ -37,8 +37,7 @@ const SETTING_PRESENTATION: Record<string, { label: string; description?: string
   },
   sources: {
     label: "Extra session sources",
-    description:
-      "Additional folders to scan on top of the built-in provider folders. Each source names the provider whose parser owns it.",
+    description: "Additional home-mirrored roots scanned on top of this machine's home.",
   },
 };
 
@@ -65,7 +64,6 @@ const BoolRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
 };
 
 const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
-  const providersQuery = useProvidersQuery();
   const entries: SourceEntry[] =
     value !== undefined && "sourceList" in value
       ? value.sourceList
@@ -77,7 +75,6 @@ const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) =>
       label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
       description={SETTING_PRESENTATION[def.key]?.description}
       value={entries}
-      providers={providersQuery.data ?? []}
       error={error}
       onChange={(next) => onChange({ sourceList: next })}
     />

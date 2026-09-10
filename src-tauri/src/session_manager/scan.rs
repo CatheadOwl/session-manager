@@ -3,38 +3,71 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::providers::ProviderRegistry;
+use super::scan_roots;
 use super::settings::SourceEntry;
 use super::types::{SessionMeta, SessionScope};
 
-/// `extra_sources` is the settings-core sources overlay (ADR 0006, D2):
-/// enabled extra scan roots from `~/.session-manager/settings.json`, each
-/// naming the provider that owns the parser (D5). It is an explicit
-/// parameter — NOT a `SettingsManager` reference tucked into the registry —
-/// so this module stays Tauri-free and unit-testable; callers read
+/// `extra_sources` is the settings-core sources overlay (ADR 0006 D2,
+/// reworked by ADR 0011): enabled local extra roots from
+/// `~/.session-manager/settings.json`, each an ALTERNATE HOME — the
+/// scan mirrors it exactly like a remote machine's home (ADR 0008 修订 1):
+/// every provider's standard root, derived home-relative by the shared
+/// [`scan_roots`] module, is discovered under it. There is no
+/// per-entry provider anymore (ADR 0011) — directory ownership decides.
+/// The slice is an explicit parameter — NOT a `SettingsManager`
+/// reference tucked into the registry — so this module stays
+/// Tauri-free and unit-testable; callers read
 /// `SettingsManager::enabled_sources()` and pass the slice through.
 ///
-/// Overlay semantics:
-/// - active scope ONLY: a settings source has no archive root, so archived
-///   scans ignore the overlay entirely;
-/// - unknown provider id → warn + skip (warn-only, D4);
-/// - missing path → warn + skip (the entry survives in settings);
-/// - deduped per provider against ALL of that provider's `scan_roots()` and
-///   against previously processed entries, so a source equal to a built-in
-///   root never double-scans;
-/// - disabled entries are skipped defensively (the settings manager already
-///   filters, but this function does not require it).
+/// Overlay semantics (ADR 0011):
+/// - BOTH scopes: Active scans each provider's active root under the
+///   extra home, Archived its archived root (a provider without an
+///   archive root skips Archived — same rule as built-in);
+/// - a provider whose standard subdirectory is absent under the extra
+///   root contributes 0 sessions with NO warning (a backup home holding
+///   only one provider's data is a normal shape — debug log only);
+/// - missing extra root → warn + skip (the entry survives in settings,
+///   D4 unchanged — correct semantics for removable drives);
+/// - deduped per provider against the provider's `scan_roots()` and
+///   previously processed overlay dirs, so a joined dir equal to a
+///   built-in root (e.g. an extra root pointing at the real home)
+///   never double-scans;
+/// - ssh entries are skipped here (ADR 0008 §3 — the remote scan line
+///   owns their consumption);
+/// - disabled entries are skipped defensively (the settings manager
+///   already filters, but this function does not require it).
 pub fn scan_sessions_with_scope(
     registry: &ProviderRegistry,
     scope: &SessionScope,
     extra_sources: &[SourceEntry],
+) -> Vec<SessionMeta> {
+    scan_sessions_with_scope_with_home(
+        registry,
+        scope,
+        extra_sources,
+        &crate::config::get_home_dir(),
+    )
+}
+
+/// Test seam / core of [`scan_sessions_with_scope`] with an explicit
+/// home prefix for the root derivation (production passes the REAL local
+/// home; tests pass a temp "home" so fixtures are OS-independent — same
+/// pattern as the remote scan core).
+pub fn scan_sessions_with_scope_with_home(
+    registry: &ProviderRegistry,
+    scope: &SessionScope,
+    extra_sources: &[SourceEntry],
+    home: &Path,
 ) -> Vec<SessionMeta> {
     let start = Instant::now();
     log::debug!("list_scan start scope={}", scope_label(scope));
     let mut sessions = Vec::new();
     let mut provider_count = 0usize;
     // Normalized roots already covered this pass, per provider id. Seeded
-    // from each provider's full scan_roots() so the overlay can dedupe
-    // against every built-in root, not just the one picked for this scope.
+    // from each provider's scan roots (Active: ALL of them, so the
+    // overlay can dedupe against every built-in root; Archived: the
+    // archive root actually scanned) — the overlay dedupes its joined
+    // directories against the same sets.
     let mut scanned_roots: HashMap<String, HashSet<PathBuf>> = HashMap::new();
     for provider in registry.all() {
         provider_count += 1;
@@ -51,12 +84,21 @@ pub fn scan_sessions_with_scope(
                 &roots[1]
             }
         };
-        if matches!(scope, SessionScope::Active) {
+        {
+            // Seed the dedupe set with every root this scope could scan
+            // for the provider (Active: all; Archived: the archive root).
             let covered = scanned_roots
                 .entry(provider.id().to_string())
                 .or_default();
-            for r in &roots {
-                covered.insert(normalize_root(r));
+            match scope {
+                SessionScope::Active => {
+                    for r in &roots {
+                        covered.insert(normalize_root(r));
+                    }
+                }
+                SessionScope::Archived => {
+                    covered.insert(normalize_root(root));
+                }
             }
         }
         log::debug!(
@@ -71,47 +113,67 @@ pub fn scan_sessions_with_scope(
             }));
         }
     }
-    if matches!(scope, SessionScope::Active) {
-        for entry in extra_sources.iter().filter(|e| e.is_enabled()) {
-            // ADR 0008 §3: only local entries flow through the synchronous
-            // overlay; ssh entries belong to the remote scan line (future
-            // consumption there) and are skipped here.
-            let SourceEntry::Local(entry) = entry else {
-                log::debug!(
-                    "list_scan sources overlay: skipping non-local entry (owned by the remote scan line)"
-                );
-                continue;
-            };
-            let provider = match registry.get(&entry.provider) {
+    // Home-relative derivation is shared with the remote line (ADR 0011)
+    // and computed once — registry and scope are fixed for the pass.
+    let derived_roots = scan_roots::derive_scan_roots_with_home(registry, scope, home);
+    for entry in extra_sources.iter().filter(|e| e.is_enabled()) {
+        // ADR 0008 §3: only local entries flow through the synchronous
+        // overlay; ssh entries belong to the remote scan line and are
+        // skipped here.
+        let SourceEntry::Local(entry) = entry else {
+            log::debug!(
+                "list_scan sources overlay: skipping non-local entry (owned by the remote scan line)"
+            );
+            continue;
+        };
+        let path = PathBuf::from(&entry.path);
+        if !path.exists() {
+            // Warn-only (D4): the entry stays in settings so the user can
+            // fix the path by hand; a bad root must not fail the scan.
+            log::warn!(
+                "list_scan sources overlay: root does not exist, skipping path={}",
+                path.display()
+            );
+            continue;
+        }
+        for derived in &derived_roots {
+            let provider = match registry.get(&derived.provider_id) {
                 Ok(p) => p,
                 Err(err) => {
+                    // Unreachable in practice (ids come from the registry
+                    // itself); kept defensive for registry mutation.
                     log::warn!(
-                        "list_scan sources overlay: skipping entry path={} ({})",
-                        entry.path,
+                        "list_scan sources overlay: skipping derived root ({})",
                         err
                     );
                     continue;
                 }
             };
-            let path = PathBuf::from(&entry.path);
+            // Empty rel (provider root == home itself) means the extra
+            // root IS the provider directory.
+            let joined = if derived.rel.is_empty() {
+                path.clone()
+            } else {
+                path.join(&derived.rel)
+            };
             let covered = scanned_roots
                 .entry(provider.id().to_string())
                 .or_default();
-            if !covered.insert(normalize_root(&path)) {
+            if !covered.insert(normalize_root(&joined)) {
                 log::debug!(
                     "list_scan sources overlay: duplicate root skipped provider={} path={}",
                     provider.id(),
-                    path.display()
+                    joined.display()
                 );
                 continue;
             }
-            if !path.exists() {
-                // Warn-only (D4): the entry stays in settings so the user can
-                // fix the path by hand; a bad root must not fail the scan.
-                log::warn!(
-                    "list_scan sources overlay: root does not exist, skipping provider={} path={}",
-                    provider.id(),
-                    path.display()
+            if !joined.exists() {
+                // Normal shape (ADR 0011): the extra home simply has no
+                // data for this provider — 0 sessions, no warn.
+                log::debug!(
+                    "list_scan sources overlay: no {} root under the extra home, provider={}",
+                    scope_label(scope),
+                    provider.id()
                 );
                 continue;
             }
@@ -119,9 +181,9 @@ pub fn scan_sessions_with_scope(
                 "list_scan provider={} scope={} root={} (settings source)",
                 provider.id(),
                 scope_label(scope),
-                path.display()
+                joined.display()
             );
-            sessions.extend(provider.scan_sessions(&path).into_iter().inspect(|meta| {
+            sessions.extend(provider.scan_sessions(&joined).into_iter().inspect(|meta| {
                 meta.debug_assert_file_locator_matches_source_path();
             }));
         }
@@ -163,11 +225,17 @@ mod tests {
     use crate::session_manager::{SessionLocator, SessionMessage};
     use tempfile::tempdir;
 
-    /// Minimal fixture provider: one root directory, one canned session per
-    /// scan with a configurable timestamp. The trait's load/parse/move
-    /// methods are irrelevant to the scan loop and stubbed out.
+    /// Minimal fixture provider: `roots()` (home-mirror derivation input)
+    /// is decoupled from `root` (where the canned session's meta claims
+    /// to live); one canned session per scan with a configurable
+    /// timestamp. The trait's load/parse/move methods are irrelevant to
+    /// the scan loop and stubbed out.
     struct FixtureProvider {
         id: &'static str,
+        /// Roots reported to the derivation (must sit under the injected
+        /// fake home for the home-mirror overlay to find them).
+        roots: Vec<PathBuf>,
+        /// Directory the canned session's meta points under.
         root: PathBuf,
         session_id: &'static str,
         last_active_at: i64,
@@ -179,7 +247,7 @@ mod tests {
         }
 
         fn roots(&self) -> Vec<PathBuf> {
-            vec![self.root.clone()]
+            self.roots.clone()
         }
 
         fn scan_sessions(&self, root: &Path) -> Vec<SessionMeta> {
@@ -221,12 +289,12 @@ mod tests {
         }
     }
 
-    fn source(path: &Path, provider: &str) -> SourceEntry {
+    fn source(path: &Path) -> SourceEntry {
         SourceEntry::Local(super::super::settings::LocalSource {
             path: path.to_string_lossy().into_owned(),
-            provider: provider.to_string(),
             enabled: true,
             id: None,
+            extra: std::collections::BTreeMap::new(),
         })
     }
 
@@ -250,42 +318,29 @@ mod tests {
     }
 
     #[test]
-    fn overlay_skips_unknown_provider() {
-        let root = tempdir().expect("tempdir");
-        let registry = registry_with(FixtureProvider {
-            id: "alpha",
-            root: root.path().to_path_buf(),
-            session_id: "builtin",
-            last_active_at: 100,
-        });
-
-        let sessions = scan_sessions_with_scope(
-            &registry,
-            &SessionScope::Active,
-            &[source(root.path(), "no-such-provider")],
-        );
-
-        // Only the built-in root's session; the unknown-provider entry is
-        // warned and skipped, not an error.
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "builtin");
-    }
-
-    #[test]
     fn overlay_skips_missing_path() {
-        let root = tempdir().expect("tempdir");
+        let home = tempdir().expect("tempdir home");
+        // The provider's built-in root sits under the (fake) home.
+        let builtin = home.path().join(".alpha").join("projects");
+        std::fs::create_dir_all(&builtin).expect("mkdir");
         let registry = registry_with(FixtureProvider {
             id: "alpha",
-            root: root.path().to_path_buf(),
+            roots: vec![
+                builtin.clone(),
+                home.path().join(".alpha").join("archived"),
+            ],
+            root: builtin.clone(),
             session_id: "builtin",
             last_active_at: 100,
         });
-        let missing = root.path().join("does-not-exist");
 
-        let sessions = scan_sessions_with_scope(
+        let missing = home.path().join("does-not-exist");
+
+        let sessions = scan_sessions_with_scope_with_home(
             &registry,
             &SessionScope::Active,
-            &[source(&missing, "alpha")],
+            &[source(&missing)],
+            home.path(),
         );
 
         assert_eq!(sessions.len(), 1);
@@ -293,20 +348,26 @@ mod tests {
     }
 
     #[test]
-    fn overlay_dedupes_builtin_root() {
-        let root = tempdir().expect("tempdir");
+    fn overlay_dedupes_builtin_root_when_extra_root_is_home_itself() {
+        // An extra root equal to the real home: every joined dir IS a
+        // built-in root — the dedupe set must swallow it (no double scan),
+        // including a duplicated extra entry.
+        let home = tempdir().expect("tempdir home");
+        let builtin = home.path().join(".alpha").join("projects");
+        std::fs::create_dir_all(&builtin).expect("mkdir");
         let registry = registry_with(FixtureProvider {
             id: "alpha",
-            root: root.path().to_path_buf(),
+            roots: vec![builtin.clone(), home.path().join(".alpha").join("archived")],
+            root: builtin.clone(),
             session_id: "builtin",
             last_active_at: 100,
         });
 
-        // Same root as the provider's built-in scan root: must not scan twice.
-        let sessions = scan_sessions_with_scope(
+        let sessions = scan_sessions_with_scope_with_home(
             &registry,
             &SessionScope::Active,
-            &[source(root.path(), "alpha"), source(root.path(), "alpha")],
+            &[source(home.path()), source(home.path())],
+            home.path(),
         );
 
         assert_eq!(sessions.len(), 1);
@@ -314,72 +375,162 @@ mod tests {
     }
 
     #[test]
-    fn overlay_appends_extra_root_and_sorts_by_last_active_at() {
-        let root = tempdir().expect("tempdir");
+    fn overlay_appends_extra_home_and_sorts_by_last_active_at() {
+        let home = tempdir().expect("tempdir home");
+        // alpha's built-in root exists under the fake home (its canned
+        // session is the older one).
+        let alpha_builtin = home.path().join(".alpha").join("projects");
+        std::fs::create_dir_all(&alpha_builtin).expect("mkdir");
         let extra = tempdir().expect("tempdir extra");
-        let _ = registry_with(FixtureProvider {
-            id: "alpha",
-            root: root.path().to_path_buf(),
-            session_id: "builtin",
-            last_active_at: 100,
-        });
+        // Extra home layout: `.beta/projects` present (discovered), no
+        // `.alpha` at all (0 sessions for alpha, NO warn).
+        let extra_beta = extra.path().join(".beta").join("projects");
+        std::fs::create_dir_all(&extra_beta).expect("mkdir");
 
-        // beta's built-in root intentionally does not exist, so beta
-        // contributes ONLY via the overlay entry — whose session is NEWER
-        // than alpha's, proving append + global sort in one pass.
         let mut registry = registry_with(FixtureProvider {
             id: "beta",
+            roots: vec![
+                home.path().join(".beta").join("projects"),
+                home.path().join(".beta").join("archived"),
+            ],
             root: PathBuf::from("Z:/nonexistent-beta-root"),
             session_id: "newer",
             last_active_at: 200,
         });
         registry.register(Box::new(FixtureProvider {
             id: "alpha",
-            root: root.path().to_path_buf(),
+            roots: vec![
+                alpha_builtin.clone(),
+                home.path().join(".alpha").join("archived"),
+            ],
+            root: alpha_builtin.clone(),
             session_id: "builtin",
             last_active_at: 100,
         }));
 
-        let sessions = scan_sessions_with_scope(
+        let sessions = scan_sessions_with_scope_with_home(
             &registry,
             &SessionScope::Active,
-            &[source(extra.path(), "beta")],
+            &[source(extra.path())],
+            home.path(),
         );
 
+        // alpha contributes ONLY its built-in root (no `.alpha` under the
+        // extra home); beta contributes ONLY via the overlay — its
+        // session is NEWER than alpha's, proving append + global sort in
+        // one pass.
         assert_eq!(sessions.len(), 2);
-        // Sorted by last_active_at descending across built-in + overlay.
         assert_eq!(sessions[0].session_id, "newer");
+        assert_eq!(sessions[0].provider_id, "beta");
         assert_eq!(sessions[1].session_id, "builtin");
+        assert_eq!(sessions[1].provider_id, "alpha");
     }
 
     #[test]
-    fn overlay_ignores_disabled_entries_and_archived_scope() {
-        let root = tempdir().expect("tempdir");
+    fn overlay_discovers_multiple_providers_under_one_extra_home() {
+        let home = tempdir().expect("tempdir home");
+        let extra = tempdir().expect("tempdir extra");
+        std::fs::create_dir_all(extra.path().join(".alpha").join("projects")).expect("mkdir");
+        std::fs::create_dir_all(extra.path().join(".beta").join("projects")).expect("mkdir");
+
+        let mut registry = registry_with(FixtureProvider {
+            id: "alpha",
+            roots: vec![home.path().join(".alpha").join("projects")],
+            root: home.path().join(".alpha").join("projects"),
+            session_id: "a-extra",
+            last_active_at: 100,
+        });
+        registry.register(Box::new(FixtureProvider {
+            id: "beta",
+            roots: vec![home.path().join(".beta").join("projects")],
+            root: home.path().join(".beta").join("projects"),
+            session_id: "b-extra",
+            last_active_at: 200,
+        }));
+
+        let sessions = scan_sessions_with_scope_with_home(
+            &registry,
+            &SessionScope::Active,
+            &[source(extra.path())],
+            home.path(),
+        );
+
+        // Both providers discovered under the same extra home (directory
+        // ownership decides — no per-entry provider, ADR 0011).
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].session_id, "b-extra");
+        assert_eq!(sessions[1].session_id, "a-extra");
+    }
+
+    #[test]
+    fn overlay_covers_archived_scope_via_the_archive_root() {
+        // ADR 0011 OQ2=a: extra homes are scanned in BOTH scopes; the
+        // Archived pass derives `roots()[1]` per provider.
+        let home = tempdir().expect("tempdir home");
+        let extra = tempdir().expect("tempdir extra");
+        // Archived layout under the extra home only (`.alpha/archived`).
+        let extra_archived = extra.path().join(".alpha").join("archived");
+        std::fs::create_dir_all(&extra_archived).expect("mkdir");
+
+        let registry = registry_with(FixtureProvider {
+            id: "alpha",
+            roots: vec![
+                home.path().join(".alpha").join("projects"),
+                home.path().join(".alpha").join("archived"),
+            ],
+            root: extra_archived.clone(),
+            session_id: "archived-extra",
+            last_active_at: 300,
+        });
+
+        let archived = scan_sessions_with_scope_with_home(
+            &registry,
+            &SessionScope::Archived,
+            &[source(extra.path())],
+            home.path(),
+        );
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].session_id, "archived-extra");
+
+        // The Active pass derives `.alpha/projects` — absent under the
+        // extra home → 0 sessions there.
+        let active = scan_sessions_with_scope_with_home(
+            &registry,
+            &SessionScope::Active,
+            &[source(extra.path())],
+            home.path(),
+        );
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn overlay_ignores_disabled_entries_and_ssh_entries() {
+        let home = tempdir().expect("tempdir home");
         let extra = tempdir().expect("tempdir extra");
         let registry = registry_with(FixtureProvider {
             id: "alpha",
-            root: root.path().to_path_buf(),
+            roots: vec![
+                home.path().join(".alpha").join("projects"),
+                home.path().join(".alpha").join("archived"),
+            ],
+            root: home.path().join(".alpha").join("projects"),
             session_id: "builtin",
             last_active_at: 100,
         });
 
-        let mut entries = vec![source(extra.path(), "alpha")];
+        let mut entries = vec![source(extra.path())];
         if let SourceEntry::Local(local) = &mut entries[0] {
             local.enabled = false;
         }
         // ADR 0008 §3: enabled ssh entries reach the overlay but must be
         // skipped (remote line owns their consumption).
         entries.push(ssh_source("ali", "192.0.2.10", true));
-        let active = scan_sessions_with_scope(&registry, &SessionScope::Active, &entries);
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].session_id, "builtin");
-
-        // Sources have no archive root: the archived scan ignores the overlay.
-        let archived = scan_sessions_with_scope(
+        let active = scan_sessions_with_scope_with_home(
             &registry,
-            &SessionScope::Archived,
-            &[source(extra.path(), "alpha")],
+            &SessionScope::Active,
+            &entries,
+            home.path(),
         );
-        assert!(archived.is_empty());
+        assert!(active.is_empty());
     }
 }

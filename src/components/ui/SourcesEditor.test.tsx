@@ -13,8 +13,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 afterEach(cleanup);
 
-const PROVIDERS = ["claude", "codex", "gemini"];
-
 const renderEditor = (
   value: SourceEntry[] = [],
   onChange: (next: SourceEntry[]) => void = () => {},
@@ -23,7 +21,6 @@ const renderEditor = (
     <SourcesEditor
       label="Extra session sources"
       value={value}
-      providers={PROVIDERS}
       onChange={onChange}
     />,
   );
@@ -34,24 +31,24 @@ describe("SourcesEditor", () => {
     expect(screen.getByText(/No extra sources/)).toBeInTheDocument();
   });
 
-  it("adds a draft row with the first provider preselected", () => {
+  it("adds a draft row with the minimal local shape (no provider)", () => {
     const onChange = vi.fn();
     renderEditor([], onChange);
     fireEvent.click(screen.getByRole("button", { name: /Add source/ }));
     expect(onChange).toHaveBeenCalledWith([
-      { path: "", provider: "claude", enabled: true },
+      { path: "", enabled: true },
     ]);
   });
 
   it("commits an edited path on blur and flags an empty path", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\old", provider: "codex", enabled: true }], onChange);
+    renderEditor([{ path: "D:\\old", enabled: true }], onChange);
     const input = screen.getByLabelText("Source 1 path");
     fireEvent.change(input, { target: { value: "D:\\new" } });
     expect(onChange).not.toHaveBeenCalled(); // typing does not spam writes
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\new", provider: "codex", enabled: true },
+      { path: "D:\\new", enabled: true },
     ]);
 
     fireEvent.change(input, { target: { value: "" } });
@@ -61,50 +58,47 @@ describe("SourcesEditor", () => {
 
   it("commits an edited path on Enter without blurring", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\old", provider: "codex", enabled: true }], onChange);
+    renderEditor([{ path: "D:\\old", enabled: true }], onChange);
     const input = screen.getByLabelText("Source 1 path");
     fireEvent.change(input, { target: { value: "D:\\newer" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\newer", provider: "codex", enabled: true },
+      { path: "D:\\newer", enabled: true },
     ]);
   });
 
   it("flags duplicate paths per row (display-only)", () => {
     renderEditor([
-      { path: "D:\\dup", provider: "codex", enabled: true },
-      { path: "D:\\dup", provider: "claude", enabled: true },
+      { path: "D:\\dup", enabled: true },
+      { path: "D:\\dup", enabled: true },
     ]);
     const alerts = screen.queryAllByRole("alert");
     expect(alerts).toHaveLength(2);
     expect(alerts[0]).toHaveTextContent("Duplicate path");
   });
 
-  it("changes the provider through the menu picker", () => {
-    const onChange = vi.fn();
-    renderEditor([{ path: "D:\\x", provider: "codex", enabled: true }], onChange);
-    fireEvent.click(screen.getByRole("button", { name: /^Source 1 provider: codex/ }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "gemini" }));
-    expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\x", provider: "gemini", enabled: true },
-    ]);
-    expect(screen.queryByRole("menu")).toBeNull(); // picker closed after selection
+  it("renders a legacy provider key without any provider picker", () => {
+    // ADR 0011: a pre-0011 file's `provider` key is preserved by the
+    // loader and must round-trip; the row itself has NO provider menu.
+    renderEditor([{ path: "D:\\dump", provider: "codex", enabled: true }]);
+    expect(screen.getByLabelText("Source 1 path")).toHaveValue("D:\\dump");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("toggles a source's enabled state", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\x", provider: "codex", enabled: true }], onChange);
+    renderEditor([{ path: "D:\\x", enabled: true }], onChange);
     fireEvent.click(screen.getByRole("switch", { name: "Source 1 enabled" }));
     expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\x", provider: "codex", enabled: false },
+      { path: "D:\\x", enabled: false },
     ]);
   });
 
   it("removes a row only after confirming in the dialog", () => {
     const onChange = vi.fn();
     renderEditor([
-      { path: "D:\\keep", provider: "claude", enabled: true },
-      { path: "D:\\drop", provider: "codex", enabled: true },
+      { path: "D:\\keep", enabled: true },
+      { path: "D:\\drop", enabled: true },
     ], onChange);
     fireEvent.click(screen.getByRole("button", { name: "Remove source 2" }));
 
@@ -114,13 +108,13 @@ describe("SourcesEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\keep", provider: "claude", enabled: true },
+      { path: "D:\\keep", enabled: true },
     ]);
   });
 
   it("keeps the row when the removal is cancelled", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\keep", provider: "claude", enabled: true }], onChange);
+    renderEditor([{ path: "D:\\keep", enabled: true }], onChange);
     fireEvent.click(screen.getByRole("button", { name: "Remove source 1" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onChange).not.toHaveBeenCalled();
@@ -143,8 +137,11 @@ describe("SourcesEditor", () => {
   it("renders ssh rows with unified structural controls (toggle + guarded remove)", () => {
     renderEditor([SSH_ENTRY]);
     expect(screen.getByText("SSH")).toBeInTheDocument();
+    // One-line identity: title · host on the same summary line.
     expect(screen.getByText("Aliyun dev (ali)")).toBeInTheDocument();
     expect(screen.getByText("admin@192.0.2.10:2222")).toBeInTheDocument();
+    const summary = screen.getByText("Aliyun dev (ali)").closest(".setting-source-ssh-summary");
+    expect(summary).toContainElement(screen.getByText("admin@192.0.2.10:2222"));
     // Same structural controls as local rows, keyed by the ssh id.
     const toggle = screen.getByRole("switch", { name: "SSH source ali enabled" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -171,19 +168,19 @@ describe("SourcesEditor", () => {
 
   it("includes ssh entries verbatim when a local edit commits", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\old", provider: "codex", enabled: true }, SSH_ENTRY], onChange);
+    renderEditor([{ path: "D:\\old", enabled: true }, SSH_ENTRY], onChange);
     const input = screen.getByLabelText("Source 1 path");
     fireEvent.change(input, { target: { value: "D:\\new" } });
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith([
-      { path: "D:\\new", provider: "codex", enabled: true },
+      { path: "D:\\new", enabled: true },
       SSH_ENTRY,
     ]);
   });
 
   it("includes ssh entries verbatim when a local row is removed", () => {
     const onChange = vi.fn();
-    renderEditor([{ path: "D:\\drop", provider: "codex", enabled: true }, SSH_ENTRY], onChange);
+    renderEditor([{ path: "D:\\drop", enabled: true }, SSH_ENTRY], onChange);
     fireEvent.click(screen.getByRole("button", { name: "Remove source 1" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(onChange).toHaveBeenCalledWith([SSH_ENTRY]);

@@ -22,13 +22,17 @@ pub const SETTINGS_VERSION: u64 = 1;
 /// One `sources[]` entry (ADR 0008): a kind-discriminated union. `kind`
 /// defaults to `"local"` when absent, so pre-ADR-0008 files parse unchanged
 /// (zero migration, no version bump). Serialization omits `kind` for local
-/// entries — a local entry is the file's minimal historical shape
-/// `{ path, provider, enabled }`; ssh entries always carry `"kind": "ssh"`.
+/// entries — a local entry's minimal shape is `{ path, enabled }` (ADR 0011);
+/// ssh entries always carry `"kind": "ssh"`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceEntry {
-    /// Local extra scan root (ADR 0006 D2 overlay). `provider` is required
-    /// (D5): a guessed parser risks wrong session semantics. `id` is
-    /// optional for local entries (ADR 0008 §1).
+    /// Local extra scan root (ADR 0006 D2 overlay, reworked by ADR 0011):
+    /// `path` points at an ALTERNATE HOME — every provider's standard
+    /// root is discovered under it via the shared home-relative
+    /// derivation (same model as a remote machine). There is NO
+    /// per-entry provider field anymore (ADR 0011 amends D5); a legacy
+    /// `provider` key from an old file is preserved in `extra`,
+    /// ignored. `id` is optional for local entries (ADR 0008 §1).
     Local(LocalSource),
     /// SSH remote source (ADR 0008 / ADR 0007 remote v1). Consumed by the
     /// remote scan line; the local overlay skips it. Unknown fields are
@@ -54,16 +58,21 @@ impl SourceEntry {
     }
 }
 
-/// Local `sources[]` payload: zero-migration superset of the pre-ADR-0008
-/// shape (`id` is the only addition, and it is optional).
+/// Local `sources[]` payload (ADR 0011): `{ path, enabled, id? }` — the
+/// path is a HOME-shaped root, providers are auto-discovered under it,
+/// so no provider field exists. Unknown fields are preserved verbatim
+/// through saves (`extra`): a legacy `provider` key from a pre-ADR-0011
+/// file round-trips instead of dropping data, and the loader warns that
+/// the semantics changed (OQ1=a — no file rewriting).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LocalSource {
     pub path: String,
-    pub provider: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// SSH auth block (ADR 0008 §1, extended by ADR 0010): tagged by
@@ -575,7 +584,11 @@ fn default_of(key: &str) -> SettingValue {
 /// independently and a bad entry is warned + skipped WITHOUT dropping the
 /// rest of the list. Per-kind rules fall out of the typed payload parse:
 /// - unknown `kind` → error → warn + skip that entry only;
-/// - `local` missing `provider` (or wrong-typed path/enabled) → skip (D5);
+/// - `local` missing `path` (or wrong-typed path/enabled) → skip;
+/// - a local entry still carrying the LEGACY `provider` key (ADR 0011
+///   removed it from the contract) → tolerated, preserved in `extra`,
+///   and WARNED: the semantics changed (path must now point at a
+///   home-shaped root) but the file is never rewritten (OQ1=a);
 /// - `ssh` missing `id`/`host` (or `user`/`auth`) → skip;
 /// - ssh extra unknown fields (e.g. a stray `provider`, or the legacy
 ///   `root`/`providerHint` keys removed by ADR 0008 修订 1) → tolerated
@@ -589,6 +602,14 @@ fn parse_sources(value: &Value) -> Option<Vec<SourceEntry>> {
     for entry in array {
         match serde_json::from_value::<SourceEntry>(entry.clone()) {
             Ok(parsed) => {
+                if let SourceEntry::Local(l) = &parsed {
+                    if l.extra.contains_key("provider") {
+                        log::warn!(
+                            "settings: local source `{}` carries a legacy `provider` key — since ADR 0011 the path must point at a HOME-shaped root and providers are auto-discovered; the key is preserved but ignored",
+                            l.path
+                        );
+                    }
+                }
                 if let Some(id) = parsed.id() {
                     if !seen_ids.insert(id.to_string()) {
                         log::warn!(
@@ -803,38 +824,63 @@ mod tests {
         );
     }
 
+    /// ADR 0011: `provider` is gone from the local contract — a legacy
+    /// key is tolerated (preserved in `extra`, warned), never skips the
+    /// entry, and a plain `{ path }` entry loads as before.
     #[test]
-    fn enabled_sources_skips_disabled_and_requires_provider() {
+    fn enabled_sources_skips_disabled_and_tolerates_legacy_provider() {
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
             "{\"sources\": [\
-                {\"path\": \"D:/jsonl/dump\", \"provider\": \"codex\"},\
+                {\"path\": \"D:/home-backup\", \"provider\": \"codex\"},\
                 {\"path\": \"D:/other\", \"provider\": \"claude\", \"enabled\": false},\
-                {\"path\": \"D:/no-provider\"}\
+                {\"path\": \"D:/plain\"}\
             ]}",
         );
         let manager = SettingsManager::new(path);
         assert_eq!(
             manager.enabled_sources(),
-            vec![local("D:/jsonl/dump", "codex", true)]
+            vec![
+                local_with_extra("D:/home-backup", true, "provider", "codex"),
+                local("D:/plain", true),
+            ]
         );
-        // The disabled entry is kept in the merged view...
+        // The disabled entry is kept in the merged view (with its legacy
+        // key preserved)...
         assert_eq!(
             manager.get_value("sources"),
             Some(SettingValue::SourceList(vec![
-                local("D:/jsonl/dump", "codex", true),
-                local("D:/other", "claude", false),
+                local_with_extra("D:/home-backup", true, "provider", "codex"),
+                local_with_extra("D:/other", false, "provider", "claude"),
+                local("D:/plain", true),
             ]))
         );
     }
 
-    fn local(path: &str, provider: &str, enabled: bool) -> SourceEntry {
+    fn local(path: &str, enabled: bool) -> SourceEntry {
         SourceEntry::Local(LocalSource {
             path: path.to_string(),
-            provider: provider.to_string(),
             enabled,
             id: None,
+            extra: BTreeMap::new(),
+        })
+    }
+
+    fn local_with_extra(
+        path: &str,
+        enabled: bool,
+        key: &str,
+        value: &str,
+    ) -> SourceEntry {
+        SourceEntry::Local(LocalSource {
+            path: path.to_string(),
+            enabled,
+            id: None,
+            extra: BTreeMap::from([(
+                key.to_string(),
+                Value::String(value.to_string()),
+            )]),
         })
     }
 
@@ -853,7 +899,8 @@ mod tests {
 
     #[test]
     fn zero_migration_old_file_parses_unchanged() {
-        // A pre-ADR-0008 file (no kind field anywhere) parses as-is.
+        // A pre-ADR-0008 file (no kind field anywhere) parses as-is; the
+        // pre-ADR-0011 `provider` keys land in `extra` (preserved, ADR 0011).
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
@@ -864,8 +911,8 @@ mod tests {
         assert_eq!(
             manager.get_value("sources"),
             Some(SettingValue::SourceList(vec![
-                local("D:/a", "claude", true),
-                local("D:/b", "codex", true),
+                local_with_extra("D:/a", true, "provider", "claude"),
+                local_with_extra("D:/b", true, "provider", "codex"),
             ]))
         );
     }
@@ -884,8 +931,8 @@ mod tests {
         // The rest of the list survives the unknown-kind entry.
         assert_eq!(
             manager.get_value("sources"),
-            Some(SettingValue::SourceList(vec![local(
-                "D:/a", "claude", true
+            Some(SettingValue::SourceList(vec![local_with_extra(
+                "D:/a", true, "provider", "claude"
             )]))
         );
     }
@@ -927,9 +974,12 @@ mod tests {
                 first,
                 SourceEntry::Local(LocalSource {
                     path: "D:/b".to_string(),
-                    provider: "codex".to_string(),
                     enabled: true,
                     id: Some("other".to_string()),
+                    extra: BTreeMap::from([(
+                        "provider".to_string(),
+                        Value::String("codex".to_string())
+                    )]),
                 }),
             ]))
         );
@@ -1029,7 +1079,7 @@ mod tests {
             panic!("expected source list")
         };
         let ssh_entry = current.remove(1);
-        current[0] = local("D:/renamed", "codex", true);
+        current[0] = local("D:/renamed", true);
         let next = vec![current[0].clone(), ssh_entry.clone()];
         manager
             .set_value("sources", SettingValue::SourceList(next))
@@ -1040,7 +1090,7 @@ mod tests {
         assert_eq!(
             reloaded.get_value("sources"),
             Some(SettingValue::SourceList(vec![
-                local("D:/renamed", "codex", true),
+                local("D:/renamed", true),
                 ssh_entry,
             ]))
         );

@@ -14,17 +14,24 @@ import { invoke } from "@tauri-apps/api/core";
  */
 export type SourceEntry = LocalSourceEntry | SshSourceEntry;
 
-/** Local extra scan root (ADR 0006 overlay; kind defaults to "local"). */
+/**
+ * Local extra scan root (ADR 0006 overlay, reworked by ADR 0011): `path`
+ * points at an ALTERNATE HOME — every provider's standard root is
+ * auto-discovered under it (home-mirror, same model as a remote machine),
+ * so there is NO provider field. A legacy `provider` key from an old
+ * settings file is preserved by the Rust loader (forward compatibility),
+ * hence the index signature.
+ */
 export interface LocalSourceEntry {
   kind?: "local";
-  /** Directory containing session files. */
+  /** Home-shaped root directory (e.g. a home backup with `.claude/projects` inside). */
   path: string;
-  /** Provider id owning the parser for this root (`claude`, `codex`, …). Required. */
-  provider: string;
   /** Disabled entries are kept in the file but not scanned. */
   enabled: boolean;
   /** Optional stable id (ADR 0008; ssh Remote locators need it, local may omit). */
   id?: string;
+  /** Forward-compat: unknown fields (e.g. a legacy `provider`) round-trip through the Rust loader. */
+  [extra: string]: unknown;
 }
 
 /**
@@ -97,7 +104,8 @@ export async function setSettingValue(key: string, value: SettingValue): Promise
 
 /**
  * Read-only provider id listing (same registry that backs the `agents` CLI
- * subcommand). Consumed by the settings UI's source editor provider picker.
+ * subcommand). No settings-UI consumer since ADR 0011 removed the source
+ * provider picker; kept as the registry SSOT accessor.
  */
 export async function fetchProviders(): Promise<string[]> {
   return await invoke("list_providers");

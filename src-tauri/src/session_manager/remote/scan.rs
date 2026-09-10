@@ -123,73 +123,21 @@ use crate::session_manager::types::{SessionLocator, SessionMeta, SessionScope};
 // ---------------------------------------------------------------------------
 // Root derivation (ADR 0008 修订 1): remote roots from provider roots()
 // ---------------------------------------------------------------------------
+// The derivation itself now lives in the shared `scan_roots` module
+// (ADR 0011): the remote line and the local extra-source overlay consume
+// ONE function — strip the local home prefix from each provider's
+// `roots()`, normalize to posix — instead of duplicating the map. The
+// re-exports below keep this module's historical names (and its tests)
+// byte-identical; the remote side joins `$HOME/<rel>` (expanded by the
+// REMOTE shell), the local overlay joins `<extra_root>/<rel>`.
 
-/// One derived remote scan root: `provider_id` owns the remote
-/// directory `$HOME/<rel>`, where `rel` is the provider's LOCAL root
-/// with the home prefix stripped and separators normalized to `/`
-/// (empty `rel` means home itself).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteRoot {
-    pub provider_id: String,
-    pub rel: String,
-}
+pub use crate::session_manager::scan_roots::DerivedRoot as RemoteRoot;
+// The `home_relative_posix` re-export is consumed by this module's tests
+// (via `use super::*`); the lib itself no longer calls it directly.
+#[allow(unused_imports)]
+pub use crate::session_manager::scan_roots::home_relative_posix;
 
-/// Derive the remote scan roots for `scope` from every registry
-/// provider's `roots()`, against an explicit home prefix (the
-/// production path passes the REAL local home — see
-/// [`scan_remote_source`]; tests pass a temp "home").
-///
-/// - `roots()[0]` for Active, `roots()[1]` for Archived (scope
-///   semantics copied from the local scan core);
-/// - a provider with no root for the scope (e.g. no archived root) is
-///   skipped — local parity;
-/// - roots not under `home` are skipped with a debug log (no derivable
-///   remote counterpart).
-pub fn derive_remote_roots_with_home(
-    registry: &ProviderRegistry,
-    scope: &SessionScope,
-    home: &Path,
-) -> Vec<RemoteRoot> {
-    let mut out = Vec::new();
-    for provider in registry.all() {
-        let roots = provider.roots();
-        let root = match scope {
-            SessionScope::Active => roots.first(),
-            SessionScope::Archived => roots.get(1),
-        };
-        let Some(root) = root else {
-            continue; // provider has no root for this scope (local parity)
-        };
-        match home_relative_posix(root, home) {
-            Some(rel) => out.push(RemoteRoot {
-                provider_id: provider.id().to_string(),
-                rel,
-            }),
-            None => log::debug!(
-                "remote scan: provider `{}` root {} is not under the home prefix {} — no remote counterpart, skipped",
-                provider.id(),
-                root.display(),
-                home.display()
-            ),
-        }
-    }
-    out
-}
-
-/// Strip the `home` prefix from a local root and normalize to a posix
-/// home-relative path (`C:\Users\u\.claude\projects` →
-/// `.claude/projects`; `~` itself → `""`). `None` when the root is not
-/// under `home` (component-wise comparison — a sibling directory like
-/// `C:\Users\other` never matches a `C:\Users\u` home prefix).
-pub fn home_relative_posix(root: &Path, home: &Path) -> Option<String> {
-    let rel = root.strip_prefix(home).ok()?;
-    Some(
-        rel.components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
-}
+pub use crate::session_manager::scan_roots::derive_scan_roots_with_home as derive_remote_roots_with_home;
 
 // ---------------------------------------------------------------------------
 // BatchFetch: the IO surface the scan core consumes

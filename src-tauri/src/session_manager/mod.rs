@@ -1,6 +1,7 @@
 pub mod metadata;
 pub mod providers;
 pub mod remote;
+pub mod scan_roots;
 pub mod settings;
 
 mod export;
@@ -693,29 +694,38 @@ mod tests {
         assert_eq!(meta.session_id, "session-abc");
     }
 
-    /// Acceptance test (ADR 0006 §7, planner contract): a HAND-EDITED
-    /// `settings.json` must drive real behavior with zero UI — the
-    /// `update.autoCheck` override is readable through the manager, and a
-    /// hand-added `sources` entry surfaces real sessions from the real
-    /// provider registry scan (the same path `list_sessions` walks).
+    /// Acceptance test (ADR 0006 §7, planner contract; reworked for the
+    /// ADR 0011 home-mirror model): a HAND-EDITED `settings.json` must
+    /// drive real behavior with zero UI — the `update.autoCheck` override
+    /// is readable through the manager, and a hand-added `sources` entry
+    /// (an ALTERNATE HOME whose layout mirrors the real home) surfaces
+    /// real sessions from the real provider registry scan (the same path
+    /// `list_sessions` walks). The entry keeps a legacy `provider` key on
+    /// purpose: it must be tolerated, not skip the entry.
     #[test]
     fn hand_edited_settings_drive_scan_and_gate() {
         let _guard = ENV_LOCK.lock().expect("lock");
         let home = tempdir().expect("home");
-        let claude_cfg = tempdir().expect("claude config");
-        let extra = tempdir().expect("extra source dir");
+        let extra = tempdir().expect("extra home");
         let _home_guard = EnvVarGuard::set_path("SESSION_MANAGER_TEST_HOME", home.path());
-        let _claude_guard = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", claude_cfg.path());
+        // Claude's config lives INSIDE the (fake) home so the shared
+        // home-relative derivation can mirror it under the extra home
+        // (`.claude/projects`).
+        let _claude_guard = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", &home.path().join(".claude"));
 
         // Built-in discovery root: one session under ~/.claude/projects/.
-        let builtin_dir = claude_cfg.path().join("projects").join("my-folder");
+        let builtin_dir = home.path().join(".claude").join("projects").join("my-folder");
         std::fs::create_dir_all(&builtin_dir).expect("create builtin dir");
         write_claude_session(&builtin_dir.join("builtin.jsonl"), "builtin-session");
 
-        // Hand-added extra source root with a second session.
-        write_claude_session(&extra.path().join("extra.jsonl"), "extra-session");
+        // Hand-added extra home with the SAME `.claude/projects` layout
+        // and a second session.
+        let extra_dir = extra.path().join(".claude").join("projects").join("my-folder");
+        std::fs::create_dir_all(&extra_dir).expect("create extra dir");
+        write_claude_session(&extra_dir.join("extra.jsonl"), "extra-session");
 
-        // The hand-edited settings file a user would write.
+        // The hand-edited settings file a user would write (the legacy
+        // `provider` key is preserved-but-ignored, ADR 0011 OQ1=a).
         let settings_dir = home.path().join(".session-manager");
         std::fs::create_dir_all(&settings_dir).expect("create settings dir");
         let settings_json = format!(

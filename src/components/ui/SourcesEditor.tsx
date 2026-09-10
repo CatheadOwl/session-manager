@@ -2,15 +2,12 @@ import { useEffect, useState } from "react";
 import type { LocalSourceEntry, SourceEntry, SshSourceEntry } from "@/lib/api/settings";
 import { ConfirmDeleteDialog, type ConfirmActionTarget } from "@/components/sessions/ConfirmDeleteDialog";
 import { AddSshSourcePanel } from "./AddSshSourcePanel";
-import { Menu, MenuItem } from "./Menu";
 import { SettingRow } from "./SettingRow";
 
 export interface SourcesEditorProps {
   label: string;
   description?: string;
   value: SourceEntry[];
-  /** Provider ids for the picker (`list_providers` / `agents` SSOT). */
-  providers: string[];
   /** Commits the WHOLE sources value (settings core writes per key; this key's value is the full list). */
   onChange: (next: SourceEntry[]) => void;
   /** Display-only inline error surfaced on the row (e.g. failed write). */
@@ -31,28 +28,33 @@ const toDraft = (value: SourceEntry[]): DraftRow[] =>
   }));
 
 /**
- * UI primitive: `sourceList` renderer (ADR 0006 sources overlay). One row per
- * entry — path text input, provider picker (shared `Menu` primitive), enabled
- * toggle, remove (danger, guarded by ConfirmDeleteDialog). "Add source"
- * appends a draft row with the first provider preselected. Structural changes
- * (provider/enabled/add/remove) commit immediately via `onChange`; path edits
- * commit on blur/Enter so typing does not spam the IPC write path. Per-row
- * validation (empty path, duplicate paths) is display-only — the Rust core
- * re-validates on save.
+ * UI primitive: `sourceList` renderer (ADR 0006 sources overlay; local
+ * rows reworked by ADR 0011). Rendered through SettingRow's FULL variant
+ * — description on top, the list spanning the content width (list editors
+ * do not fit the two-column toggle rhythm). One row per entry:
  *
- * ADR 0008: ssh entries render with the SAME structural controls as local
- * rows — enabled toggle and guarded remove (unified expression; the read-only
- * part is only the connection identity, which comes from the Add flow) — and
- * MUST be included verbatim in every `onChange` commit: a local edit must
- * never drop them from the file. The commit shape is therefore the FULL
- * list. Adding NEW ssh entries goes through the "Add SSH source…" flow
- * (`AddSshSourcePanel`: ssh-config alias picker or manual form, with a test
- * connection step — ADR 0010).
+ * - LOCAL (ADR 0011 home-mirror): path text input + enabled toggle +
+ *   remove (danger, guarded by ConfirmDeleteDialog). There is NO provider
+ *   picker — the path names an ALTERNATE HOME whose layout mirrors the
+ *   real home, and every provider's sessions are auto-discovered under
+ *   it. "Add source…" appends an empty draft row.
+ * - SSH (ADR 0008): the SAME structural controls as local rows — enabled
+ *   toggle and guarded remove (unified expression; the read-only part is
+ *   only the connection identity, which comes from the Add flow) — and
+ *   MUST be included verbatim in every `onChange` commit: a local edit
+ *   must never drop them from the file. The commit shape is therefore
+ *   the FULL list. Adding NEW ssh entries goes through the "Add SSH
+ *   source…" flow (`AddSshSourcePanel`: ssh-config alias picker or
+ *   manual form, with a test connection step — ADR 0010).
+ *
+ * Structural changes (enabled/add/remove) commit immediately via
+ * `onChange`; path edits commit on blur/Enter so typing does not spam the
+ * IPC write path. Per-row validation (empty path, duplicate paths) is
+ * display-only — the Rust core re-validates on save.
  */
-export function SourcesEditor({ label, description, value, providers, onChange, error }: SourcesEditorProps) {
+export function SourcesEditor({ label, description, value, onChange, error }: SourcesEditorProps) {
   const [rows, setRows] = useState<DraftRow[]>(() => toDraft(value));
   const [pendingRemove, setPendingRemove] = useState<number | null>(null);
-  const [openProvider, setOpenProvider] = useState<number | null>(null);
   const [sshAddOpen, setSshAddOpen] = useState(false);
 
   // Resync when a new value arrives from outside (query refetch after
@@ -103,9 +105,9 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
     );
   };
 
+  // ADR 0011: a new local row is just `{ path, enabled }` — no provider.
   const addSource = () => {
-    if (providers.length === 0) return;
-    commit([...rows, { entry: { path: "", provider: providers[0], enabled: true }, pathDraft: "" }]);
+    commit([...rows, { entry: { path: "", enabled: true }, pathDraft: "" }]);
   };
 
   // The add-SSH flow commits a fully-formed entry from AddSshSourcePanel
@@ -136,16 +138,19 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
   })();
 
   return (
-    <SettingRow label={label} description={description} error={error}>
+    <SettingRow label={label} description={description} error={error} variant="full">
       <div className="setting-sources">
         {rows.length === 0 ? (
-          <div className="setting-sources-empty">No extra sources — built-in provider folders are always scanned.</div>
+          <div className="setting-sources-empty">No extra sources — this machine's home is always scanned.</div>
         ) : null}
         {rows.map((row, index) => {
-          // SSH row: kind badge + identity summary + the SAME structural
-          // controls as local rows (enabled toggle, guarded remove). The
-          // identity fields themselves stay read-only — connection config
-          // comes from the Add flow or hand editing (ADR 0010).
+          // SSH row: kind badge + ONE-LINE identity summary (label (id) ·
+          // user@host:port, or · ssh config alias) + the SAME structural
+          // controls as local rows (enabled toggle, guarded remove) — the
+          // same visual rhythm as a local row: one line of identity +
+          // toggle + Remove. The identity fields themselves stay read-only —
+          // connection config comes from the Add flow or hand editing
+          // (ADR 0010).
           if (row.entry.kind === "ssh") {
             const ssh = row.entry;
             // sshConfig entries keep placeholder host/user fields (ADR
@@ -161,6 +166,7 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
                   <span className="setting-source-ssh-title">
                     {ssh.label ? `${ssh.label} (${ssh.id})` : ssh.id}
                   </span>
+                  <span className="setting-source-ssh-sep" aria-hidden="true">·</span>
                   <span className="setting-source-ssh-host">
                     {viaAlias !== null
                       ? `ssh config alias: ${viaAlias}`
@@ -208,7 +214,7 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
                 type="text"
                 className="setting-source-input"
                 value={row.pathDraft}
-                placeholder="D:\\jsonl\\dump"
+                placeholder="D:\backups\home-copy"
                 aria-label={`Source ${index + 1} path`}
                 aria-invalid={validation ? true : undefined}
                 onChange={(e) =>
@@ -222,31 +228,6 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
                   }
                 }}
               />
-              <Menu
-                label={`Source ${index + 1} provider: ${entry.provider}`}
-                open={openProvider === index}
-                onOpenChange={(open) => setOpenProvider(open ? index : null)}
-                renderTrigger={(triggerProps) => (
-                  <button type="button" className="secondary-button setting-provider-trigger" {...triggerProps}>
-                    <span className="setting-provider-name">{entry.provider}</span>
-                    <span className="setting-provider-caret" aria-hidden="true">▾</span>
-                  </button>
-                )}
-              >
-                {providers.map((id) => (
-                  <MenuItem
-                    key={id}
-                    checked={entry.provider === id}
-                    active={entry.provider === id}
-                    onClick={() => {
-                      updateEntry(index, { provider: id });
-                      setOpenProvider(null);
-                    }}
-                  >
-                    {id}
-                  </MenuItem>
-                ))}
-              </Menu>
               <button
                 type="button"
                 role="switch"
@@ -281,7 +262,7 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
             </div>
           );
         })}
-        <button type="button" className="secondary-button setting-source-add" onClick={addSource} disabled={providers.length === 0}>
+        <button type="button" className="secondary-button setting-source-add" onClick={addSource}>
           Add source…
         </button>
         {sshAddOpen ? (

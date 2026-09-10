@@ -691,4 +691,59 @@ mod tests {
         let meta = parse_session_meta(&registry, &path).expect("parse");
         assert_eq!(meta.session_id, "session-abc");
     }
+
+    /// Acceptance test (ADR 0006 §7, planner contract): a HAND-EDITED
+    /// `settings.json` must drive real behavior with zero UI — the
+    /// `update.autoCheck` override is readable through the manager, and a
+    /// hand-added `sources` entry surfaces real sessions from the real
+    /// provider registry scan (the same path `list_sessions` walks).
+    #[test]
+    fn hand_edited_settings_drive_scan_and_gate() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let home = tempdir().expect("home");
+        let claude_cfg = tempdir().expect("claude config");
+        let extra = tempdir().expect("extra source dir");
+        let _home_guard = EnvVarGuard::set_path("SESSION_MANAGER_TEST_HOME", home.path());
+        let _claude_guard = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", claude_cfg.path());
+
+        // Built-in discovery root: one session under ~/.claude/projects/.
+        let builtin_dir = claude_cfg.path().join("projects").join("my-folder");
+        std::fs::create_dir_all(&builtin_dir).expect("create builtin dir");
+        write_claude_session(&builtin_dir.join("builtin.jsonl"), "builtin-session");
+
+        // Hand-added extra source root with a second session.
+        write_claude_session(&extra.path().join("extra.jsonl"), "extra-session");
+
+        // The hand-edited settings file a user would write.
+        let settings_dir = home.path().join(".session-manager");
+        std::fs::create_dir_all(&settings_dir).expect("create settings dir");
+        let settings_json = format!(
+            "{{\"version\":1,\"update\":{{\"autoCheck\":false}},\"sources\":[{{\"path\":{},\"provider\":\"claude\",\"enabled\":true}}]}}",
+            serde_json::to_string(extra.path()).expect("serialize path")
+        );
+        std::fs::write(settings_dir.join("settings.json"), settings_json)
+            .expect("write settings");
+
+        let settings = settings::SettingsManager::new(
+            crate::config::get_app_settings_path().expect("settings path"),
+        );
+
+        // Acceptance #1 (core half): the autoCheck override is visible.
+        assert_eq!(
+            settings.get_value("update.autoCheck"),
+            Some(settings::SettingValue::Bool(false))
+        );
+
+        // Acceptance #2: the hand-added source surfaces via the real scan,
+        // next to the built-in discovery root, exactly as list_sessions does.
+        let registry = test_registry();
+        let sources = settings.enabled_sources();
+        assert_eq!(sources.len(), 1, "enabled hand-added source is picked up");
+
+        let sessions = scan_sessions_with_scope(&registry, &SessionScope::Active, &sources);
+        let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert!(ids.contains(&"builtin-session"), "built-in root scanned: {ids:?}");
+        assert!(ids.contains(&"extra-session"), "hand-added source scanned: {ids:?}");
+        assert_eq!(sessions.len(), 2, "no double scan: {ids:?}");
+    }
 }

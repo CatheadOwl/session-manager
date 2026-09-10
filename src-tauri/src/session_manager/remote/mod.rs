@@ -3,6 +3,10 @@
 //!
 //! Submodules:
 //! - [`error`] — `RemoteError`, the reaction-shaped failure taxonomy;
+//! - [`alias`] — ADR 0010 ssh-config alias resolution: expands the
+//!   `sshConfig` auth mode's alias against `~/.ssh/config` (ssh2-config:
+//!   Host patterns, first-match-wins, Include) into host/user/port/
+//!   IdentityFile, with the ProxyJump v1 boundary enforced;
 //! - [`frame`] — the binary-safe batch-metadata framing protocol and
 //!   script builder (pure, offline-testable);
 //! - [`cache`] — the transient local cache for fully-fetched files
@@ -30,10 +34,11 @@
 //! Configuration comes from the settings-core `SshSource` /
 //! `SourceAuth` types — this layer never invents its own config shape.
 
+mod alias;
 mod cache;
-mod error;
 #[cfg(test)]
 mod e2e;
+mod error;
 mod frame;
 mod scan;
 mod session;
@@ -155,9 +160,8 @@ impl RemoteSessionPool {
             // Dead and left over from a failed retry — rebuild below.
             sessions.remove(&source.id);
         }
-        let session = Arc::new(
-            RemoteSession::connect_with_cache(source, self.cache_base.clone()).await?,
-        );
+        let session =
+            Arc::new(RemoteSession::connect_with_cache(source, self.cache_base.clone()).await?);
         sessions.insert(source.id.clone(), session.clone());
         Ok(session)
     }

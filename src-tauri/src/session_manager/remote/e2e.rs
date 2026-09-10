@@ -35,7 +35,7 @@ use std::time::Instant;
 
 use crate::session_manager::operations;
 use crate::session_manager::providers::ProviderRegistry;
-use crate::session_manager::remote::{RemoteSessionPool, resolve_remote_to_local};
+use crate::session_manager::remote::{resolve_remote_to_local, RemoteSessionPool};
 use crate::session_manager::settings::{SourceAuth, SshSource};
 use crate::session_manager::types::{SessionHandle, SessionLocator, SessionScope};
 use crate::session_manager::{build_provider_registry, scan_sessions_with_scope};
@@ -43,7 +43,10 @@ use crate::session_manager::{build_provider_registry, scan_sessions_with_scope};
 fn e2e_config() -> Option<SshSource> {
     let host = std::env::var("REMOTE_E2E_HOST").ok()?;
     let key_path = std::env::var("REMOTE_E2E_KEY").unwrap_or_else(|_| {
-        format!("{}/.ssh/id_ed25519", std::env::var("USERPROFILE").unwrap_or_default())
+        format!(
+            "{}/.ssh/id_ed25519",
+            std::env::var("USERPROFILE").unwrap_or_default()
+        )
     });
     Some(SshSource {
         id: std::env::var("REMOTE_E2E_SOURCE_ID").unwrap_or_else(|_| "e2e".into()),
@@ -100,7 +103,11 @@ async fn g2_remote_v1_end_to_end() {
 
     // ---- G2.1 list: remote scan produces Remote-locator SessionMeta ----
     let state = crate::session_manager::remote::RemoteScanState::new();
-    let session = state.pool.get(&source).await.expect("connect + auth + known_hosts");
+    let session = state
+        .pool
+        .get(&source)
+        .await
+        .expect("connect + auth + known_hosts");
     let registry_arc = registry.clone();
     let t = Instant::now();
     let result = state
@@ -113,7 +120,10 @@ async fn g2_remote_v1_end_to_end() {
         t.elapsed().as_millis(),
         result.from_cache
     );
-    assert!(!result.from_cache, "first scan must hit the network, not the cache");
+    assert!(
+        !result.from_cache,
+        "first scan must hit the network, not the cache"
+    );
     assert!(
         !outcome_sessions.is_empty(),
         "remote machine has no sessions in its standard provider roots — pick a populated host"
@@ -134,7 +144,10 @@ async fn g2_remote_v1_end_to_end() {
         .await
         .expect("first resolve")
         .expect("remote handle must resolve");
-    println!("[g2.2] first resolve: {} ms (network fetch)", t.elapsed().as_millis());
+    println!(
+        "[g2.2] first resolve: {} ms (network fetch)",
+        t.elapsed().as_millis()
+    );
 
     let messages = load_messages(&registry, &first);
     println!("[g2.2] loaded {} messages", messages.len());
@@ -157,8 +170,14 @@ async fn g2_remote_v1_end_to_end() {
         .expect("second resolve")
         .expect("remote handle must resolve again");
     let second_path = second.locator.file_path().unwrap().to_string();
-    println!("[g2.2] second resolve: {} ms (cache hit)", t.elapsed().as_millis());
-    assert_eq!(local_path, second_path, "cache hit returns the same local copy");
+    println!(
+        "[g2.2] second resolve: {} ms (cache hit)",
+        t.elapsed().as_millis()
+    );
+    assert_eq!(
+        local_path, second_path,
+        "cache hit returns the same local copy"
+    );
     assert_eq!(
         sidecar_before,
         std::fs::metadata(&sidecar)
@@ -187,10 +206,16 @@ async fn g2_remote_v1_end_to_end() {
         local.len(),
         t.elapsed().as_millis()
     );
-    assert!(!local.is_empty(), "local machine should list its own sessions");
+    assert!(
+        !local.is_empty(),
+        "local machine should list its own sessions"
+    );
 }
 
-fn remote_handle(source_id: &str, meta: &crate::session_manager::types::SessionMeta) -> SessionHandle {
+fn remote_handle(
+    source_id: &str,
+    meta: &crate::session_manager::types::SessionMeta,
+) -> SessionHandle {
     SessionHandle {
         provider_id: meta.provider_id.clone(),
         session_id: meta.session_id.clone(),
@@ -213,4 +238,68 @@ fn load_messages(
     provider
         .load_messages_for_handle(handle)
         .expect("message load via resolved local copy")
+}
+
+/// ADR 0010 sshConfig-mode E2E (G2.1 scope): when `REMOTE_E2E_ALIAS` is
+/// set, build the source with `auth: { mode: "sshConfig", alias }` —
+/// host/user/port/key all come from the real `~/.ssh/config` Host
+/// block at connect time — and run the list gate (connect + scan
+/// produces Remote-locator SessionMeta).
+///
+/// ```text
+/// REMOTE_E2E_ALIAS=ali \
+/// REMOTE_E2E_SOURCE_ID=ali \
+/// cargo test --offline remote_e2e_ssh_config_alias -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs a real ssh config alias (REMOTE_E2E_ALIAS) to a populated host"]
+async fn remote_e2e_ssh_config_alias() {
+    let alias = std::env::var("REMOTE_E2E_ALIAS").expect(
+        "REMOTE_E2E_ALIAS not set — point it at a Host alias in ~/.ssh/config \
+         whose machine has populated provider roots",
+    );
+    let source = SshSource {
+        id: std::env::var("REMOTE_E2E_SOURCE_ID").unwrap_or_else(|_| "e2e-alias".into()),
+        label: None,
+        // Placeholder fields: the sshConfig auth mode overrides all
+        // three from the resolved Host block at connect time.
+        host: alias.clone(),
+        port: 22,
+        user: String::new(),
+        auth: SourceAuth::SshConfig {
+            alias: alias.clone(),
+        },
+        enabled: true,
+        extra: Default::default(),
+    };
+    let sid = source.id.clone();
+    let registry = build_provider_registry();
+
+    // G2.1 list: connect resolves the alias, auth rides the agent pass
+    // (or the Host block's IdentityFile, ~-expanded).
+    let state = crate::session_manager::remote::RemoteScanState::new();
+    let session = state
+        .pool
+        .get(&source)
+        .await
+        .expect("connect + auth via alias");
+    let result = state
+        .scan_source(&registry, session, &source, &SessionScope::Active)
+        .await;
+    println!(
+        "[e2e-alias] scan: {} sessions (from_cache={})",
+        result.sessions.len(),
+        result.from_cache
+    );
+    assert!(!result.from_cache, "first scan must hit the network");
+    assert!(
+        !result.sessions.is_empty(),
+        "aliased machine has no sessions in its standard provider roots"
+    );
+    for meta in &result.sessions {
+        assert!(
+            matches!(meta.locator.as_ref(), Some(SessionLocator::Remote { source_id, .. }) if source_id == &sid),
+            "every remote session must carry a Remote locator anchored to the source id"
+        );
+    }
 }

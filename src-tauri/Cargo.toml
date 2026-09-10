@@ -37,6 +37,13 @@ russh = { version = "0.63", default-features = false, features = ["ring"] }
 russh-sftp = "3.0"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
+# SSH config alias resolution (ADR 0010): parse ~/.ssh/config (incl.
+# Include directives and Host patterns) to expand the sshConfig auth
+# mode's alias into host/user/port/IdentityFile. default-features off:
+# the `reload-ssh-algo` feature would pull a git2 build dep; the
+# checked-in default algorithms are fine here. NOTE: needs rustc >= 1.88
+# (the crate's MSRV); the packaged toolchain is 1.94.
+ssh2-config = { version = "0.8", default-features = false }
 
 # Console attach for the CLI branch (workunit 20260910-1408): release builds
 # are GUI-subsystem (windows_subsystem="windows"), so Win32 AttachConsole +

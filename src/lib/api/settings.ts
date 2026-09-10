@@ -27,8 +27,17 @@ export interface LocalSourceEntry {
   id?: string;
 }
 
-/** SSH auth block: tagged by `mode`, camelCase `keyPath`. */
-export type SshSourceAuth = { mode: "agent" } | { mode: "key"; keyPath: string };
+/**
+ * SSH auth block (ADR 0008, extended by ADR 0010): tagged by `mode`,
+ * camelCase `keyPath`. `sshConfig` is a live reference to a Host alias
+ * in `~/.ssh/config` — host/user/port/IdentityFile are resolved from
+ * that block at connect time; the entry's own host/user/port fields
+ * are placeholders.
+ */
+export type SshSourceAuth =
+  | { mode: "agent" }
+  | { mode: "key"; keyPath: string }
+  | { mode: "sshConfig"; alias: string };
 
 /**
  * SSH remote source (ADR 0008 / ADR 0007 remote v1). Not yet editable in the

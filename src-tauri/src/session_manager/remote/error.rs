@@ -42,6 +42,14 @@ pub enum RemoteError {
     /// previously recorded for this host (possible MITM). Same remedy as
     /// `HostKeyUnknown` but the user should investigate before trusting.
     HostKeyChanged { host: String, port: u16 },
+    /// The `sshConfig` auth mode's alias could not be resolved into a
+    /// usable connection (ADR 0010): missing/unparseable
+    /// `~/.ssh/config`, no matching `Host` block, or a `ProxyJump`
+    /// entry — the russh stack has no jump-host dialing yet, so that
+    /// case fails explicitly instead of dialing the target directly.
+    /// Remedy: fix the `Host` block in `~/.ssh/config` or switch the
+    /// source's auth mode.
+    SshConfigAlias(String),
     /// Any other transport/local IO failure, with context.
     Io(String),
 }
@@ -81,6 +89,9 @@ impl fmt::Display for RemoteError {
                      known_hosts — verify the server before retrying"
                 )
             }
+            RemoteError::SshConfigAlias(detail) => {
+                write!(f, "ssh config alias resolution failed: {detail}")
+            }
             RemoteError::Io(detail) => write!(f, "remote IO error: {detail}"),
         }
     }
@@ -102,7 +113,10 @@ mod tests {
         // The message must tell the user the concrete remedy, not just
         // "key check failed".
         assert!(msg.contains("ssh"), "remedy mentions the ssh client: {msg}");
-        assert!(msg.contains("known_hosts"), "remedy mentions known_hosts: {msg}");
+        assert!(
+            msg.contains("known_hosts"),
+            "remedy mentions known_hosts: {msg}"
+        );
         assert!(msg.contains("192.0.2.10:22"));
     }
 
@@ -131,6 +145,7 @@ mod tests {
                 host: "h".to_string(),
                 port: 22,
             },
+            RemoteError::SshConfigAlias("no Host block".to_string()),
             RemoteError::Io("boom".to_string()),
         ];
         for (i, a) in variants.iter().enumerate() {

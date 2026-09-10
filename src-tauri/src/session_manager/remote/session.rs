@@ -19,15 +19,15 @@ use std::time::Duration;
 
 use russh::keys::agent::client::AgentClient;
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{PrivateKeyWithHashAlg, check_known_hosts, load_secret_key};
-use russh::{ChannelMsg, client};
+use russh::keys::{check_known_hosts, load_secret_key, PrivateKeyWithHashAlg};
+use russh::{client, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 
 use super::cache::{self, CacheMeta};
 use super::error::RemoteError;
 use super::frame::{self, FileMetadataBlob};
-use super::RemotePath;
+use super::{alias, RemotePath};
 use crate::session_manager::settings::{SourceAuth, SshSource};
 
 /// Named pipe of the Windows OpenSSH agent (the spike-verified path).
@@ -114,6 +114,38 @@ impl RemoteSession {
         source: &SshSource,
         cache_base: PathBuf,
     ) -> Result<Self, RemoteError> {
+        // ADR 0010 sshConfig mode: expand the alias against
+        // ~/.ssh/config (a LIVE reference — re-resolved on every
+        // connect, reconnects included, so config edits are followed)
+        // into concrete host/port/user plus an auth override. The
+        // entry's own host/user/port fields are placeholders in this
+        // mode: the resolved Host block wins for every field it sets.
+        let source = match &source.auth {
+            SourceAuth::SshConfig { alias } => {
+                let resolved = alias::resolve_alias(alias)?;
+                let mut effective = source.clone();
+                effective.host = resolved.host;
+                if let Some(port) = resolved.port {
+                    effective.port = port;
+                }
+                if let Some(user) = resolved.user {
+                    effective.user = user;
+                }
+                // Auth order is unchanged: agent identities first, then
+                // the Host block's IdentityFile as the key fallback.
+                // Absent IdentityFile = agent-only.
+                effective.auth = match resolved.identity_file {
+                    Some(key) => SourceAuth::Key {
+                        key_path: key.to_string_lossy().into_owned(),
+                    },
+                    None => SourceAuth::Agent,
+                };
+                effective
+            }
+            _ => source.clone(),
+        };
+        let source = &source;
+
         let outcome = Arc::new(StdMutex::new(HostKeyOutcome::Unknown));
         let config = Arc::new(client::Config {
             inactivity_timeout: Some(Duration::from_secs(30)),
@@ -125,39 +157,38 @@ impl RemoteSession {
             outcome: outcome.clone(),
         };
 
-        let mut handle = match client::connect(config, (source.host.as_str(), source.port), handler)
-            .await
-        {
-            Ok(handle) => handle,
-            Err(e) => {
-                // Russh flattens a rejected host key into `UnknownKey`;
-                // consult the recorded outcome for the precise variant.
-                if matches!(e, russh::Error::UnknownKey) {
-                    let variant = outcome.lock().expect("hostkey lock").clone();
-                    return Err(match variant {
-                        HostKeyOutcome::Changed(detail) => {
-                            log::warn!(
-                                "remote: host key changed for {}:{} ({detail})",
-                                source.host,
-                                source.port
-                            );
-                            RemoteError::HostKeyChanged {
+        let mut handle =
+            match client::connect(config, (source.host.as_str(), source.port), handler).await {
+                Ok(handle) => handle,
+                Err(e) => {
+                    // Russh flattens a rejected host key into `UnknownKey`;
+                    // consult the recorded outcome for the precise variant.
+                    if matches!(e, russh::Error::UnknownKey) {
+                        let variant = outcome.lock().expect("hostkey lock").clone();
+                        return Err(match variant {
+                            HostKeyOutcome::Changed(detail) => {
+                                log::warn!(
+                                    "remote: host key changed for {}:{} ({detail})",
+                                    source.host,
+                                    source.port
+                                );
+                                RemoteError::HostKeyChanged {
+                                    host: source.host.clone(),
+                                    port: source.port,
+                                }
+                            }
+                            _ => RemoteError::HostKeyUnknown {
                                 host: source.host.clone(),
                                 port: source.port,
-                            }
-                        }
-                        _ => RemoteError::HostKeyUnknown {
-                            host: source.host.clone(),
-                            port: source.port,
-                        },
-                    });
+                            },
+                        });
+                    }
+                    return Err(RemoteError::Io(format!(
+                        "connect {}:{} failed: {e}",
+                        source.host, source.port
+                    )));
                 }
-                return Err(RemoteError::Io(format!(
-                    "connect {}:{} failed: {e}",
-                    source.host, source.port
-                )));
-            }
-        };
+            };
 
         Self::authenticate(&mut handle, &source.user, &source.auth).await?;
 
@@ -194,8 +225,16 @@ impl RemoteSession {
 
         // --- key-file fallback ---
         if let SourceAuth::Key { key_path } = auth {
-            let key = load_secret_key(key_path, None)
-                .map_err(|e| RemoteError::AuthFailed(format!("load key {key_path}: {e}")))?;
+            // ADR 0010 Decision 3: every key path is ~-expanded before
+            // it reaches the loader — covers BOTH the hand-typed
+            // `Key.keyPath` (v1 gap: `~/...` used to fail verbatim) and
+            // IdentityFiles expanded out of ~/.ssh/config (ssh2-config
+            // usually pre-expands those; this is the no-op-safe belt
+            // for the cases it leaves literal).
+            let expanded = alias::expand_tilde(key_path);
+            let key = load_secret_key(&expanded, None).map_err(|e| {
+                RemoteError::AuthFailed(format!("load key {}: {e}", expanded.display()))
+            })?;
             let res = handle
                 .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), None))
                 .await
@@ -258,7 +297,10 @@ impl RemoteSession {
             Err(e) => return Err(e),
         };
         frame::parse_batch_stream(&stdout).map_err(|e| {
-            log::warn!("remote: batch stream parse failed source={}: {e}", self.source.id);
+            log::warn!(
+                "remote: batch stream parse failed source={}: {e}",
+                self.source.id
+            );
             RemoteError::Io(format!("batch protocol error: {e}"))
         })
     }
@@ -301,14 +343,18 @@ impl RemoteSession {
                 let size = meta.size.ok_or_else(|| {
                     RemoteError::Io(format!("remote stat omitted size for {path}"))
                 })?;
-                let mtime = systemtime_to_epoch(&meta)
-                    .ok_or_else(|| RemoteError::Io(format!("remote stat omitted mtime for {path}")))?;
+                let mtime = systemtime_to_epoch(&meta).ok_or_else(|| {
+                    RemoteError::Io(format!("remote stat omitted mtime for {path}"))
+                })?;
                 (size, mtime)
             }
         };
 
         if cache::is_fresh(&self.cache_base, &self.source.id, path, size, mtime) {
-            log::debug!("remote-cache: fresh hit source={} path={path}", self.source.id);
+            log::debug!(
+                "remote-cache: fresh hit source={} path={path}",
+                self.source.id
+            );
             return Ok(cache::entry_path(&self.cache_base, &self.source.id, path));
         }
 
@@ -393,7 +439,11 @@ impl RemoteSession {
         let mut guard = self.handle.lock().await;
         if !guard.is_closed() {
             let _ = guard
-                .disconnect(russh::Disconnect::ByApplication, "replaced by reconnect", "")
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "replaced by reconnect",
+                    "",
+                )
                 .await;
         }
         *guard = fresh_handle_of(fresh);
@@ -403,9 +453,7 @@ impl RemoteSession {
     /// Open one SFTP subsystem channel (per operation — cheap relative
     /// to the transfers it serves, and avoids sharing one multiplexed
     /// session across concurrent futures).
-    async fn open_sftp(
-        &self,
-    ) -> Result<russh_sftp::client::SftpSession, RemoteError> {
+    async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession, RemoteError> {
         let guard = self.handle.lock().await;
         if guard.is_closed() {
             return Err(RemoteError::Disconnected);
@@ -414,7 +462,10 @@ impl RemoteSession {
             if guard.is_closed() {
                 RemoteError::Disconnected
             } else {
-                log::warn!("remote: SFTP channel refused source={}: {e}", self.source.id);
+                log::warn!(
+                    "remote: SFTP channel refused source={}: {e}",
+                    self.source.id
+                );
                 RemoteError::ExecUnavailable(format!("sftp channel open: {e}"))
             }
         })?;
@@ -551,10 +602,7 @@ impl RemoteSession {
 /// Unix agent pass: SSH_AUTH_SOCK (openssh-agent default).
 #[cfg(not(windows))]
 impl RemoteSession {
-    async fn try_agent_auth_unix(
-        handle: &mut client::Handle<RemoteHandler>,
-        user: &str,
-    ) -> bool {
+    async fn try_agent_auth_unix(handle: &mut client::Handle<RemoteHandler>, user: &str) -> bool {
         let mut agent = match AgentClient::connect_env().await {
             Ok(agent) => agent,
             Err(e) => {
@@ -614,10 +662,7 @@ mod integration {
         let key = std::env::var("REMOTE_SPIKE_KEY").ok()?;
         let file = std::env::var("REMOTE_SPIKE_FILE").ok()?;
         let mut extra = std::collections::BTreeMap::new();
-        extra.insert(
-            "testFile".to_string(),
-            serde_json::Value::String(file),
-        );
+        extra.insert("testFile".to_string(), serde_json::Value::String(file));
         Some(SshSource {
             id: "spike".to_string(),
             label: None,
@@ -649,8 +694,9 @@ mod integration {
             panic!("REMOTE_SPIKE_HOST/USER/KEY/FILE not set");
         };
         let file = spike_file(&source);
-        let cache_base =
-            std::env::temp_dir().join("session-manager-remote-smoke").join(format!(
+        let cache_base = std::env::temp_dir()
+            .join("session-manager-remote-smoke")
+            .join(format!(
                 "{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
@@ -671,8 +717,14 @@ mod integration {
         assert_eq!(blobs.len(), 1, "exactly the one requested file");
         let blob = &blobs[0];
         assert!(blob.size > 0, "test file is non-empty");
-        assert_eq!(blob.head.len(), (frame::HEAD_MAX as u64).min(blob.size) as usize);
-        assert_eq!(blob.tail.len(), (frame::TAIL_MAX as u64).min(blob.size) as usize);
+        assert_eq!(
+            blob.head.len(),
+            (frame::HEAD_MAX as u64).min(blob.size) as usize
+        );
+        assert_eq!(
+            blob.tail.len(),
+            (frame::TAIL_MAX as u64).min(blob.size) as usize
+        );
 
         // fetch_to_local: fresh miss → transfer; second call → cache hit.
         let local = session

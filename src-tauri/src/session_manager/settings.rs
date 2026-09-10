@@ -66,7 +66,18 @@ pub struct LocalSource {
     pub id: Option<String>,
 }
 
-/// SSH auth block (ADR 0008 §1): tagged by `mode`, camelCase `keyPath`.
+/// SSH auth block (ADR 0008 §1, extended by ADR 0010): tagged by
+/// `mode`, camelCase `keyPath`. Three modes:
+/// - `agent` — ssh-agent identities only;
+/// - `key` — explicit key file (fallback after the agent pass);
+/// - `sshConfig` — live reference to a `~/.ssh/config` Host alias;
+///   the entry's `host`/`user`/`port` fields are placeholders that
+///   the connect layer overrides from the resolved `Host` block
+///   (agent identities first, then the block's IdentityFile).
+///
+/// Wire note: the enum-level `rename_all = "lowercase"` would render
+/// `SshConfig` as "sshconfig"; the explicit `#[serde(rename)]` below
+/// pins the camelCase tag (ADR 0010's wire shape).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum SourceAuth {
@@ -74,6 +85,10 @@ pub enum SourceAuth {
     Key {
         #[serde(rename = "keyPath")]
         key_path: String,
+    },
+    #[serde(rename = "sshConfig")]
+    SshConfig {
+        alias: String,
     },
 }
 
@@ -376,9 +391,7 @@ impl SettingsManager {
                 },
                 "sources" => match parse_sources(&value) {
                     Some(list) => {
-                        if SettingValue::SourceList(list.clone())
-                            != default_of("sources")
-                        {
+                        if SettingValue::SourceList(list.clone()) != default_of("sources") {
                             store
                                 .overrides
                                 .insert("sources".to_string(), SettingValue::SourceList(list));
@@ -454,9 +467,7 @@ impl SettingsManager {
             .cloned()
             .unwrap_or_else(|| default_of("sources"))
         {
-            SettingValue::SourceList(list) => {
-                list.into_iter().filter(|s| s.is_enabled()).collect()
-            }
+            SettingValue::SourceList(list) => list.into_iter().filter(|s| s.is_enabled()).collect(),
             _ => Vec::new(),
         }
     }
@@ -508,7 +519,10 @@ impl SettingsManager {
         }
         for (section, mut fields) in sections {
             if !fields.is_empty() {
-                root.insert(section.to_string(), Value::Object(std::mem::take(&mut fields)));
+                root.insert(
+                    section.to_string(),
+                    Value::Object(std::mem::take(&mut fields)),
+                );
             }
         }
 
@@ -539,7 +553,11 @@ fn merged_values(store: &SettingsStore) -> HashMap<String, SettingValue> {
         .map(|def| {
             (
                 def.key.to_string(),
-                store.overrides.get(def.key).cloned().unwrap_or_else(|| def.default.clone()),
+                store
+                    .overrides
+                    .get(def.key)
+                    .cloned()
+                    .unwrap_or_else(|| def.default.clone()),
             )
         })
         .collect()
@@ -630,7 +648,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let manager = SettingsManager::new(settings_path(dir.path()));
         let snapshot = manager.get();
-        assert_eq!(snapshot.values["update.autoCheck"], SettingValue::Bool(true));
+        assert_eq!(
+            snapshot.values["update.autoCheck"],
+            SettingValue::Bool(true)
+        );
         assert_eq!(
             snapshot.values["sources"],
             SettingValue::SourceList(Vec::new())
@@ -736,7 +757,10 @@ mod tests {
             .expect("set");
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
-        assert!(saved.get("update").is_none(), "default-equal key must be omitted");
+        assert!(
+            saved.get("update").is_none(),
+            "default-equal key must be omitted"
+        );
     }
 
     #[test]
@@ -791,7 +815,10 @@ mod tests {
             ]}",
         );
         let manager = SettingsManager::new(path);
-        assert_eq!(manager.enabled_sources(), vec![local("D:/jsonl/dump", "codex", true)]);
+        assert_eq!(
+            manager.enabled_sources(),
+            vec![local("D:/jsonl/dump", "codex", true)]
+        );
         // The disabled entry is kept in the merged view...
         assert_eq!(
             manager.get_value("sources"),
@@ -857,7 +884,9 @@ mod tests {
         // The rest of the list survives the unknown-kind entry.
         assert_eq!(
             manager.get_value("sources"),
-            Some(SettingValue::SourceList(vec![local("D:/a", "claude", true)]))
+            Some(SettingValue::SourceList(vec![local(
+                "D:/a", "claude", true
+            )]))
         );
     }
 
@@ -931,7 +960,9 @@ mod tests {
         assert_eq!(s.port, 22); // defaulted
         assert_eq!(
             s.auth,
-            SourceAuth::Key { key_path: "~/.ssh/id_ed25519".to_string() }
+            SourceAuth::Key {
+                key_path: "~/.ssh/id_ed25519".to_string()
+            }
         );
         // Forward compat: the stray local field is tolerated AND preserved.
         assert_eq!(
@@ -960,8 +991,7 @@ mod tests {
             _ => panic!("expected a source list"),
         };
         let SourceEntry::Ssh(s) = entry else {
-            panic!("expected an ssh entry (legacy fields must not skip it)"
-            );
+            panic!("expected an ssh entry (legacy fields must not skip it)");
         };
         assert_eq!(s.id, "ali");
         // The removed schema fields are preserved verbatim as unknowns —
@@ -994,8 +1024,7 @@ mod tests {
         // The UI commit shape (documented): set_value("sources", …) carries
         // the FULL list — the edited local entries plus the ssh entries
         // verbatim, exactly as get_value served them.
-        let SettingValue::SourceList(mut current) =
-            manager.get_value("sources").expect("sources")
+        let SettingValue::SourceList(mut current) = manager.get_value("sources").expect("sources")
         else {
             panic!("expected source list")
         };
@@ -1038,6 +1067,61 @@ mod tests {
         assert_eq!(manager.enabled_sources(), vec![ssh("a", "h")]);
     }
 
+    /// ADR 0010 wire pin: the sshConfig variant must serialize with the
+    /// camelCase tag "sshConfig" (the enum-level lowercase rename would
+    /// produce "sshconfig"), and parse back symmetrically.
+    #[test]
+    fn ssh_config_auth_wire_shape_is_camel_case() {
+        let wire = serde_json::to_value(SourceAuth::SshConfig {
+            alias: "ali".to_string(),
+        })
+        .expect("serialize");
+        assert_eq!(
+            wire,
+            serde_json::json!({"mode": "sshConfig", "alias": "ali"})
+        );
+        let back: SourceAuth = serde_json::from_value(wire).expect("deserialize");
+        assert_eq!(
+            back,
+            SourceAuth::SshConfig {
+                alias: "ali".to_string()
+            }
+        );
+        // The lowercase forms of the other modes are unchanged.
+        assert_eq!(
+            serde_json::to_value(SourceAuth::Agent).unwrap(),
+            serde_json::json!({"mode": "agent"})
+        );
+    }
+
+    /// An ssh entry using the sshConfig auth mode loads through the
+    /// lenient kind-first loader like any other.
+    #[test]
+    fn loader_ssh_config_auth_entry_loads() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\
+                \"kind\": \"ssh\", \"id\": \"ali\", \"host\": \"placeholder\", \"user\": \"placeholder\",\
+                \"auth\": {\"mode\": \"sshConfig\", \"alias\": \"ali\"}\
+            }]}",
+        );
+        let manager = SettingsManager::new(path);
+        let entry = match manager.get_value("sources") {
+            Some(SettingValue::SourceList(mut list)) => list.remove(0),
+            _ => panic!("expected a source list"),
+        };
+        let SourceEntry::Ssh(s) = entry else {
+            panic!("expected an ssh entry")
+        };
+        assert_eq!(
+            s.auth,
+            SourceAuth::SshConfig {
+                alias: "ali".to_string()
+            }
+        );
+    }
+
     #[test]
     fn migrate_is_noop_at_v1() {
         let mut raw = serde_json::json!({"version": 1, "update": {"autoCheck": false}});
@@ -1057,7 +1141,10 @@ mod tests {
             .set_value("sources", SettingValue::SourceList(Vec::new()))
             .expect("set");
         let text = std::fs::read_to_string(&path).expect("read");
-        assert!(!text.contains("sources"), "empty list is default-equal and must be omitted");
+        assert!(
+            !text.contains("sources"),
+            "empty list is default-equal and must be omitted"
+        );
     }
 
     #[test]
@@ -1068,7 +1155,13 @@ mod tests {
         let snapshot = manager.get();
         assert_eq!(snapshot.version, 1);
         assert_eq!(snapshot.descriptors.len(), SETTINGS.len());
-        assert_eq!(snapshot.values["update.autoCheck"], SettingValue::Bool(false));
-        assert_eq!(snapshot.values["sources"], SettingValue::SourceList(Vec::new()));
+        assert_eq!(
+            snapshot.values["update.autoCheck"],
+            SettingValue::Bool(false)
+        );
+        assert_eq!(
+            snapshot.values["sources"],
+            SettingValue::SourceList(Vec::new())
+        );
     }
 }

@@ -4183,6 +4183,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "ssh2-config",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4443,6 +4444,20 @@ dependencies = [
  "ssh-cipher",
  "ssh-encoding",
  "zeroize",
+]
+
+[[package]]
+name = "ssh2-config"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d2108aade44855426db8417ee923f1cfc0c4b38b4bb4bd26d936f0d0f79e0f"
+dependencies = [
+ "bitflags 2.13.2",
+ "dirs 6.0.0",
+ "glob",
+ "log",
+ "thiserror 2.0.20",
+ "wildmatch",
 ]
 
 [[package]]
@@ -5729,6 +5744,12 @@ dependencies = [
  "windows 0.61.3",
  "windows-core 0.61.2",
 ]
+
+[[package]]
+name = "wildmatch"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29333c3ea1ba8b17211763463ff24ee84e41c78224c16b001cd907e663a38c68"
 
 [[package]]
 name = "winapi"

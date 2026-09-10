@@ -1,5 +1,6 @@
 pub mod metadata;
 pub mod providers;
+pub mod remote;
 pub mod settings;
 
 mod export;

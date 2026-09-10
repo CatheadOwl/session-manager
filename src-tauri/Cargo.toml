@@ -30,6 +30,13 @@ tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 tempfile = "3"
 trash = "3"
+# Remote-source connection layer (workunit 20260910-1145 phase 2,
+# ADR 0007 / ADR 0008). default-features off: avoid aws-lc-rs (needs
+# NASM on MSVC); ring backend instead.
+russh = { version = "0.63", default-features = false, features = ["ring"] }
+russh-sftp = "3.0"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 
 # Console attach for the CLI branch (workunit 20260910-1408): release builds
 # are GUI-subsystem (windows_subsystem="windows"), so Win32 AttachConsole +
@@ -38,9 +45,5 @@ trash = "3"
 windows = { version = "0.62", features = ["Win32_System_Console", "Win32_Foundation"] }
 
 [dev-dependencies]
-# Remote-source spike (workunit 20260910-1145 phase 0, ADR 0007 / D2 approved)
-# default-features off: avoid aws-lc-rs (needs NASM on MSVC); ring backend instead.
-russh = { version = "0.63", default-features = false, features = ["ring"] }
-russh-sftp = "3.0"
-tokio = { version = "1", features = ["full"] }
-futures-util = "0.3"
+# (remote-source deps moved to [dependencies]: the phase 2 connection
+# layer is product code; examples/remote_spike.rs builds against them.)

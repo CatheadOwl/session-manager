@@ -43,12 +43,13 @@ describe("useSessionSearch", () => {
       { providerId: "claude", sessionId: "aaaa0000-0000-0000-0000-000000000000", title: "Auth work", lastActiveAt: 200 },
     ];
     const { result } = renderHook(() => useSessionSearch({ sessions: list, providerFilter: "all" }));
-    // Middle fragment — FlexSearch full-tokenize cannot hit this; the
-    // substring union pass must.
+    // Middle fragment and prefix both hit via FlexSearch tokenize:"full"
+    // (token-internal substring) — sessionId is in the indexed content.
+    // Regression-pinned: the tree view needed an explicit id match; the flat
+    // list gets it from the index itself.
     expect(ids(result.current.search("f28fdce07d"))).toEqual(["e99a85b1-7ca8-4659-b747-f28fdce07d58"]);
-    // Prefix fragment too.
     expect(ids(result.current.search("e99a85b1"))).toEqual(["e99a85b1-7ca8-4659-b747-f28fdce07d58"]);
-    // No accidental substring collisions with titles.
+    // No accidental substring collisions.
     expect(ids(result.current.search("zzz"))).toEqual([]);
   });
 

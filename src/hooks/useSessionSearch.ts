@@ -75,20 +75,7 @@ export function useSessionSearch({
         limit: filteredByProvider.length,
       }) as number[];
 
-      // Session-id fragments (a uuid prefix/middle like "e99a85b1") are
-      // substring matches, not full tokens — FlexSearch's tokenizer misses
-      // them. Union in a linear substring pass over sessionId so partial ids
-      // find their session; O(n) per keystroke over already-scoped lists.
-      const lowerNeedle = needle.toLowerCase();
-      const matched = new Set(results);
-      const extras: number[] = [];
-      filteredByProvider.forEach((session, idx) => {
-        if (!matched.has(idx) && session.sessionId.toLowerCase().includes(lowerNeedle)) {
-          extras.push(idx);
-        }
-      });
-
-      return [...results, ...extras].map((idx) => filteredByProvider[idx]);
+      return results.map((idx) => filteredByProvider[idx]);
     },
     [filteredByProvider],
   );

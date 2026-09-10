@@ -123,6 +123,8 @@ function computeVisibleKeys(
 
     // Session-id fragments must match too (uuid prefix/middle): a tree node
     // whose title hides the id is still findable by searching part of it.
+    // Mirrors the flat list, where the FlexSearch index (tokenize:"full",
+    // token-internal substrings) already matches id fragments.
     const session = sessionMap.get(node.sessionKey);
     const idMatch = session?.sessionId.toLowerCase().includes(needle) ?? false;
     const selfSearchMatch =

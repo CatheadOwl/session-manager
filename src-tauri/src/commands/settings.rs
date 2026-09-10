@@ -3,9 +3,20 @@
 //! The `settings-changed` event is emitted HERE, not inside the manager,
 //! which stays Tauri-free for the CLI adapter (ADR 0005).
 
+use std::sync::Arc;
+
 use tauri::Emitter;
 
+use crate::session_manager::providers::ProviderRegistry;
 use crate::session_manager::settings::{SettingsManager, SettingValue, SettingsSnapshot};
+
+/// Read-only provider id listing for the settings UI's source editor. Reuses
+/// the same registry that backs the `agents` CLI subcommand — one source of
+/// truth for "which providers exist" (ADR 0006 D5 explicit-provider).
+#[tauri::command]
+pub fn list_providers(registry: tauri::State<'_, Arc<ProviderRegistry>>) -> Vec<String> {
+    registry.ids().cloned().collect()
+}
 
 #[tauri::command]
 pub fn get_settings(manager: tauri::State<'_, SettingsManager>) -> SettingsSnapshot {

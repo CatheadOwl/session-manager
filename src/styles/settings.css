@@ -1,0 +1,109 @@
+/*
+ * Settings overlay page (workunit 20260910-1131). Page-scope layout only —
+ * row/control primitives and their typography live in ui.css (.setting-*);
+ * colors come exclusively from variables.css tokens.
+ */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70; /* below the confirm dialog (z-index 80) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(8px);
+}
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  width: min(44rem, 100%);
+  height: min(32rem, 100%);
+  border: 1px solid var(--border);
+  border-radius: 1.1rem;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.settings-back {
+  font-weight: 650;
+}
+
+.settings-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0; /* let the content pane own scrolling */
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 160px;
+  gap: 0.15rem;
+  padding: 0.6rem 0.5rem;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.settings-nav-button {
+  border: 0;
+  border-radius: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.settings-nav-button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-nav-button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto; /* scroll containment lives here, not the window */
+  padding: 0.4rem 1.2rem 1rem;
+}
+
+.settings-state {
+  padding: 1rem 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 550;
+}
+
+.settings-state--error {
+  color: var(--danger);
+}
+
+.setting-unsupported {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-style: italic;
+}

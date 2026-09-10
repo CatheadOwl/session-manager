@@ -49,7 +49,8 @@
 }
 
 .folder-collapse-btn,
-.folder-expand-btn {
+.folder-expand-btn,
+.folder-settings-btn {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -64,9 +65,21 @@
 }
 
 .folder-collapse-btn,
-.folder-expand-btn {
+.folder-expand-btn,
+.folder-settings-btn {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+.folder-settings-icon {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
 }
 
 .folder-toggle-icon {
@@ -91,7 +104,8 @@
 }
 
 .folder-collapse-btn:hover,
-.folder-expand-btn:hover {
+.folder-expand-btn:hover,
+.folder-settings-btn:hover {
   color: var(--text);
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSessionFromMap } from "@/lib/session-map";
 import { useQaExport } from "@/hooks/useQaExport";
 import { useSessionMutations } from "@/hooks/useSessionMutations";
@@ -10,6 +10,7 @@ import type { SessionMeta } from "@/types";
 import { getLifecycleOperationOptions, getMetadataKey, getSessionKey, type SessionLifecycleOperationOptions } from "@/lib/domain";
 import { normalizeProjectDir } from "@/utils/format";
 import { ConfirmActionDialog, type ConfirmActionTarget } from "./ConfirmDeleteDialog";
+import { SettingsPage } from "@/components/settings/SettingsPage";
 
 // Filter a session list down to those eligible for file-lifecycle deletion
 const getDeletableSessions = (sessions: SessionMeta[]): SessionLifecycleOperationOptions[] =>
@@ -23,6 +24,10 @@ import { SessionList } from "./SessionList";
 
 export function SessionManagerPage() {
   const ui = useSessionUIState();
+  // Settings overlay page: gear entry lives in FolderFilter's header; the
+  // page mounts here (page level) so the only new prop is FolderFilter's
+  // onOpenSettings — no deeper drilling, and query context is already shared.
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const queries = useSessionQueries(
     ui.scope,
     ui.selectedFolder,
@@ -279,6 +284,7 @@ export function SessionManagerPage() {
         updateStatus={updater.status}
         updateVersion={updater.update?.version}
         onInstallUpdate={updater.installUpdate}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
       <SessionList
         sessions={displaySessions}
@@ -355,6 +361,7 @@ export function SessionManagerPage() {
         />
       ) : null}
       <ExportToast status={qaExport.status} onDismiss={qaExport.clearStatus} />
+      {isSettingsOpen ? <SettingsPage onClose={() => setIsSettingsOpen(false)} /> : null}
     </div>
   );
 }

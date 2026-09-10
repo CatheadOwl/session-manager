@@ -156,6 +156,7 @@ pub fn run() {
             commands::fork_tree::get_fork_tree,
             commands::settings::get_settings,
             commands::settings::set_setting_value,
+            commands::settings::list_providers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

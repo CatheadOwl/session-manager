@@ -49,3 +49,11 @@ export async function fetchSettings(): Promise<SettingsSnapshot> {
 export async function setSettingValue(key: string, value: SettingValue): Promise<void> {
   return await invoke("set_setting_value", { key, value });
 }
+
+/**
+ * Read-only provider id listing (same registry that backs the `agents` CLI
+ * subcommand). Consumed by the settings UI's source editor provider picker.
+ */
+export async function fetchProviders(): Promise<string[]> {
+  return await invoke("list_providers");
+}

@@ -60,6 +60,9 @@ export const queryKeys = {
 
   settings: () => ["settings"] as const,
 
+  /** Read-only provider id list for the settings source editor (`list_providers`). */
+  providers: () => ["providers"] as const,
+
   forkTree: (scope: "active" | "archived", projectDir?: string) =>
     ["forkTree", scope, projectDir ?? "__all__"] as const,
 

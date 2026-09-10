@@ -10,7 +10,8 @@ export type ConfirmActionTarget =
       folder: string;
       count: number;
       skippedCount: number;
-    };
+    }
+  | { kind: "remove-source"; path: string };
 
 interface ConfirmActionDialogProps {
   target: ConfirmActionTarget;
@@ -113,6 +114,19 @@ function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
       workingLabel: isWorking ? "Deleting..." : "Delete",
       confirmClassName: "danger-button",
       icon: "×",
+      tone: "danger",
+    };
+  }
+
+  if (target.kind === "remove-source") {
+    return {
+      title: "Remove source?",
+      description: "This removes the scan source from settings. The folder on disk is not touched.",
+      targetLabel: target.path || "(empty path)",
+      confirmLabel: "Remove",
+      workingLabel: isWorking ? "Removing..." : "Remove",
+      confirmClassName: "danger-button",
+      icon: "−",
       tone: "danger",
     };
   }

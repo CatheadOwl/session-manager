@@ -5,7 +5,7 @@ import {
   type AppMetadata,
   type ForkTreeResult,
 } from "@/lib/api/sessions";
-import { fetchSettings, type SettingsSnapshot } from "@/lib/api/settings";
+import { fetchProviders, fetchSettings, type SettingsSnapshot } from "@/lib/api/settings";
 import type { SessionDetail, SessionMeta } from "@/types";
 import { queryKeys } from "./keys";
 
@@ -35,6 +35,19 @@ export const useSettingsQuery = () => {
     queryKey: queryKeys.settings(),
     queryFn: async () => fetchSettings(),
     staleTime: 30 * 1000,
+  });
+};
+
+/**
+ * Provider id list for the settings source editor's provider picker.
+ * Backed by the same registry as the `agents` CLI subcommand; effectively
+ * static for a process lifetime.
+ */
+export const useProvidersQuery = () => {
+  return useQuery<string[]>({
+    queryKey: queryKeys.providers(),
+    queryFn: async () => fetchProviders(),
+    staleTime: Infinity,
   });
 };
 

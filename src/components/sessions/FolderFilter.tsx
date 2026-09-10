@@ -22,6 +22,8 @@ interface FolderFilterProps {
   updateStatus: UpdateStatus;
   updateVersion?: string;
   onInstallUpdate: () => void;
+  /** Opens the settings overlay page (mounted by SessionManagerPage). */
+  onOpenSettings: () => void;
 }
 
 type FolderSortKey = "recent" | "alpha";
@@ -53,6 +55,7 @@ export const FolderFilter = memo(function FolderFilter({
   updateStatus,
   updateVersion,
   onInstallUpdate,
+  onOpenSettings,
 }: FolderFilterProps) {
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isSortOpen, setIsSortOpen] = useState(false);
@@ -117,18 +120,29 @@ export const FolderFilter = memo(function FolderFilter({
     <div className="folder-column">
       <div className="folder-header">
         <span className="folder-header-title">Folders</span>
-        <button
-          type="button"
-          className="folder-collapse-btn"
-          onClick={onToggleCollapse}
-          title="Collapse folder panel"
-          aria-label="Collapse folder panel"
-        >
-          <PanelToggleIcon direction="collapse" />
-          {updateStatus === "available" && (
-            <span className="update-dot update-dot--header" />
-          )}
-        </button>
+        <div className="folder-header-actions">
+          <button
+            type="button"
+            className="folder-settings-btn"
+            onClick={onOpenSettings}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <SettingsIcon />
+          </button>
+          <button
+            type="button"
+            className="folder-collapse-btn"
+            onClick={onToggleCollapse}
+            title="Collapse folder panel"
+            aria-label="Collapse folder panel"
+          >
+            <PanelToggleIcon direction="collapse" />
+            {updateStatus === "available" && (
+              <span className="update-dot update-dot--header" />
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="folder-scope-block">
@@ -314,6 +328,20 @@ function ChevronDownIcon() {
       focusable="false"
     >
       <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      className="folder-settings-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }

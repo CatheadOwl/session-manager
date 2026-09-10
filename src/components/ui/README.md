@@ -14,6 +14,11 @@ needs justification in review.
 - **Popovers**: `Popover` — anchored panel (`top: calc(100% + 0.4rem)`) with
   outside-click dismissal; wrap trigger + popover in one `position: relative`
   container. Panel skin is `.ui-panel`; do not hand-roll panel CSS.
+- **Settings form primitives** (workunit 20260910-1131): `SettingRow`
+  (label + description + control slot + inline error), `ToggleRow`
+  (`role="switch"` bool renderer), `SourcesEditor` (sourceList CRUD; provider
+  picker built on `Menu`, removal guarded by ConfirmDeleteDialog). Their
+  `.setting-*` classes in `ui.css` are self-sufficient like the buttons.
 - **Tokens only**: colors/sizes come from `variables.css` tokens. Hardcoded
   hex values in component CSS are a review-reject (the export.css fallback
   colors were exactly this failure mode).
@@ -22,6 +27,8 @@ needs justification in review.
 
 - `sessions/ExportQaControls` (preset menu + calendar popover)
 - `sessions/FolderFilter` (folder actions menu + sort menu)
+- `settings/SettingsPage` (ToggleRow + SourcesEditor for its renderer
+  registry; SourcesEditor also consumes `Menu`)
 
 ## Known follow-ups
 

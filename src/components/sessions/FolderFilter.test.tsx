@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FolderGroup } from "@/lib/domain";
 import { FolderFilter } from "./FolderFilter";
 
@@ -27,6 +27,7 @@ const baseProps = {
   isFolderOperationPending: false,
   updateStatus: "idle" as const,
   onInstallUpdate: () => {},
+  onOpenSettings: () => {},
 };
 
 const renderFilter = (overrides: Partial<Parameters<typeof FolderFilter>[0]> = {}) =>
@@ -80,5 +81,14 @@ describe("FolderFilter sorting", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^A-Z$/ }));
     expect(trigger.textContent).toContain("A-Z");
+  });
+
+  it("renders a settings gear button with an accessible name that fires onOpenSettings", () => {
+    const onOpenSettings = vi.fn();
+    renderFilter({ onOpenSettings });
+    const gear = screen.getByRole("button", { name: "Settings" });
+    expect(gear).toHaveAttribute("title", "Settings");
+    fireEvent.click(gear);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

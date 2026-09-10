@@ -137,6 +137,18 @@ pub enum SessionLocator {
         #[serde(rename = "recordId", alias = "record_id")]
         record_id: String,
     },
+    /// A session on a read-only SSH remote source (ADR 0007 remote v1;
+    /// source entries per ADR 0008: `source_id` anchors to the ssh entry's
+    /// required `id` in `settings.json` `sources[]`).
+    ///
+    /// `path` is the absolute path on the remote host. Remote-backed
+    /// sessions are never local filesystem paths: `file_path()` rejects them
+    /// (mirroring `Database`), and lifecycle operations must refuse them.
+    Remote {
+        #[serde(rename = "sourceId", alias = "source_id")]
+        source_id: String,
+        path: String,
+    },
 }
 
 impl SessionLocator {
@@ -146,12 +158,17 @@ impl SessionLocator {
             SessionLocator::Database { .. } => {
                 Err("Database-backed sessions cannot be treated as filesystem paths".to_string())
             }
+            SessionLocator::Remote { .. } => {
+                Err("Remote-backed sessions cannot be treated as filesystem paths".to_string())
+            }
         }
     }
 
     pub fn display_source_path(&self) -> &str {
         match self {
-            SessionLocator::File { path } | SessionLocator::Database { path, .. } => path,
+            SessionLocator::File { path }
+            | SessionLocator::Database { path, .. }
+            | SessionLocator::Remote { path, .. } => path,
         }
     }
 
@@ -160,6 +177,9 @@ impl SessionLocator {
             SessionLocator::File { path } => format!("file:{path}"),
             SessionLocator::Database { path, record_id } => {
                 format!("database:{path}:{record_id}")
+            }
+            SessionLocator::Remote { source_id, path } => {
+                format!("remote:{source_id}:{path}")
             }
         }
     }
@@ -404,6 +424,68 @@ mod tests {
                 record_id: "row-a".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn remote_locator_round_trips_and_uses_camel_case_source_id_on_the_wire() {
+        let locator = SessionLocator::Remote {
+            source_id: "ali-server".to_string(),
+            path: "/home/admin/.claude/projects/a/uuid.jsonl".to_string(),
+        };
+
+        let value = serde_json::to_value(&locator).expect("serialize locator");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "kind": "remote",
+                "sourceId": "ali-server",
+                "path": "/home/admin/.claude/projects/a/uuid.jsonl",
+            })
+        );
+
+        let back: SessionLocator =
+            serde_json::from_value(value).expect("deserialize remote locator");
+        assert_eq!(back, locator);
+    }
+
+    #[test]
+    fn remote_locator_accepts_legacy_snake_case_source_id() {
+        let locator: SessionLocator = serde_json::from_value(serde_json::json!({
+            "kind": "remote",
+            "source_id": "ali-server",
+            "path": "/remote/s.jsonl",
+        }))
+        .expect("deserialize legacy remote locator");
+
+        assert_eq!(
+            locator,
+            SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/remote/s.jsonl".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn remote_locator_rejects_file_path_and_keys_by_source() {
+        let locator = SessionLocator::Remote {
+            source_id: "ali-server".to_string(),
+            path: "/remote/s.jsonl".to_string(),
+        };
+
+        assert!(locator.file_path().is_err());
+
+        // Two sources with the same remote path must not collide on detail keys.
+        let other = SessionLocator::Remote {
+            source_id: "other-host".to_string(),
+            path: "/remote/s.jsonl".to_string(),
+        };
+        assert_ne!(locator.detail_key_part(), other.detail_key_part());
+        assert_eq!(
+            locator.detail_key_part(),
+            "remote:ali-server:/remote/s.jsonl"
+        );
+        assert_eq!(locator.display_source_path(), "/remote/s.jsonl");
     }
 
     #[test]

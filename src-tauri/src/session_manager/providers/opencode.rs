@@ -119,6 +119,16 @@ impl SessionProvider for OpenCodeProvider {
                 }
                 result
             }
+            SessionLocator::Remote { .. } => {
+                // opencode is excluded from remote v1 (ADR 0007 / P0a:
+                // sqlite random reads / legacy multi-file scans). If a remote
+                // source ever surfaces an opencode-shaped session anyway,
+                // refuse rather than misread a remote path as local.
+                Err(format!(
+                    "opencode does not support remote-backed sessions: {}",
+                    handle.display_source_path()
+                ))
+            }
         }
     }
 
@@ -132,7 +142,7 @@ impl SessionProvider for OpenCodeProvider {
     ) -> Result<Option<String>, String> {
         match &handle.locator {
             SessionLocator::File { path } => self.load_raw_content_fallback(Path::new(path)),
-            SessionLocator::Database { .. } => Ok(None),
+            SessionLocator::Database { .. } | SessionLocator::Remote { .. } => Ok(None),
         }
     }
 

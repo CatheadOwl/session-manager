@@ -13,7 +13,9 @@ export interface SessionMeta {
 
 export type SessionLocator =
   | { kind: "file"; path: string }
-  | { kind: "database"; path: string; recordId?: string; record_id?: string };
+  | { kind: "database"; path: string; recordId?: string; record_id?: string }
+  /** Read-only SSH remote session (ADR 0007 remote v1); sourceId anchors to the ssh source entry's required `id` (ADR 0008). */
+  | { kind: "remote"; sourceId: string; path: string };
 
 export interface TokenUsage {
   inputTokens: number;

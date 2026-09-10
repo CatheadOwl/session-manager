@@ -30,6 +30,13 @@ export const sessionLocatorKey = (
     return ["file", locator.path] as const;
   }
 
+  // Correctness: the key MUST carry sourceId — the same remote path under
+  // two sources would otherwise collide with each other (and with a local
+  // file key). Do not fall through to the ["file", sourcePath] branch.
+  if (locator?.kind === "remote") {
+    return ["remote", locator.sourceId, locator.path] as const;
+  }
+
   return ["file", sourcePath ?? ""] as const;
 };
 

@@ -77,4 +77,38 @@ describe("queryKeys.sessionDetail", () => {
       ),
     ).toEqual(["sessionDetail", "opencode", "database", "/data/opencode.db", "row-a"]);
   });
+
+  it("carries sourceId in remote detail keys — same remote path under two sources must not collide", () => {
+    const left = queryKeys.sessionDetail("claude", {
+      kind: "remote",
+      sourceId: "ali-server",
+      path: "/home/admin/.claude/projects/a/uuid.jsonl",
+    });
+    const right = queryKeys.sessionDetail("claude", {
+      kind: "remote",
+      sourceId: "other-host",
+      path: "/home/admin/.claude/projects/a/uuid.jsonl",
+    });
+
+    expect(left).toEqual([
+      "sessionDetail",
+      "claude",
+      "remote",
+      "ali-server",
+      "/home/admin/.claude/projects/a/uuid.jsonl",
+    ]);
+    expect(left).not.toEqual(right);
+  });
+
+  it("never maps a remote locator onto the file key branch", () => {
+    const remote = queryKeys.sessionDetail("claude", {
+      kind: "remote",
+      sourceId: "ali-server",
+      path: "/home/admin/s.jsonl",
+    });
+    const localLookalike = queryKeys.sessionDetail("claude", "/home/admin/s.jsonl");
+
+    expect(remote).not.toEqual(localLookalike);
+    expect(remote[2]).toBe("remote");
+  });
 });

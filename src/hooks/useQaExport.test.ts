@@ -5,11 +5,13 @@ import { useQaExport } from "./useQaExport";
 
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
+  confirm: vi.fn(),
   invoke: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: mocks.save,
+  confirm: mocks.confirm,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -30,6 +32,8 @@ const SESSIONS: SessionMeta[] = [
 describe("useQaExport", () => {
   beforeEach(() => {
     mocks.save.mockReset();
+    mocks.confirm.mockReset();
+    mocks.confirm.mockResolvedValue(true);
     mocks.invoke.mockReset();
   });
 
@@ -112,6 +116,53 @@ describe("useQaExport", () => {
 
     expect(result.current.status.state).toBe("error");
     expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  const manySessions = (n: number): SessionMeta[] =>
+    Array.from({ length: n }, (_, i) => ({
+      providerId: "claude",
+      sessionId: `s${i}`,
+      sourcePath: `/tmp/s${i}.jsonl`,
+      locator: { kind: "file" as const, path: `/tmp/s${i}.jsonl` },
+    }));
+
+  it("confirms before the save dialog when exporting more than 50 sessions", async () => {
+    mocks.save.mockResolvedValue("/tmp/out.json");
+    mocks.invoke.mockResolvedValue({ count: 51, skipped: [], destPath: "/tmp/out.json" });
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, manySessions(51));
+    });
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.save).toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalled();
+  });
+
+  it("aborts silently when the large-export confirmation is cancelled", async () => {
+    mocks.confirm.mockResolvedValue(false);
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, manySessions(51));
+    });
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(result.current.status.state).toBe("idle");
+  });
+
+  it("does not confirm for small exports", async () => {
+    mocks.save.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, SESSIONS);
+    });
+
+    expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
   it("exports the visible list with overwrite confirmed by the dialog", async () => {

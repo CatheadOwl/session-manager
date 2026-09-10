@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dayStartToEpochMs,
+  resolveExportRange,
   resolveTimeRange,
   sessionWithinRange,
 } from "./time-range";
@@ -30,6 +31,25 @@ describe("resolveTimeRange", () => {
       to: 200_000,
     });
     expect(resolveTimeRange({ preset: "custom", customFrom: 100_000 }, NOW)).toBeNull();
+  });
+});
+
+describe("resolveExportRange", () => {
+  it("maps all-time to a full-history window (epoch 0 → now)", () => {
+    expect(resolveExportRange({ preset: "all" }, NOW)).toEqual({
+      from: 0,
+      to: NOW.getTime(),
+    });
+  });
+
+  it("delegates to resolveTimeRange for concrete presets", () => {
+    expect(resolveExportRange({ preset: "today" }, NOW)).toEqual(
+      resolveTimeRange({ preset: "today" }, NOW),
+    );
+  });
+
+  it("still returns null for an incomplete custom range", () => {
+    expect(resolveExportRange({ preset: "custom", customFrom: 100_000 }, NOW)).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { sessionsApi } from "@/lib/api/sessions";
 import type { ExportOutcome } from "@/types";
 import type { SessionMeta } from "@/types";
@@ -11,6 +11,16 @@ export interface QaExportStatus {
 }
 
 const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
+
+/**
+ * Large-export threshold: exporting more than this many sessions distills a
+ * lot of JSONL in one synchronous command (no progress/cancel, D4), so the
+ * user gets a native confirm dialog before the save dialog opens. This is
+ * the size guard that replaces the old "All time cannot be exported" rule —
+ * it guards the actual cost driver (visible session count), not the time
+ * window.
+ */
+const LARGE_EXPORT_THRESHOLD = 50;
 
 /**
  * Remote-backed sessions (SSH sources, ADR 0007) are read-only and their
@@ -34,7 +44,7 @@ export function useQaExport(scope: "active" | "archived") {
   const exportRange = useCallback(
     async (range: ResolvedRange | null, sessions: SessionMeta[]) => {
       if (!range) {
-        setStatus({ state: "error", message: "Choose a time range first (not “All”)." });
+        setStatus({ state: "error", message: "Choose a complete time range first." });
         return;
       }
       if (sessions.length === 0) {
@@ -49,6 +59,17 @@ export function useQaExport(scope: "active" | "archived") {
           message: "No exportable sessions — SSH remote sessions are read-only.",
         });
         return;
+      }
+
+      // Large exports: native confirm BEFORE the save dialog (the user
+      // should know the cost before picking a destination). Cancel aborts
+      // silently, same as cancelling the save dialog.
+      if (exportable.length > LARGE_EXPORT_THRESHOLD) {
+        const ok = await confirm(
+          `Export ${exportable.length} sessions? Large exports take a while and cannot be cancelled mid-run.`,
+          { title: "Large Q&A export", kind: "warning" },
+        );
+        if (!ok) return;
       }
 
       const destPath = await save({

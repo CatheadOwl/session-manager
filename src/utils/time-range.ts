@@ -51,6 +51,19 @@ export const resolveTimeRange = (range: TimeRange, now = new Date()): ResolvedRa
   }
 };
 
+/** Resolve a range for the EXPORT path: unlike `resolveTimeRange`, "all"
+ *  maps to a concrete full-history window (epoch 0 → now) instead of null.
+ *  The interactive export passes an explicit session list (ADR 0003), so
+ *  "all" carries no size hazard beyond the visible list itself — which the
+ *  >50 confirmation in useQaExport guards. Only an incomplete custom range
+ *  still resolves to null (export must stay disabled then). */
+export const resolveExportRange = (range: TimeRange, now = new Date()): ResolvedRange | null => {
+  if (range.preset === "all") {
+    return { from: 0, to: now.getTime() };
+  }
+  return resolveTimeRange(range, now);
+};
+
 /** Local calendar-day start of a Date (for day-picker value mapping). */
 export const dateToLocalDayStart = (d: Date): Date =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate());

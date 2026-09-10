@@ -6,7 +6,7 @@ import { Popover } from "@/components/ui/Popover";
 import type { QaExportStatus } from "@/hooks/useQaExport";
 import {
   dayStartToEpochMs,
-  resolveTimeRange,
+  resolveExportRange,
   type TimeRange,
   type TimeRangePreset,
 } from "@/utils/time-range";
@@ -61,9 +61,11 @@ export const ExportQaControls = memo(function ExportQaControls({
   }, [draftRange, onCustomRange]);
 
   const isExporting = exportStatus.state === "exporting";
-  // Export needs a concrete window; "All time" (or an incomplete custom
-  // range) resolves to null — disable instead of failing after the click.
-  const hasResolvedRange = resolveTimeRange(timeRange) !== null;
+  // Export needs a concrete window; "All time" resolves to a full-history
+  // window (allowed — the >50 confirm in useQaExport is the size guard),
+  // and only an incomplete custom range resolves to null — disable instead
+  // of failing after the click.
+  const hasResolvedRange = resolveExportRange(timeRange) !== null;
 
   const presetLabel =
     timeRange.preset === "custom" && timeRange.customFrom !== undefined
@@ -142,7 +144,7 @@ export const ExportQaControls = memo(function ExportQaControls({
         title={
           hasResolvedRange
             ? `Export Q&A sessions (${presetLabel}) to a file`
-            : "Pick a time range first — “All time” cannot be exported"
+            : "Pick a complete time range first (both dates)"
         }
       >
         <Download size={14} aria-hidden="true" />

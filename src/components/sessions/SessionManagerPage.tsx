@@ -9,6 +9,7 @@ import type { DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
 import { getLifecycleOperationOptions, getMetadataKey, getSessionKey, type SessionLifecycleOperationOptions } from "@/lib/domain";
 import { normalizeProjectDir } from "@/utils/format";
+import { resolveExportRange } from "@/utils/time-range";
 import { ConfirmActionDialog, type ConfirmActionTarget } from "./ConfirmDeleteDialog";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 
@@ -88,10 +89,11 @@ export function SessionManagerPage() {
   );
 
   // Export what you see: the visible list already carries folder, search,
-  // star, and time filters.
+  // star, and time filters. "All time" maps to a full-history window
+  // (resolveExportRange) — the size guard is the >50 confirm in useQaExport.
   const handleExportQa = useCallback(() => {
-    void qaExport.exportRange(queries.exportRange, displaySessions);
-  }, [qaExport, queries.exportRange, displaySessions]);
+    void qaExport.exportRange(resolveExportRange(ui.timeRange), displaySessions);
+  }, [qaExport, ui.timeRange, displaySessions]);
 
   const visibleSessionKeys = useMemo(
     () => displaySessions.map(getSessionKey),

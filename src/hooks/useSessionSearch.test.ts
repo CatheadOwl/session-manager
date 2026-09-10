@@ -37,6 +37,21 @@ describe("useSessionSearch", () => {
     expect(found).toEqual(["c1", "g1"]);
   });
 
+  it("matches a session by a partial id fragment (uuid prefix/middle)", () => {
+    const list: SessionMeta[] = [
+      { providerId: "claude", sessionId: "e99a85b1-7ca8-4659-b747-f28fdce07d58", title: "Unrelated title", lastActiveAt: 100 },
+      { providerId: "claude", sessionId: "aaaa0000-0000-0000-0000-000000000000", title: "Auth work", lastActiveAt: 200 },
+    ];
+    const { result } = renderHook(() => useSessionSearch({ sessions: list, providerFilter: "all" }));
+    // Middle fragment — FlexSearch full-tokenize cannot hit this; the
+    // substring union pass must.
+    expect(ids(result.current.search("f28fdce07d"))).toEqual(["e99a85b1-7ca8-4659-b747-f28fdce07d58"]);
+    // Prefix fragment too.
+    expect(ids(result.current.search("e99a85b1"))).toEqual(["e99a85b1-7ca8-4659-b747-f28fdce07d58"]);
+    // No accidental substring collisions with titles.
+    expect(ids(result.current.search("zzz"))).toEqual([]);
+  });
+
   it("returns nothing for a query that matches no session", () => {
     const { result } = renderHook(() => useSessionSearch({ sessions, providerFilter: "all" }));
     expect(result.current.search("zzz")).toEqual([]);

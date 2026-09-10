@@ -121,8 +121,12 @@ function computeVisibleKeys(
       if (result.starMatch) childStarMatch = true;
     }
 
-    const selfSearchMatch = !needle || node.title.toLowerCase().includes(needle);
+    // Session-id fragments must match too (uuid prefix/middle): a tree node
+    // whose title hides the id is still findable by searching part of it.
     const session = sessionMap.get(node.sessionKey);
+    const idMatch = session?.sessionId.toLowerCase().includes(needle) ?? false;
+    const selfSearchMatch =
+      !needle || node.title.toLowerCase().includes(needle) || idMatch;
     const metaKey = session ? getMetadataKey(session) : null;
     const selfStarMatch = !starFilterActive || (metaKey ? starredMap.has(metaKey) : false);
 

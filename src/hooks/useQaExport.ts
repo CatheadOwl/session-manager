@@ -13,6 +13,16 @@ export interface QaExportStatus {
 const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
 
 /**
+ * Remote-backed sessions (SSH sources, ADR 0007) are read-only and their
+ * content is not fetched for export in v1: filter them out of the export
+ * request BEFORE it is built (P0b B3 — fail earlier, keep the export log
+ * clean). The Rust core still skips any remote session defensively (its
+ * `skipped` path); this pre-filter is the primary gate.
+ */
+export const filterExportableSessions = (sessions: SessionMeta[]): SessionMeta[] =>
+  sessions.filter((session) => session.locator?.kind !== "remote");
+
+/**
  * Q&A export orchestration: native save dialog → backend export command →
  * status feedback. Contains no distill logic — the Rust core owns that.
  * The exported set is "what you see": the caller passes the visible session
@@ -29,6 +39,15 @@ export function useQaExport(scope: "active" | "archived") {
       }
       if (sessions.length === 0) {
         setStatus({ state: "error", message: "No visible sessions to export." });
+        return;
+      }
+      // Remote sessions never enter the request (see filterExportableSessions).
+      const exportable = filterExportableSessions(sessions);
+      if (exportable.length === 0) {
+        setStatus({
+          state: "error",
+          message: "No exportable sessions — SSH remote sessions are read-only.",
+        });
         return;
       }
 
@@ -51,7 +70,7 @@ export function useQaExport(scope: "active" | "archived") {
           scope,
           from: range.from,
           to: range.to,
-          sessions,
+          sessions: exportable,
           destPath,
           format,
           // The native save dialog already asked "replace file?" — a returned

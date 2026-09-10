@@ -47,10 +47,63 @@ pub use session::RemoteSession;
 #[allow(unused_imports)]
 pub use frame::{FileMetadataBlob, HEAD_MAX, TAIL_MAX};
 
-use crate::session_manager::types::SessionMeta;
+use crate::session_manager::settings::SshSource;
+use crate::session_manager::types::{SessionHandle, SessionLocator, SessionMeta};
 
 /// A remote absolute file path (as seen on the SSH host).
 pub type RemotePath = String;
+
+/// Bridge a Remote-locator handle to a File-locator handle backed by the
+/// transient cache (ADR 0007 "cache" exit — the remote source's ONLY
+/// content-read path; phase 4 session-open wiring).
+///
+/// Semantics:
+/// - Non-Remote locators return `Ok(None)` — the caller keeps the original
+///   handle and nothing is touched (local sessions pay zero cost).
+/// - `source_id` is resolved against the caller-injected enabled ssh
+///   entries (the command layer reads `SettingsManager::enabled_sources()`
+///   up front so this function stays Tauri-free and Send).
+/// - `fetch_to_local(path, None)` performs the mtime+size-gated cache
+///   check: a cache hit costs no SFTP round-trip, a miss transfers the
+///   file once. `known_attrs = None` because the open path holds no
+///   scanned blob attributes.
+/// - The returned handle keeps the ORIGINAL `provider_id`/`session_id`:
+///   the cache file holds the remote provider's bytes, and the parser
+///   choice is bound to the provider id, not to the path.
+///
+/// Both `get_session_messages` and `get_session_detail` share this bridge;
+/// for the detail path the raw-content fallback also flows through the
+/// File-locator handle (its default implementation reads `file_path()`,
+/// which now resolves to the local cache copy).
+pub async fn resolve_remote_to_local(
+    ssh_sources: &[SshSource],
+    pool: &RemoteSessionPool,
+    handle: &SessionHandle,
+) -> Result<Option<SessionHandle>, String> {
+    let (source_id, remote_path) = match &handle.locator {
+        SessionLocator::Remote { source_id, path } => (source_id, path),
+        _ => return Ok(None),
+    };
+    let source = ssh_sources
+        .iter()
+        .find(|s| &s.id == source_id)
+        .ok_or_else(|| format!("Remote source `{source_id}` is not configured or disabled"))?;
+    let session = pool
+        .get(source)
+        .await
+        .map_err(|e| format!("Remote source `{source_id}` unreachable: {e}"))?;
+    let local = session
+        .fetch_to_local(remote_path, None)
+        .await
+        .map_err(|e| format!("Failed to fetch remote session `{remote_path}`: {e}"))?;
+    Ok(Some(SessionHandle {
+        provider_id: handle.provider_id.clone(),
+        session_id: handle.session_id.clone(),
+        locator: SessionLocator::File {
+            path: local.to_string_lossy().into_owned(),
+        },
+    }))
+}
 
 /// Per-source session cache: at most one live `RemoteSession` per
 /// source id, lazily connected, guarded so concurrent callers of the
@@ -209,6 +262,74 @@ mod tests {
         let sessions = pool.sessions.try_lock();
         assert!(sessions.is_ok(), "uncontended lock is acquirable");
         assert!(sessions.unwrap().is_empty());
+    }
+
+    // ── resolve_remote_to_local offline behavior ────────────────────────
+
+    fn ssh_source(id: &str) -> SshSource {
+        SshSource {
+            id: id.to_string(),
+            label: None,
+            host: "h".to_string(),
+            port: 22,
+            user: "u".to_string(),
+            root: "~/.claude/projects".to_string(),
+            auth: crate::session_manager::settings::SourceAuth::Agent,
+            provider_hint: None,
+            enabled: true,
+            extra: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn remote_handle(source_id: &str) -> SessionHandle {
+        SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            locator: SessionLocator::Remote {
+                source_id: source_id.to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_bridge_passes_non_remote_handles_through_untouched() {
+        let pool = RemoteSessionPool::with_cache_base(PathBuf::from("Z:/nope"));
+        let handle = SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: "s".to_string(),
+            locator: SessionLocator::File {
+                path: "/local/s.jsonl".to_string(),
+            },
+        };
+        // Ok(None) BEFORE any connection attempt — the pool would fail on
+        // the bogus cache base if it were touched.
+        let bridged = resolve_remote_to_local(&[], &pool, &handle)
+            .await
+            .expect("no error for local handle");
+        assert!(bridged.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_bridge_rejects_unknown_source_before_connecting() {
+        // No ssh entries configured: the lookup must fail BEFORE the pool
+        // tries to connect (offline-safe by construction).
+        let pool = RemoteSessionPool::with_cache_base(PathBuf::from("Z:/nope"));
+        let err = resolve_remote_to_local(&[], &pool, &remote_handle("ghost"))
+            .await
+            .expect_err("unknown source must fail");
+        assert!(err.contains("not configured"), "unexpected: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_bridge_fails_closed_on_unreachable_source() {
+        // Source exists but the host is unreachable: the error names the
+        // source instead of leaking a raw transport error.
+        let pool = RemoteSessionPool::with_cache_base(PathBuf::from("Z:/nope"));
+        let err = resolve_remote_to_local(&[ssh_source("srv")], &pool, &remote_handle("srv"))
+            .await
+            .expect_err("bogus host must fail");
+        assert!(err.contains("unreachable"), "unexpected: {err}");
     }
 
     #[test]

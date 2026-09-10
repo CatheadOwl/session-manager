@@ -57,6 +57,53 @@ describe("useQaExport", () => {
     expect(result.current.status.message).toContain("No visible sessions");
   });
 
+  it("prefilters remote sessions out of the export request", async () => {
+    mocks.save.mockResolvedValue("/tmp/out.json");
+    mocks.invoke.mockResolvedValue({ count: 1, skipped: [], destPath: "/tmp/out.json" });
+
+    const local: SessionMeta = {
+      providerId: "claude",
+      sessionId: "s1",
+      sourcePath: "/tmp/s1.jsonl",
+      locator: { kind: "file", path: "/tmp/s1.jsonl" },
+    };
+    const remote: SessionMeta = {
+      providerId: "claude",
+      sessionId: "r1",
+      locator: { kind: "remote", sourceId: "ali-server", path: "/home/u/r1.jsonl" },
+    };
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, [local, remote]);
+    });
+
+    // Pin (P0b B3): remote sessions never enter the request; the local
+    // sibling still exports.
+    expect(mocks.invoke).toHaveBeenCalledWith("export_qa_sessions", {
+      options: expect.objectContaining({ sessions: [local] }),
+    });
+    expect(result.current.status.state).toBe("done");
+  });
+
+  it("errors without invoking when every visible session is remote", async () => {
+    const remote: SessionMeta = {
+      providerId: "claude",
+      sessionId: "r1",
+      locator: { kind: "remote", sourceId: "ali-server", path: "/home/u/r1.jsonl" },
+    };
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, [remote]);
+    });
+
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(result.current.status.state).toBe("error");
+    expect(result.current.status.message).toContain("read-only");
+  });
+
   it("errors when no concrete time range is selected", async () => {
     const { result } = renderHook(() => useQaExport("active"));
     await act(async () => {

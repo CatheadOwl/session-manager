@@ -776,6 +776,86 @@ mod tests {
     }
 
     #[test]
+    fn export_for_metas_skips_remote_sessions_without_aborting_batch() {
+        use crate::config::TEST_ENV_LOCK;
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+
+        struct EnvVarGuard {
+            key: &'static str,
+            old_value: Option<std::ffi::OsString>,
+        }
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                if let Some(v) = &self.old_value {
+                    std::env::set_var(self.key, v);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+
+        let test_home = tempfile::tempdir().expect("tempdir");
+        let old = std::env::var_os("SESSION_MANAGER_TEST_HOME");
+        std::env::set_var("SESSION_MANAGER_TEST_HOME", test_home.path());
+        let _guard_env = EnvVarGuard { key: "SESSION_MANAGER_TEST_HOME", old_value: old };
+
+        let projects = test_home.path().join(".claude").join("projects").join("folder");
+        let ts = "2026-09-09T10:00:00Z";
+        write_claude_session_with_ts(&projects.join("local.jsonl"), "local", ts);
+
+        // Remote-backed sessions are read-only (ADR 0007): v1 export does
+        // not fetch remote content. Pin the BACKSTOP behavior — if the
+        // frontend pre-filter (useQaExport) ever leaks one through, the
+        // backend must route it to `skipped` (the default
+        // load_messages_for_handle rejects the Remote locator) instead of
+        // aborting the batch.
+        let remote_meta = SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: Some(1),
+            last_active_at: Some(2),
+            source_path: None,
+            locator: Some(SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            }),
+            resume_command: None,
+            forked_from_id: None,
+        };
+        let local_meta = SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "local".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: Some(1),
+            last_active_at: Some(2),
+            source_path: Some(projects.join("local.jsonl").to_string_lossy().into_owned()),
+            locator: Some(SessionLocator::File {
+                path: projects.join("local.jsonl").to_string_lossy().into_owned(),
+            }),
+            resume_command: None,
+            forked_from_id: None,
+        };
+
+        let registry = super::super::build_provider_registry();
+        let batch = export_qa_sessions_for_metas(&registry, &[remote_meta, local_meta]);
+
+        assert_eq!(batch.sessions.len(), 1, "local session still exports");
+        assert_eq!(batch.sessions[0].provenance.session_id, "local");
+        assert_eq!(batch.skipped.len(), 1);
+        assert_eq!(batch.skipped[0].session_id, "remote-1");
+        assert!(
+            batch.skipped[0].error.contains("Remote-backed"),
+            "error should name the remote rejection: {}",
+            batch.skipped[0].error
+        );
+    }
+
+    #[test]
     fn export_qa_sessions_filters_by_time_and_merges_answers() {
         use crate::config::TEST_ENV_LOCK;
         let _guard = TEST_ENV_LOCK.lock().expect("lock");

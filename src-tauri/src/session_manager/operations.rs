@@ -1,10 +1,28 @@
 use std::path::{Path, PathBuf};
 
 use super::providers::ProviderRegistry;
-use super::types::{DeleteSessionOutcome, DeleteSessionRequest, SessionHandle};
+use super::types::{DeleteSessionOutcome, DeleteSessionRequest, SessionHandle, SessionLocator};
 
 const DB_OPERATION_UNSUPPORTED: &str =
     "Database-backed sessions are read-only and do not support this operation";
+
+const REMOTE_OPERATION_UNSUPPORTED: &str =
+    "Remote-backed sessions are read-only in this version";
+
+/// Resolve the local source path a lifecycle operation will act on, or
+/// reject read-only locator kinds with their specific message. Mirrors the
+/// Database rejection precedent: the refusal happens BEFORE any path is
+/// canonicalized or touched, so a read-only locator can never cause local
+/// IO. Path-only cores (`delete_session_with_roots`,
+/// `move_session_between_roots`) stay locator-blind by design — every
+/// locator-bearing entry funnels through the `*_for_handle` variants.
+fn local_source_path(handle: &SessionHandle) -> Result<&str, String> {
+    match &handle.locator {
+        SessionLocator::Remote { .. } => Err(REMOTE_OPERATION_UNSUPPORTED.to_string()),
+        SessionLocator::Database { .. } => Err(DB_OPERATION_UNSUPPORTED.to_string()),
+        SessionLocator::File { path } => Ok(path),
+    }
+}
 
 #[allow(dead_code)]
 #[deprecated(note = "use delete_session_for_handle instead")]
@@ -28,9 +46,7 @@ pub fn delete_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<bool, String> {
-    let source_path = handle
-        .file_path()
-        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     delete_session_with_roots(
@@ -248,9 +264,7 @@ pub fn archive_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<bool, String> {
-    let source_path = handle
-        .file_path()
-        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     // Active root = first root, Archive root = second root (per ClaudeProvider::roots())
@@ -505,15 +519,101 @@ mod tests {
         registry.register(Box::new(crate::session_manager::providers::claude::ClaudeProvider));
         registry
     }
+
+    // ── Remote locator rejection (mirror of the Database tests in
+    // session_manager/mod.rs; ADR 0007 read-only boundary, phase 4) ──────
+
+    fn remote_handle() -> SessionHandle {
+        SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            locator: super::super::types::SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            },
+        }
+    }
+
+    fn remote_request() -> DeleteSessionRequest {
+        DeleteSessionRequest {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            // The remote path must never be treated as local: it points at
+            // a nonexistent local location, proving no path IO happened.
+            source_path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            locator: Some(super::super::types::SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn remote_delete_archive_restore_reject_before_touching_path() {
+        let registry = build_provider_registry_for_tests();
+        let handle = remote_handle();
+
+        let delete_err = delete_session_for_handle(&registry, &handle)
+            .expect_err("remote delete should be unsupported");
+        let archive_err = archive_session_for_handle(&registry, &handle)
+            .expect_err("remote archive should be unsupported");
+        let restore_err = restore_session_for_handle(&registry, &handle)
+            .expect_err("remote restore should be unsupported");
+
+        for err in [delete_err, archive_err, restore_err] {
+            assert_eq!(err, "Remote-backed sessions are read-only in this version");
+        }
+    }
+
+    #[test]
+    fn batch_lifecycle_rejects_remote_locator_without_aborting_batch() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let valid = projects.join("folder-a").join("valid.jsonl");
+        write_claude_session(&valid, "valid-id");
+
+        let requests = vec![remote_request(), request_for(&valid, "valid-id")];
+        let outcomes = delete_sessions(&registry, &requests);
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(!outcomes[0].success, "remote item must be rejected");
+        assert_eq!(
+            outcomes[0].error.as_deref(),
+            Some("Remote-backed sessions are read-only in this version")
+        );
+        // The batch does not abort: the local item still deletes.
+        assert!(outcomes[1].success, "local item must still delete: {:?}", outcomes[1].error);
+        assert!(!valid.exists());
+    }
+
+    #[test]
+    fn batch_archive_and_restore_reject_remote_locator() {
+        let registry = build_provider_registry_for_tests();
+        let requests = vec![remote_request()];
+
+        for outcomes in [
+            archive_sessions(&registry, &requests),
+            restore_sessions(&registry, &requests),
+        ] {
+            assert_eq!(outcomes.len(), 1);
+            assert!(!outcomes[0].success);
+            assert_eq!(
+                outcomes[0].error.as_deref(),
+                Some("Remote-backed sessions are read-only in this version")
+            );
+        }
+    }
 }
 
 pub fn restore_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
 ) -> Result<bool, String> {
-    let source_path = handle
-        .file_path()
-        .map_err(|_| DB_OPERATION_UNSUPPORTED.to_string())?;
+    let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
     let archive_root = roots

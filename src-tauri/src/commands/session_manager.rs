@@ -10,8 +10,22 @@ use tauri::Emitter;
 use crate::session_manager;
 use crate::session_manager::metadata::MetadataManager;
 use crate::session_manager::providers::ProviderRegistry;
-use crate::session_manager::remote::RemoteScanState;
-use crate::session_manager::settings::{ProviderHintHeal, SettingsManager, SourceEntry};
+use crate::session_manager::remote::{RemoteScanState, resolve_remote_to_local};
+use crate::session_manager::settings::{ProviderHintHeal, SettingsManager, SshSource, SourceEntry};
+
+/// Extract the enabled ssh source entries up front so blocking closures
+/// can own them without borrowing the settings state (Send + Tauri-free
+/// downstream code).
+fn enabled_ssh_sources(settings: &SettingsManager) -> Vec<SshSource> {
+    settings
+        .enabled_sources()
+        .into_iter()
+        .filter_map(|e| match e {
+            SourceEntry::Ssh(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,9 +137,16 @@ pub async fn list_sessions(
     Ok(sessions)
 }
 
+/// Load a session's messages. Remote (SSH) locators are bridged FIRST:
+/// `resolve_remote_to_local` fetches the file into the transient cache
+/// (cache hit = zero network) and hands the provider a File-locator handle
+/// pointing at the local cache copy (ADR 0007 cache exit — the remote
+/// source's only content-read path).
 #[tauri::command]
 pub async fn get_session_messages(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    settings: tauri::State<'_, SettingsManager>,
+    remote: tauri::State<'_, RemoteScanState>,
     providerId: String,
     sourcePath: Option<String>,
     sessionId: Option<String>,
@@ -138,6 +159,11 @@ pub async fn get_session_messages(
         locator,
     };
     let handle = request.into_handle()?;
+    let ssh_sources = enabled_ssh_sources(&settings);
+    let handle = match resolve_remote_to_local(&ssh_sources, &remote.pool, &handle).await? {
+        Some(bridged) => bridged,
+        None => handle,
+    };
     run_blocking!(
         registry,
         reg,
@@ -145,9 +171,15 @@ pub async fn get_session_messages(
     )
 }
 
+/// Load a session's detail (messages + Q&A pairs + raw-content fallback).
+/// Remote locators use the same bridge as `get_session_messages`: the
+/// raw-content fallback also resolves through the File-locator cache copy,
+/// so file-backed providers need no Remote awareness.
 #[tauri::command]
 pub async fn get_session_detail(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    settings: tauri::State<'_, SettingsManager>,
+    remote: tauri::State<'_, RemoteScanState>,
     providerId: String,
     sourcePath: Option<String>,
     sessionId: Option<String>,
@@ -160,6 +192,11 @@ pub async fn get_session_detail(
         locator,
     };
     let handle = request.into_handle()?;
+    let ssh_sources = enabled_ssh_sources(&settings);
+    let handle = match resolve_remote_to_local(&ssh_sources, &remote.pool, &handle).await? {
+        Some(bridged) => bridged,
+        None => handle,
+    };
     run_blocking!(
         registry,
         reg,

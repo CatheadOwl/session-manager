@@ -288,10 +288,19 @@ export const SessionDetail = memo(function SessionDetail({
   }
 
   const sessionTitle = formatSessionTitle(session);
+  const isRemoteSession = session.locator?.kind === "remote";
   const lifecycleSupported = supportsLifecycleOperations(session);
+  // Read-only tooltip: remote (SSH) sessions are read-only per ADR 0007;
+  // the OpenCode message covers the other lifecycle-unsupported case.
   const lifecycleTitle = lifecycleSupported
     ? undefined
-    : "OpenCode SQLite sessions are read-only in this version.";
+    : isRemoteSession
+      ? "SSH remote sessions are read-only in this version."
+      : "OpenCode SQLite sessions are read-only in this version.";
+  // Remote sessions carry no local sourcePath — the display path IS the
+  // remote path (locator.path), kept visible and copyable.
+  const sourcePathDisplay =
+    session.sourcePath ?? (isRemoteSession ? session.locator?.path : undefined);
 
   return (
     <main className="session-detail">
@@ -300,6 +309,11 @@ export const SessionDetail = memo(function SessionDetail({
           <div className="detail-title-block">
             <div className="detail-provider-row">
               <span className="provider-pill">{getProviderDisplay(session.providerId).label}</span>
+              {isRemoteSession && (
+                <span className="provider-pill" title="SSH remote source — read-only (ADR 0007)">
+                  Remote (read-only)
+                </span>
+              )}
               <div className="detail-actions">
                 <StarButton starred={isStarred} onToggle={() => onToggleStar(session)} />
                 {scope === "active" && (
@@ -376,9 +390,9 @@ export const SessionDetail = memo(function SessionDetail({
               <div>
                 <dt>Source path</dt>
                 <dd className="metadata-copyable">
-                  <span className="metadata-value">{session.sourcePath || "—"}</span>
-                  {session.sourcePath ? (
-                    <CopyButton text={session.sourcePath} label="Copy source path" className="metadata-copy-btn" />
+                  <span className="metadata-value">{sourcePathDisplay || "—"}</span>
+                  {sourcePathDisplay ? (
+                    <CopyButton text={sourcePathDisplay} label="Copy source path" className="metadata-copy-btn" />
                   ) : null}
                 </dd>
               </div>

@@ -128,8 +128,69 @@ fn is_cli_arg(arg: Option<&str>) -> bool {
     )
 }
 
+/// Windows console attach (workunit 20260910-1408). Release builds link as a
+/// GUI-subsystem exe (`#![cfg_attr(not(debug_assertions), windows_subsystem =
+/// "windows")]` in main.rs), so Windows attaches no console and std handles
+/// are NULL when launched interactively from cmd/pwsh: clap's `--help` output
+/// went nowhere. Fix per Tauri maintainer guidance (tauri#8305 comment
+/// 1826871949): attach to the parent console, then re-open only the INVALID
+/// std handles to `CONOUT$` (AttachConsole alone does not rewire already
+/// captured handles). Valid handles — pipe redirection, console-attached
+/// debug builds — are left untouched so redirection semantics never change.
+/// All failures (explorer launch has no parent console; headless hosts) are
+/// silently ignored: the GUI path never prints anyway. Only the CLI branch
+/// calls this, and it prints-then-exits, so no FreeConsole bookkeeping is
+/// needed.
+#[cfg(windows)]
+pub(crate) fn attach_parent_console() {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    unsafe {
+        // From cmd/pwsh: attaches to the caller's console. From explorer:
+        // fails, nothing to print to — return. (A process can also already
+        // hold a console, e.g. test harnesses: attach then fails too.)
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return;
+        }
+        let invalid = |r: windows::core::Result<HANDLE>| match r {
+            Ok(h) => h.0.is_null() || h == INVALID_HANDLE_VALUE,
+            Err(_) => true,
+        };
+        let need_out = invalid(GetStdHandle(STD_OUTPUT_HANDLE));
+        let need_err = invalid(GetStdHandle(STD_ERROR_HANDLE));
+        if !need_out && !need_err {
+            return;
+        }
+        // `CONOUT$` is a device name; std::fs open goes through CreateFileW
+        // with no extra windows features needed.
+        let Ok(conout) = std::fs::OpenOptions::new().write(true).open("CONOUT$") else {
+            return;
+        };
+        let handle = HANDLE(conout.as_raw_handle());
+        if need_out {
+            let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+        }
+        if need_err {
+            let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+        }
+        // Keep the OS handle alive for the rest of the (short-lived) process;
+        // closing the File would invalidate the std handles we just set.
+        std::mem::forget(conout);
+    }
+}
+
 /// Parse and run the CLI path. Returns the process exit code.
 pub fn run_cli() -> i32 {
+    // GUI-subsystem release builds have no console until this call; must run
+    // before clap's parse (clap prints help/version during parse and exits).
+    #[cfg(windows)]
+    attach_parent_console();
     let Cli { command } = Cli::parse();
     match command {
         Some(CliCommand::Export {
@@ -367,6 +428,16 @@ mod tests {
         // The documented default: no window flags = full range.
         let w = resolve_window(None, None, None);
         assert_eq!((w.from, w.to), (i64::MIN, i64::MAX));
+    }
+
+    #[test]
+    fn console_attach_never_panics() {
+        // Workunit 20260910-1408: attach must be safe in any host state —
+        // test harness (already holds a console → attach fails → early
+        // return), headless CI (no parent console → early return). It must
+        // never panic or disturb already-valid std handles.
+        #[cfg(windows)]
+        attach_parent_console();
     }
 
     #[test]

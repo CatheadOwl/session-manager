@@ -31,6 +31,12 @@ tauri-plugin-dialog = "2"
 tempfile = "3"
 trash = "3"
 
+# Console attach for the CLI branch (workunit 20260910-1408): release builds
+# are GUI-subsystem (windows_subsystem="windows"), so Win32 AttachConsole +
+# SetStdHandle must re-open std handles to CONOUT$ before clap prints help.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Console", "Win32_Foundation"] }
+
 [dev-dependencies]
 # Remote-source spike (workunit 20260910-1145 phase 0, ADR 0007 / D2 approved)
 # default-features off: avoid aws-lc-rs (needs NASM on MSVC); ring backend instead.

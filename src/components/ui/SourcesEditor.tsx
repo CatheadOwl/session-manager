@@ -40,11 +40,12 @@ const toDraft = (value: SourceEntry[]): DraftRow[] =>
  * validation (empty path, duplicate paths) is display-only — the Rust core
  * re-validates on save.
  *
- * ADR 0008: ssh entries render as a READ-ONLY summary row (per-field remote
- * editing is future work) and MUST be included verbatim in every `onChange`
- * commit — a local edit must never drop them from the file. The commit shape
- * is therefore the FULL list: edited local entries + ssh entries untouched.
- * Adding NEW ssh entries goes through the "Add SSH source…" flow
+ * ADR 0008: ssh entries render with the SAME structural controls as local
+ * rows — enabled toggle and guarded remove (unified expression; the read-only
+ * part is only the connection identity, which comes from the Add flow) — and
+ * MUST be included verbatim in every `onChange` commit: a local edit must
+ * never drop them from the file. The commit shape is therefore the FULL
+ * list. Adding NEW ssh entries goes through the "Add SSH source…" flow
  * (`AddSshSourcePanel`: ssh-config alias picker or manual form, with a test
  * connection step — ADR 0010).
  */
@@ -89,6 +90,19 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
     );
   };
 
+  // SSH rows share the local rows' structural controls (ADR 0008 r1 +
+  // review feedback): same enabled toggle and remove semantics, expressed
+  // on the summary identity instead of a path input.
+  const toggleSshEnabled = (index: number) => {
+    commit(
+      rows.map((row, i) =>
+        i === index && row.entry.kind === "ssh"
+          ? { ...row, entry: { ...row.entry, enabled: !row.entry.enabled } }
+          : row,
+      ),
+    );
+  };
+
   const addSource = () => {
     if (providers.length === 0) return;
     commit([...rows, { entry: { path: "", provider: providers[0], enabled: true }, pathDraft: "" }]);
@@ -110,9 +124,15 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
   const removeTarget: ConfirmActionTarget | null = (() => {
     if (pendingRemove === null) return null;
     const entry = rows[pendingRemove]?.entry;
-    return entry && entry.kind !== "ssh"
-      ? { kind: "remove-source", path: entry.path }
-      : null;
+    if (!entry) return null;
+    if (entry.kind === "ssh") {
+      return {
+        kind: "remove-ssh-source",
+        id: entry.id,
+        alias: entry.auth.mode === "sshConfig" ? entry.auth.alias : null,
+      };
+    }
+    return { kind: "remove-source", path: entry.path };
   })();
 
   return (
@@ -122,9 +142,10 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
           <div className="setting-sources-empty">No extra sources — built-in provider folders are always scanned.</div>
         ) : null}
         {rows.map((row, index) => {
-          // SSH summary row (read-only): kind badge + identity + pointer to
-          // hand editing. The entry object itself rides along in every
-          // commit untouched (see the component doc comment).
+          // SSH row: kind badge + identity summary + the SAME structural
+          // controls as local rows (enabled toggle, guarded remove). The
+          // identity fields themselves stay read-only — connection config
+          // comes from the Add flow or hand editing (ADR 0010).
           if (row.entry.kind === "ssh") {
             const ssh = row.entry;
             // sshConfig entries keep placeholder host/user fields (ADR
@@ -147,10 +168,33 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
                           ssh.port && ssh.port !== 22 ? `:${ssh.port}` : ""
                         }`}
                   </span>
-                  <span className="setting-source-ssh-note">
-                    Edit in settings.json — remote editor coming
-                  </span>
                 </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={ssh.enabled}
+                  aria-label={`SSH source ${ssh.id} enabled`}
+                  title={ssh.enabled ? "Disable SSH source" : "Enable SSH source"}
+                  className="setting-toggle setting-toggle--compact"
+                  onClick={() => toggleSshEnabled(index)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleSshEnabled(index);
+                    }
+                  }}
+                >
+                  <span className="setting-toggle-knob" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="danger-button setting-source-remove"
+                  aria-label={`Remove SSH source ${ssh.id}`}
+                  title="Remove SSH source"
+                  onClick={() => setPendingRemove(index)}
+                >
+                  Remove
+                </button>
               </div>
             );
           }

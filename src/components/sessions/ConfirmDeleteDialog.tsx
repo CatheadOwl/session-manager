@@ -11,7 +11,8 @@ export type ConfirmActionTarget =
       count: number;
       skippedCount: number;
     }
-  | { kind: "remove-source"; path: string };
+  | { kind: "remove-source"; path: string }
+  | { kind: "remove-ssh-source"; id: string; alias: string | null };;
 
 interface ConfirmActionDialogProps {
   target: ConfirmActionTarget;
@@ -123,6 +124,20 @@ function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
       title: "Remove source?",
       description: "This removes the scan source from settings. The folder on disk is not touched.",
       targetLabel: target.path || "(empty path)",
+      confirmLabel: "Remove",
+      workingLabel: isWorking ? "Removing..." : "Remove",
+      confirmClassName: "danger-button",
+      icon: "−",
+      tone: "danger",
+    };
+  }
+
+  if (target.kind === "remove-ssh-source") {
+    return {
+      title: "Remove SSH source?",
+      description:
+        "This removes the remote source from settings. Files on the remote machine and the local scan cache are not touched.",
+      targetLabel: target.alias !== null ? `${target.id} (ssh config alias: ${target.alias})` : target.id,
       confirmLabel: "Remove",
       workingLabel: isWorking ? "Removing..." : "Remove",
       confirmClassName: "danger-button",

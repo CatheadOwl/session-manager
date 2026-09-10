@@ -140,16 +140,33 @@ describe("SourcesEditor", () => {
     enabled: true,
   };
 
-  it("renders ssh entries as a read-only summary row", () => {
+  it("renders ssh rows with unified structural controls (toggle + guarded remove)", () => {
     renderEditor([SSH_ENTRY]);
     expect(screen.getByText("SSH")).toBeInTheDocument();
     expect(screen.getByText("Aliyun dev (ali)")).toBeInTheDocument();
     expect(screen.getByText("admin@192.0.2.10:2222")).toBeInTheDocument();
-    expect(screen.getByText(/Edit in settings\.json — remote editor coming/)).toBeInTheDocument();
-    // No editable controls for the ssh row.
+    // Same structural controls as local rows, keyed by the ssh id.
+    const toggle = screen.getByRole("switch", { name: "SSH source ali enabled" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("button", { name: "Remove SSH source ali" })).toBeInTheDocument();
+    // No path input for the ssh row — identity stays read-only.
     expect(screen.queryByLabelText("Source 1 path")).toBeNull();
-    expect(screen.queryByRole("switch", { name: "Source 1 enabled" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove source 1" })).toBeNull();
+  });
+
+  it("commits an enabled flip when the ssh row toggle is clicked", () => {
+    const onChange = vi.fn();
+    renderEditor([SSH_ENTRY], onChange);
+    fireEvent.click(screen.getByRole("switch", { name: "SSH source ali enabled" }));
+    expect(onChange).toHaveBeenCalledWith([{ ...SSH_ENTRY, enabled: false }]);
+  });
+
+  it("removes an ssh row through the confirm dialog (ssh-scoped copy)", () => {
+    const onChange = vi.fn();
+    renderEditor([SSH_ENTRY], onChange);
+    fireEvent.click(screen.getByRole("button", { name: "Remove SSH source ali" }));
+    expect(screen.getByText("Remove SSH source?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onChange).toHaveBeenCalledWith([]);
   });
 
   it("includes ssh entries verbatim when a local edit commits", () => {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::fork_tree;
 use crate::session_manager;
 use crate::session_manager::providers::ProviderRegistry;
+use crate::session_manager::settings::SettingsManager;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +17,7 @@ pub struct ForkTreeOptions {
 #[tauri::command]
 pub async fn compute_fork_tree(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    settings: tauri::State<'_, SettingsManager>,
     options: Option<ForkTreeOptions>,
 ) -> Result<fork_tree::ForkTreeResult, String> {
     let opts = options.unwrap_or_else(|| ForkTreeOptions {
@@ -27,9 +29,17 @@ pub async fn compute_fork_tree(
         _ => session_manager::SessionScope::Active,
     };
     let reg = Arc::clone(&registry);
+    // Settings sources overlay: read before the blocking task (Send closure,
+    // Tauri-free core).
+    let extra_sources = settings.enabled_sources();
 
     tauri::async_runtime::spawn_blocking(move || {
-        fork_tree::compute_fork_tree(&reg, &session_scope, opts.project_dir.as_deref())
+        fork_tree::compute_fork_tree(
+            &reg,
+            &session_scope,
+            opts.project_dir.as_deref(),
+            &extra_sources,
+        )
     })
     .await
     .map_err(|e| format!("Failed to compute fork tree: {e}"))?

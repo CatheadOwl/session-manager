@@ -10,6 +10,7 @@ use std::path::Path;
 use super::messages::load_messages_for_handle;
 use super::providers::ProviderRegistry;
 use super::scan::scan_sessions_with_scope;
+use super::settings::SourceEntry;
 use super::types::{
     ExportSkippedItem, QaEntry, QaExportBatch, QaSessionExport, SessionHandle, SessionMeta,
     SessionProvenance, SessionScope,
@@ -22,12 +23,16 @@ use std::time::Instant;
 ///
 /// - Sessions missing both `last_active_at` and `created_at` are excluded.
 /// - Individual load failures are recorded in `skipped`; the batch continues.
+///
+/// `extra_sources` is the settings sources overlay threaded straight into
+/// the scan (ADR 0006 D2); adapters read `SettingsManager::enabled_sources()`.
 pub fn export_qa_sessions(
     registry: &ProviderRegistry,
     scope: &SessionScope,
     from: i64,
     to: i64,
     providers: Option<&[String]>,
+    extra_sources: &[SourceEntry],
 ) -> QaExportBatch {
     let start = Instant::now();
     log::debug!(
@@ -38,7 +43,7 @@ pub fn export_qa_sessions(
         providers
     );
 
-    let selected: Vec<SessionMeta> = scan_sessions_with_scope(registry, scope)
+    let selected: Vec<SessionMeta> = scan_sessions_with_scope(registry, scope, extra_sources)
         .into_iter()
         .filter(|meta| in_provider_set(meta, providers))
         .filter(|meta| session_in_range(meta, from, to))
@@ -648,6 +653,7 @@ mod tests {
             in_range_ms - 3_600_000,
             in_range_ms + 3_600_000,
             None,
+            &[],
         );
 
         assert_eq!(batch.sessions.len(), 1);
@@ -663,6 +669,7 @@ mod tests {
             in_range_ms - 3_600_000,
             in_range_ms + 3_600_000,
             Some(&["qoder".to_string()]),
+            &[],
         );
         assert!(empty.sessions.is_empty());
     }

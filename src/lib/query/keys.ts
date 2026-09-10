@@ -36,6 +36,13 @@ export const sessionLocatorKey = (
 export const queryKeys = {
   sessions: (scope: "active" | "archived") => ["sessions", scope] as const,
 
+  /**
+   * Prefix key covering every sessions(scope) query. React Query partial
+   * matching makes this invalidate all scopes at once — used when the
+   * settings `sources` overlay changes and every list must refetch.
+   */
+  sessionsAll: () => ["sessions"] as const,
+
   sessionDetail: (
     providerId: string,
     sourcePathOrLocator: string | SessionLocator | undefined,
@@ -55,4 +62,10 @@ export const queryKeys = {
 
   forkTree: (scope: "active" | "archived", projectDir?: string) =>
     ["forkTree", scope, projectDir ?? "__all__"] as const,
+
+  /**
+   * Prefix key covering every forkTree(scope, projectDir) query (see
+   * sessionsAll).
+   */
+  forkTreeAll: () => ["forkTree"] as const,
 };

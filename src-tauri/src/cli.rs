@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::session_manager;
+use crate::session_manager::settings::SettingsManager;
 use crate::session_manager::SessionScope;
 
 /// Time-window resolution: `--days N` or explicit `--from`/`--to` (epoch
@@ -182,12 +183,24 @@ fn run_export(
     };
 
     let registry = session_manager::build_provider_registry();
+    // Settings sources overlay: the CLI has no managed Tauri state, so build
+    // a SettingsManager from the same settings path the GUI uses. A broken
+    // or missing settings file falls back to "no extra sources" (lenient
+    // load); an unresolvable home merely warns.
+    let extra_sources = match crate::config::get_app_settings_path() {
+        Ok(path) => SettingsManager::new(path).enabled_sources(),
+        Err(err) => {
+            eprintln!("warning: cannot resolve settings path: {err}");
+            Vec::new()
+        }
+    };
     let batch = session_manager::export_qa_sessions(
         &registry,
         &SessionScope::Active,
         window.from,
         window.to,
         providers.as_deref(),
+        &extra_sources,
     );
 
     for skipped in &batch.skipped {

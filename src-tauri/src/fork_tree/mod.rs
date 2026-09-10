@@ -15,16 +15,20 @@ use self::types::CachedFileData;
 use crate::config;
 use crate::session_manager;
 use crate::session_manager::providers::ProviderRegistry;
+use crate::session_manager::settings::SourceEntry;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Compute (or fetch from cache) the fork tree for a given scope.
 /// `project_dir_filter` — if set, only include sessions whose `project_dir` matches
 /// (case-insensitive comparison on Windows). Pass `None` to include all sessions.
+/// `extra_sources` is the settings sources overlay threaded into the scan
+/// (ADR 0006 D2); adapters read `SettingsManager::enabled_sources()`.
 pub fn compute_fork_tree(
     registry: &ProviderRegistry,
     scope: &session_manager::SessionScope,
     project_dir_filter: Option<&str>,
+    extra_sources: &[SourceEntry],
 ) -> Result<ForkTreeResult, String> {
     let start = Instant::now();
 
@@ -38,7 +42,7 @@ pub fn compute_fork_tree(
 
     // Get the already-filtered session list from the session manager.
     // This skips subagent sessions and other files the provider rejects.
-    let sessions = session_manager::scan_sessions_with_scope(registry, scope);
+    let sessions = session_manager::scan_sessions_with_scope(registry, scope, extra_sources);
 
     // Load existing cache
     let mut cache = cache::load_cache(&cache_path);
@@ -735,7 +739,7 @@ mod tests {
         }
 
         let registry = build_provider_registry();
-        let result = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None)
+        let result = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None, &[])
             .expect("compute");
         assert_eq!(result.total_sessions, 2);
         assert!(!result.computed_from_cache);
@@ -762,7 +766,7 @@ mod tests {
         assert_eq!(result.roots[1].children.len(), 0);
 
         // Second call re-scans but reuses cache for hash chain computation
-        let result2 = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None)
+        let result2 = compute_fork_tree(&registry, &session_manager::SessionScope::Active, None, &[])
             .expect("compute");
         assert_eq!(result2.total_sessions, 2);
         assert!(

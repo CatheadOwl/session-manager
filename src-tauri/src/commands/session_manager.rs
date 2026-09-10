@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::session_manager;
 use crate::session_manager::metadata::MetadataManager;
 use crate::session_manager::providers::ProviderRegistry;
+use crate::session_manager::settings::SettingsManager;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +21,7 @@ pub struct ListSessionsOptions {
 #[tauri::command]
 pub async fn list_sessions(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    settings: tauri::State<'_, SettingsManager>,
     options: Option<ListSessionsOptions>,
 ) -> Result<Vec<session_manager::SessionMeta>, String> {
     let scope = options
@@ -29,10 +31,13 @@ pub async fn list_sessions(
         "archived" => session_manager::SessionScope::Archived,
         _ => session_manager::SessionScope::Active,
     };
+    // Read the settings sources overlay before entering the blocking task so
+    // the closure stays Send and the scan core stays Tauri-free.
+    let extra_sources = settings.enabled_sources();
     Ok(run_blocking!(
         registry,
         reg,
-        session_manager::scan_sessions_with_scope(&reg, &session_scope)
+        session_manager::scan_sessions_with_scope(&reg, &session_scope, &extra_sources)
     ))
 }
 
@@ -218,6 +223,7 @@ fn default_export_format() -> String {
 #[tauri::command]
 pub async fn export_qa_sessions(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
+    settings: tauri::State<'_, SettingsManager>,
     options: ExportQaSessionsOptions,
 ) -> Result<session_manager::ExportOutcome, String> {
     let session_scope = match options.scope.as_str() {
@@ -226,6 +232,7 @@ pub async fn export_qa_sessions(
     };
     let format = session_manager::QaExportFormat::parse(&options.format)?;
 
+    let extra_sources = settings.enabled_sources();
     let batch = run_blocking!(
         registry,
         reg,
@@ -239,6 +246,7 @@ pub async fn export_qa_sessions(
                 options.from,
                 options.to,
                 options.providers.as_deref(),
+                &extra_sources,
             ),
         }
     );

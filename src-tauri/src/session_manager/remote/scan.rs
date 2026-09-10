@@ -346,33 +346,45 @@ fn probe_provider(
     blobs: &[FileMetadataBlob],
     scratch: &Path,
 ) -> Option<String> {
+    // Mirrors the LOCAL parse semantics (`parse_session_meta`): the first
+    // provider in registration order that parses the file wins. Requiring
+    // a UNIQUE match across all providers is impossible for this format
+    // family — a claude JSONL line carries sessionId+type, which also
+    // satisfies the weaker checks of later-registered providers (qoder's
+    // same-line check). Registration order is the tie-breaker locally, so
+    // it is the tie-breaker here too; unanimity is then required ACROSS
+    // samples of that first-match result.
     let mut agreed: Option<String> = None;
     for (idx, blob) in blobs.iter().take(PROBE_SAMPLE_COUNT).enumerate() {
         let blob_dir = scratch.join(format!("probe-{idx}"));
         std::fs::create_dir_all(&blob_dir).ok()?;
         let bridge = write_bridge_file(&blob_dir, blob).ok()?;
-        let matches: Vec<String> = registry
+        let first_match = registry
             .all()
-            .filter(|p| p.parse_session(&bridge).is_some())
-            .map(|p| p.id().to_string())
-            .collect();
-        if matches.len() != 1 {
-            log::debug!(
-                "remote scan probe: {} matched {:?} providers — inconclusive",
-                blob.path,
-                matches
-            );
-            return None;
-        }
-        let id = matches.into_iter().next().expect("len checked");
-        match &agreed {
-            Some(previous) if previous != &id => {
+            .find(|p| p.parse_session(&bridge).is_some())
+            .map(|p| p.id().to_string());
+        match first_match {
+            None => {
+                // This sample parses under NO provider — the scan loop
+                // would skip this file anyway (same semantics as the
+                // local scan). A few unparsable files (subagent sidecars,
+                // foreign formats) must not disqualify an otherwise
+                // unanimous root.
                 log::debug!(
-                    "remote scan probe: sample {idx} says {id}, earlier said {previous} — inconclusive"
+                    "remote scan probe: {} matched no provider — skipping sample",
+                    blob.path
                 );
-                return None;
+                continue;
             }
-            _ => agreed = Some(id),
+            Some(id) => match &agreed {
+                Some(previous) if previous != &id => {
+                    log::debug!(
+                        "remote scan probe: sample {idx} says {id}, earlier said {previous} — inconclusive"
+                    );
+                    return None;
+                }
+                _ => agreed = Some(id),
+            },
         }
     }
     agreed
@@ -781,9 +793,14 @@ mod tests {
     }
 
     #[test]
-    fn probe_ambiguous_match_is_inconclusive() {
-        // beta is loose (matches anything): every sample matches BOTH
-        // providers → refuse to guess.
+    fn probe_first_match_registration_order_wins_over_loose_providers() {
+        // beta is loose (matches anything) but registered LATER: the probe
+        // mirrors local `parse_session_meta` semantics — first match in
+        // registration order wins, so the sample resolves to alpha and a
+        // unanimous root heals to alpha. (Uniqueness-across-all is
+        // impossible in the real format family: a claude line's
+        // sessionId+type also satisfies qoder's weaker same-line check,
+        // and qoder is registered after claude precisely for that reason.)
         let registry = registry_of(vec![
             MarkerProvider { id: "alpha", loose: false },
             MarkerProvider { id: "beta", loose: true },
@@ -799,8 +816,11 @@ mod tests {
             fail: false,
         };
         let outcome = scan_remote_source(&registry, &fetch, &ssh_source("srv", None)).expect("scan");
-        assert!(outcome.detected_provider.is_none());
-        assert!(outcome.sessions.is_empty(), "no guessing without a hint");
+        assert_eq!(
+            outcome.detected_provider,
+            Some(("srv".to_string(), "alpha".to_string()))
+        );
+        assert_eq!(outcome.sessions.len(), 1);
     }
 
     #[test]

@@ -30,6 +30,8 @@
 
 mod cache;
 mod error;
+#[cfg(test)]
+mod e2e;
 mod frame;
 mod scan;
 mod session;

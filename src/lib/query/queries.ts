@@ -5,6 +5,7 @@ import {
   type AppMetadata,
   type ForkTreeResult,
 } from "@/lib/api/sessions";
+import { fetchSettings, type SettingsSnapshot } from "@/lib/api/settings";
 import type { SessionDetail, SessionMeta } from "@/types";
 import { queryKeys } from "./keys";
 
@@ -20,6 +21,19 @@ export const useAppMetadataQuery = () => {
   return useQuery<AppMetadata>({
     queryKey: queryKeys.appMetadata(),
     queryFn: async () => sessionsApi.getAppMetadata(),
+    staleTime: 30 * 1000,
+  });
+};
+
+/**
+ * Settings core (ADR 0006). Consumers read individual keys off
+ * `data.values` (e.g. `update.autoCheck`). The cache is refreshed by the
+ * app-level `settings-changed` listener, not per-consumer refetches.
+ */
+export const useSettingsQuery = () => {
+  return useQuery<SettingsSnapshot>({
+    queryKey: queryKeys.settings(),
+    queryFn: async () => fetchSettings(),
     staleTime: 30 * 1000,
   });
 };

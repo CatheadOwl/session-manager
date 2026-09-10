@@ -51,6 +51,8 @@ export const queryKeys = {
 
   appMetadata: () => ["appMetadata"] as const,
 
+  settings: () => ["settings"] as const,
+
   forkTree: (scope: "active" | "archived", projectDir?: string) =>
     ["forkTree", scope, projectDir ?? "__all__"] as const,
 };

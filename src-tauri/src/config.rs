@@ -111,6 +111,12 @@ pub fn get_fork_tree_cache_path() -> Result<PathBuf, String> {
         .join("fork-tree.json"))
 }
 
+pub fn get_app_settings_path() -> Result<PathBuf, String> {
+    Ok(get_home_dir()
+        .join(".session-manager")
+        .join("settings.json"))
+}
+
 pub fn get_app_logs_dir() -> Result<PathBuf, String> {
     Ok(get_home_dir().join(".session-manager").join("logs"))
 }
@@ -135,6 +141,17 @@ mod tests {
         std::env::set_var("CLAUDE_CONFIG_DIR", "/tmp/custom-claude");
         assert_eq!(get_claude_config_dir(), PathBuf::from("/tmp/custom-claude"));
         std::env::remove_var("CLAUDE_CONFIG_DIR");
+    }
+
+    #[test]
+    fn app_settings_path_uses_session_manager_dir() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+        std::env::set_var("SESSION_MANAGER_TEST_HOME", "/tmp/test-home");
+        assert_eq!(
+            get_app_settings_path().expect("settings path"),
+            PathBuf::from("/tmp/test-home/.session-manager/settings.json")
+        );
+        std::env::remove_var("SESSION_MANAGER_TEST_HOME");
     }
 
     #[test]

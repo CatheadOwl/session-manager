@@ -11,7 +11,7 @@
 [![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![Rust](https://img.shields.io/badge/Rust-1.85+-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 
-[Overview](#overview) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Getting Started](#getting-started) | [Architecture](#architecture)
+[Overview](#overview) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Getting Started](#getting-started) | [Manual Settings](#manual-settings) | [Architecture](#architecture)
 
 </div>
 
@@ -106,6 +106,40 @@ pnpm typecheck
 pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+## Manual Settings
+
+Settings live in a hand-editable file — you can change them before any settings UI exists (VS Code-style):
+
+```
+~/.session-manager/settings.json
+```
+
+The file is JSONC (comments allowed) and stores only overridden keys: values equal to the built-in defaults are omitted, and `version` is always written. Change a setting, restart the app, and it takes effect.
+
+| Key | Type | Default | Semantics |
+|-----|------|---------|-----------|
+| `version` | number | *(always written)* | Migration anchor; current = `1` |
+| `update.autoCheck` | bool | `true` | `false` skips the automatic update check on startup (manual retry still works) |
+| `sources[]` | array | `[]` | Extra session directories scanned **in addition to** the built-in provider locations (additive overlay) |
+| `sources[].path` | string | — | Directory containing session files |
+| `sources[].provider` | string | — (required) | Provider id owning the parser for this root (`claude`, `codex`, …) |
+| `sources[].enabled` | bool | `true` | Disabled entries are kept in the file but not scanned |
+
+Example:
+
+```jsonc
+{
+  "version": 1,
+  "update": { "autoCheck": false },
+  "sources": [ { "path": "D:\\jsonl\\dump", "provider": "codex", "enabled": true } ]
+}
+```
+
+Loading is lenient — a broken file never blocks startup (defaults are used), unknown keys are preserved on programmatic saves, and wrong-typed known keys fall back to defaults with a logged warning.
+
+> [!NOTE]
+> Comments are a hand-editing convenience only: the first time the app saves the file programmatically (e.g. changing a setting from the UI), comments are dropped.
 
 ## Architecture
 

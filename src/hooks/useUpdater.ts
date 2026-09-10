@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { useSettingsQuery } from "@/lib/query/queries";
 
 export type UpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "error";
 
@@ -9,6 +10,18 @@ export function useUpdater() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cancelledRef = useRef(false);
+
+  // Settings gate (ADR 0006): `update.autoCheck === false` opts out of the
+  // startup check. The gate is a read through IPC, not a local flag —
+  // hand-editing settings.json + restart changes behavior. While the settings
+  // query is still loading (`data === undefined`) the auto-check is HELD: an
+  // opted-out user must not fire even one stray check request while the gate
+  // resolves (fail closed; the default-true path simply starts one render
+  // later, once the query settles).
+  const { data: settings } = useSettingsQuery();
+  const settingsLoaded = settings !== undefined;
+  const autoCheckDisabled =
+    settings?.values["update.autoCheck"]?.bool === false;
 
   const checkForUpdate = useCallback(async () => {
     try {
@@ -31,10 +44,11 @@ export function useUpdater() {
   }, []);
 
   useEffect(() => {
+    if (!settingsLoaded || autoCheckDisabled) return;
     cancelledRef.current = false;
     checkForUpdate();
     return () => { cancelledRef.current = true; };
-  }, [checkForUpdate]);
+  }, [settingsLoaded, autoCheckDisabled, checkForUpdate]);
 
   const installUpdate = useCallback(async () => {
     if (!update) return;

@@ -1,5 +1,6 @@
 pub mod fork_tree;
 pub mod session_manager;
+pub mod settings;
 
 pub(crate) fn default_scope() -> String {
     "active".to_string()

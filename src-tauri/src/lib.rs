@@ -7,6 +7,7 @@ mod fs_utils;
 mod session_manager;
 
 use session_manager::metadata::{MetadataManager, WindowState};
+use session_manager::settings::SettingsManager;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow, WindowEvent};
 
 /// Validate that the saved window position falls within an available monitor.
@@ -70,6 +71,12 @@ pub fn run() {
                 crate::config::get_app_metadata_path().expect("Failed to resolve metadata path");
             let manager = MetadataManager::new(metadata_path);
             app.manage(manager);
+
+            // Settings core (ADR 0006): hand-editable ~/.session-manager/settings.json
+            let settings_path =
+                crate::config::get_app_settings_path().expect("Failed to resolve settings path");
+            let settings = SettingsManager::new(settings_path);
+            app.manage(settings);
 
             // Build and register the provider registry
             let registry = session_manager::build_provider_registry();
@@ -147,6 +154,8 @@ pub fn run() {
             commands::session_manager::export_qa_sessions,
             commands::fork_tree::compute_fork_tree,
             commands::fork_tree::get_fork_tree,
+            commands::settings::get_settings,
+            commands::settings::set_setting_value,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

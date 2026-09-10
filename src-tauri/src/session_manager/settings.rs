@@ -162,10 +162,6 @@ fn default_true() -> bool {
 }
 
 /// Outcome of an ADR 0008 §1a auto-heal attempt (`heal_provider_hint`).
-// No production caller yet: the consumer is the remote scan line
-// (session_manager/remote/, ADR 0008 §3, future). Kept because it is the
-// contracted return type of the sanctioned heal path; exercised by tests.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderHintHeal {
     /// Hint persisted (atomic save done); caller emits `settings-changed`.
@@ -484,11 +480,6 @@ impl SettingsManager {
     /// second comment-detection or settings-writing logic may grow beside it.
     /// CLI adapters MUST NOT call this (read-only semantics, §1a condition 2).
     /// The caller emits `settings-changed` when the outcome is `Applied`.
-    // No production caller yet: the consumer is the remote scan line
-    // (session_manager/remote/, ADR 0008 §3, future). This API is the
-    // contracted single heal path — see the invariants in the paired
-    // cognition note — and is exercised by tests.
-    #[allow(dead_code)]
     pub fn heal_provider_hint(
         &self,
         source_id: &str,

@@ -82,6 +82,11 @@ pub fn run() {
             let registry = session_manager::build_provider_registry();
             app.manage(registry);
 
+            // Remote scan line (ADR 0007/0008, phase 3): per-source SSH
+            // session pool + last-scan disconnect fallback, consumed by
+            // the list_sessions command.
+            app.manage(session_manager::remote::RemoteScanState::new());
+
             // Window state: restore on startup, save on close
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();

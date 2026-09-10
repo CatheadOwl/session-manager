@@ -10,11 +10,16 @@
 //! - `session` — the russh transport: connect/auth/known_hosts, the
 //!   batch exec channel, SFTP fetch. ALL exec/SFTP call sites in the
 //!   product live there.
+//! - [`scan`] — the phase 3 batch scan: discovery exec + batch-metadata
+//!   exec + temp-file bridge into the local provider parsers, provider
+//!   probing, and the disconnect fallback. Tauri-free; the command layer
+//!   owns heal execution and event emission.
 //!
 //! ADR 0007 discipline (batch / cache / drop) attribution of this
 //! layer's operations:
-//! - `batch_metadata` — **batch** (one exec round-trip for N files;
-//!   the P1 real-alias benchmark: ~14 ms/file vs ~710 ms per-file);
+//! - `batch_metadata` / `exec_script` — **batch** (one exec round-trip
+//!   for N files; the P1 real-alias benchmark: ~14 ms/file vs ~710 ms
+//!   per-file);
 //! - `fetch_to_local` — **cache** (full transfer once, then
 //!   mtime+size-gated free re-opens);
 //! - `fetch_index_incremental` — **batch** for append-only files
@@ -23,25 +28,26 @@
 //! Configuration comes from the settings-core `SshSource` /
 //! `SourceAuth` types — this layer never invents its own config shape.
 
-// No production caller yet: the consumer is the remote scan/fetch line
-// (phase 3 wiring into Tauri managed state). Same standing as
-// `heal_provider_hint` — the API contract is fixed and exercised by
-// tests; remove this allow when the phase 3 consumer lands.
-#![allow(dead_code)]
-
 mod cache;
 mod error;
 mod frame;
+mod scan;
 mod session;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 pub use error::RemoteError;
-#[allow(unused_imports)] // re-exported for phase 3 consumers; exercised by tests
-pub use frame::{FileMetadataBlob, HEAD_MAX, TAIL_MAX};
+pub use scan::{RemoteSourceResult, SessionBatchFetch};
 pub use session::RemoteSession;
+// Re-exported for consumers of the scan line (batch blob shape and the
+// bridge window constants). Exercised by tests.
+#[allow(unused_imports)]
+pub use frame::{FileMetadataBlob, HEAD_MAX, TAIL_MAX};
+
+use crate::session_manager::types::SessionMeta;
 
 /// A remote absolute file path (as seen on the SSH host).
 pub type RemotePath = String;
@@ -51,9 +57,6 @@ pub type RemotePath = String;
 /// same source share the connection instead of opening new ones (spec
 /// edge case "concurrent fetch of the same source"; ADR 0007 evidence
 /// 02 hard requirement 2 — single-connection concurrency).
-///
-/// Wiring into the Tauri managed state is phase 3; the type contract
-/// is fixed here.
 pub struct RemoteSessionPool {
     sessions: tokio::sync::Mutex<HashMap<String, Arc<RemoteSession>>>,
     cache_base: PathBuf,
@@ -83,7 +86,10 @@ impl RemoteSessionPool {
     /// its own one-shot reconnect internally; only a permanently dead
     /// session (reconnect failing) surfaces as an error, and the entry
     /// is then dropped so the next call builds a fresh one.
-    pub async fn get(&self, source: &crate::session_manager::settings::SshSource) -> Result<Arc<RemoteSession>, RemoteError> {
+    pub async fn get(
+        &self,
+        source: &crate::session_manager::settings::SshSource,
+    ) -> Result<Arc<RemoteSession>, RemoteError> {
         let mut sessions = self.sessions.lock().await;
         if let Some(existing) = sessions.get(&source.id) {
             if !existing.is_closed() {
@@ -101,8 +107,95 @@ impl RemoteSessionPool {
 
     /// Drop a source's cached session (next `get` reconnects). For
     /// explicit user-driven "reconnect" and shutdown paths.
+    // No production caller yet: the "reconnect" action is phase 4 UI
+    // work (the disconnect fallback below covers v1 listing).
+    #[allow(dead_code)]
     pub async fn drop_source(&self, source_id: &str) {
         self.sessions.lock().await.remove(source_id);
+    }
+}
+
+/// Managed state for the remote scan line (phase 3 Tauri wiring): the
+/// per-source session pool plus each source's last successful scan.
+///
+/// The last-scan map is the v1 disconnect fallback (decision: a dead
+/// source serves its cached list with a warn instead of failing or
+/// emptying the whole session list). `SessionMeta` is deliberately NOT
+/// extended with a stale marker — surfacing staleness in the UI is
+/// phase 4.
+pub struct RemoteScanState {
+    /// Per-source live sessions (see [`RemoteSessionPool`]).
+    pub pool: RemoteSessionPool,
+    /// source id → last successful scan result.
+    last_scan: Arc<StdMutex<HashMap<String, Vec<SessionMeta>>>>,
+}
+
+impl Default for RemoteScanState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RemoteScanState {
+    pub fn new() -> Self {
+        Self::with_pool(RemoteSessionPool::new())
+    }
+
+    /// Test seam: explicit pool (cache base).
+    pub fn with_pool(pool: RemoteSessionPool) -> Self {
+        Self {
+            pool,
+            last_scan: Arc::new(StdMutex::new(HashMap::new())),
+        }
+    }
+
+    /// Last successful scan for a source (empty when none) — served
+    /// when the pool cannot connect at all.
+    pub fn cached_sessions(&self, source_id: &str) -> Vec<SessionMeta> {
+        self.last_scan
+            .lock()
+            .expect("remote scan cache lock")
+            .get(source_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Scan one source end-to-end: builds a [`SessionBatchFetch`] on the
+    /// async side (it captures the ambient tokio handle), runs the scan
+    /// core + provider parsers on the blocking pool (temp files and
+    /// parser IO are blocking), then applies the disconnect fallback.
+    ///
+    /// The returned [`RemoteSourceResult`] carries the auto-heal
+    /// DECISION — executing `heal_provider_hint` and emitting
+    /// `settings-changed` is the command layer's job (this module stays
+    /// Tauri-free).
+    pub async fn scan_source(
+        &self,
+        registry: &Arc<crate::session_manager::providers::ProviderRegistry>,
+        session: Arc<RemoteSession>,
+        source: &crate::session_manager::settings::SshSource,
+    ) -> RemoteSourceResult {
+        let fetch = SessionBatchFetch::new(session);
+        let registry = Arc::clone(registry);
+        let last_scan = Arc::clone(&self.last_scan);
+        let source = source.clone();
+        let source_id = source.id.clone();
+        let join = tokio::task::spawn_blocking(move || {
+            // StdMutex guard moved into the closure: lock scope == task
+            // scope, and the task never awaits while holding it.
+            let mut guard = last_scan.lock().expect("remote scan cache lock");
+            scan::scan_source_with_fallback(&mut guard, &registry, &fetch, &source)
+        })
+        .await;
+        match join {
+            Ok(result) => result,
+            Err(err) => {
+                // Blocking task panicked/joined-failed: same degradation
+                // as a transport failure — cached list, never an error.
+                log::warn!("remote scan: blocking task failed ({err}) — serving cached list");
+                RemoteSourceResult::fallback(self.cached_sessions(&source_id))
+            }
+        }
     }
 }
 
@@ -116,5 +209,21 @@ mod tests {
         let sessions = pool.sessions.try_lock();
         assert!(sessions.is_ok(), "uncontended lock is acquirable");
         assert!(sessions.unwrap().is_empty());
+    }
+
+    #[test]
+    fn scan_state_cache_is_empty_until_populated() {
+        let state = RemoteScanState::with_pool(RemoteSessionPool::with_cache_base(PathBuf::from(
+            "Z:/nope",
+        )));
+        assert!(state.cached_sessions("none").is_empty());
+        state
+            .last_scan
+            .lock()
+            .unwrap()
+            .insert("srv".to_string(), Vec::new());
+        // Present-but-empty and absent are both served as empty lists;
+        // the distinction lives in `from_cache` of RemoteSourceResult.
+        assert!(state.cached_sessions("srv").is_empty());
     }
 }

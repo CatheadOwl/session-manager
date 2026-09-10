@@ -5,11 +5,13 @@ use std::sync::Arc;
 use super::run_blocking;
 
 use serde::Deserialize;
+use tauri::Emitter;
 
 use crate::session_manager;
 use crate::session_manager::metadata::MetadataManager;
 use crate::session_manager::providers::ProviderRegistry;
-use crate::session_manager::settings::SettingsManager;
+use crate::session_manager::remote::RemoteScanState;
+use crate::session_manager::settings::{ProviderHintHeal, SettingsManager, SourceEntry};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,10 +20,21 @@ pub struct ListSessionsOptions {
     pub scope: String,
 }
 
+/// List sessions: local scan + remote (SSH) sources merged.
+///
+/// Remote line (ADR 0007/0008 phase 3): after the local
+/// `scan_sessions_with_scope`, every enabled ssh source from the
+/// settings overlay is scanned over the batch channel and appended.
+/// This command is ALSO the auto-heal execution point (ADR 0008 §1a):
+/// the scan core only decides (`RemoteSourceResult::heal`), while the
+/// heal write + `settings-changed` event happen here — the only layer
+/// that may emit events. The CLI adapter never calls heal.
 #[tauri::command]
 pub async fn list_sessions(
+    app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     settings: tauri::State<'_, SettingsManager>,
+    remote: tauri::State<'_, RemoteScanState>,
     options: Option<ListSessionsOptions>,
 ) -> Result<Vec<session_manager::SessionMeta>, String> {
     let scope = options
@@ -34,11 +47,80 @@ pub async fn list_sessions(
     // Read the settings sources overlay before entering the blocking task so
     // the closure stays Send and the scan core stays Tauri-free.
     let extra_sources = settings.enabled_sources();
-    Ok(run_blocking!(
+    let is_active = matches!(&session_scope, session_manager::SessionScope::Active);
+    // Extract the ssh entries up front so the blocking closure can own
+    // the whole overlay without borrowing it back.
+    let ssh_sources: Vec<_> = extra_sources
+        .iter()
+        .filter_map(|e| match e {
+            SourceEntry::Ssh(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut sessions = run_blocking!(
         registry,
         reg,
         session_manager::scan_sessions_with_scope(&reg, &session_scope, &extra_sources)
-    ))
+    );
+    // Remote sources only enrich the active scope (a remote source has
+    // no archive root; same rule as the local overlay).
+    if is_active {
+        for source in &ssh_sources {
+            let session = match remote.pool.get(source).await {
+                Ok(session) => session,
+                Err(err) => {
+                    // First-connect failure: cached list (empty on the
+                    // very first run) + warn — never block local listing.
+                    log::warn!(
+                        "remote source `{}` unreachable ({err}) — serving cached sessions",
+                        source.id
+                    );
+                    sessions.extend(remote.cached_sessions(&source.id));
+                    continue;
+                }
+            };
+            let result = remote.scan_source(&registry, session, source).await;
+            // Auto-heal execution (ADR 0008 §1a): Applied → persist done
+            // inside SettingsManager; the event fires here. The sessions
+            // returned by THIS scan stay valid — the hint takes effect on
+            // the next scan.
+            if let Some((source_id, hint)) = &result.heal {
+                match settings.heal_provider_hint(source_id, hint) {
+                    Ok(ProviderHintHeal::Applied) => {
+                        app.emit(
+                            "settings-changed",
+                            serde_json::json!({ "keys": ["sources"] }),
+                        )
+                        .map_err(|e| format!("Failed to emit settings-changed: {e}"))?;
+                        log::info!(
+                            "remote scan: healed providerHint of source `{source_id}` to `{hint}`"
+                        );
+                    }
+                    Ok(ProviderHintHeal::SkippedComments) => {
+                        log::warn!(
+                            "remote scan: provider hint heal for `{source_id}` skipped — \
+                             settings file contains comments (ADR 0008 §1a)"
+                        );
+                    }
+                    Ok(ProviderHintHeal::AlreadySet) => {}
+                    Err(err) => {
+                        log::warn!(
+                            "remote scan: provider hint heal for `{source_id}` failed: {err}"
+                        );
+                    }
+                }
+            }
+            sessions.extend(result.sessions);
+        }
+        // Global ordering across local + remote (same comparator as the
+        // local scan core).
+        sessions.sort_by(|a, b| {
+            let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
+            let b_ts = b.last_active_at.or(b.created_at).unwrap_or(0);
+            b_ts.cmp(&a_ts)
+        });
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]

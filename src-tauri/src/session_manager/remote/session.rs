@@ -100,6 +100,10 @@ impl RemoteSession {
     /// Connect + authenticate + hostkey gate. Auth order: agent
     /// identities first (Windows named pipe / Unix SSH_AUTH_SOCK),
     /// key file fallback per `SourceAuth::Key`.
+    // No production caller: the pool's get-or-connect path uses
+    // `connect_with_cache` directly. Kept as the one-shot public entry
+    // (used by the ignored smoke test and future ad-hoc consumers).
+    #[allow(dead_code)]
     pub async fn connect(source: &SshSource) -> Result<Self, RemoteError> {
         Self::connect_with_cache(source, cache::default_cache_base()).await
     }
@@ -216,6 +220,22 @@ impl RemoteSession {
             .unwrap_or(false)
     }
 
+    /// Run one POSIX shell script and collect stdout (ADR 0007 batch
+    /// exit). Same one-reconnect retry on a mid-call drop as
+    /// `batch_metadata`. This is the sanctioned entry point for the scan
+    /// layer's discovery exec — all exec call sites stay in this module.
+    pub async fn exec_script(&self, command: &str) -> Result<Vec<u8>, RemoteError> {
+        match self.exec_collect(command).await {
+            Ok(out) => Ok(out),
+            Err(RemoteError::Disconnected) => {
+                log::debug!("remote: exec_script hit disconnect, retrying once");
+                self.reconnect().await?;
+                self.exec_collect(command).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Batch metadata for many files over ONE exec round-trip (ADR 0007
     /// batch exit; wire format in `frame.rs`). Missing remote files are
     /// skipped (`MISS` frames) — the caller's list converges on the
@@ -249,6 +269,9 @@ impl RemoteSession {
     /// `known_attrs` — the (size, mtime) the caller already holds from
     /// a prior scan/batch. When present, the freshness check skips the
     /// SFTP stat round-trip entirely; only a cache miss pays it.
+    // No production caller yet: the consumer is the phase 4 session-open
+    // path (UI opens a Remote-locator session → full fetch + cache).
+    #[allow(dead_code)]
     pub async fn fetch_to_local(
         &self,
         path: &RemotePath,
@@ -312,6 +335,9 @@ impl RemoteSession {
     }
 
     /// Drop the cache entry for a remote path (remote file deleted).
+    // No production caller yet: phase 4 lifecycle wiring (cache
+    // convergence when a remote file disappears).
+    #[allow(dead_code)]
     pub fn invalidate(&self, path: &RemotePath) {
         cache::invalidate(&self.cache_base, &self.source.id, path);
     }
@@ -320,6 +346,10 @@ impl RemoteSession {
     /// from `cached_offset` to the current end. Pure read — the caller
     /// owns the offset bookkeeping (cache/merge happens in the phase 3
     /// consumer).
+    // No production caller yet: the codex remote-index sidecar is a
+    // documented v1 degradation (see remote/scan.rs module docs) — the
+    /// consumer lands with the phase 4 open path.
+    #[allow(dead_code)]
     pub async fn fetch_index_incremental(
         &self,
         path: &RemotePath,

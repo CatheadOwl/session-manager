@@ -10,10 +10,12 @@
 //! - `session` — the russh transport: connect/auth/known_hosts, the
 //!   batch exec channel, SFTP fetch. ALL exec/SFTP call sites in the
 //!   product live there.
-//! - [`scan`] — the phase 3 batch scan: discovery exec + batch-metadata
-//!   exec + temp-file bridge into the local provider parsers, provider
-//!   probing, and the disconnect fallback. Tauri-free; the command layer
-//!   owns heal execution and event emission.
+//! - [`scan`] — the phase 3 batch scan (ADR 0008 修订 1): remote roots
+//!   DERIVED from each provider's `roots()` (home-prefix strip, scope
+//!   semantics copied from the local scan), ONE discovery exec over all
+//!   roots with `ROOT` attribution headers + batch-metadata exec +
+//!   temp-file bridge into the local provider parsers, and the
+//!   disconnect fallback. Tauri-free.
 //!
 //! ADR 0007 discipline (batch / cache / drop) attribution of this
 //! layer's operations:
@@ -215,31 +217,31 @@ impl RemoteScanState {
             .unwrap_or_default()
     }
 
-    /// Scan one source end-to-end: builds a [`SessionBatchFetch`] on the
-    /// async side (it captures the ambient tokio handle), runs the scan
-    /// core + provider parsers on the blocking pool (temp files and
-    /// parser IO are blocking), then applies the disconnect fallback.
-    ///
-    /// The returned [`RemoteSourceResult`] carries the auto-heal
-    /// DECISION — executing `heal_provider_hint` and emitting
-    /// `settings-changed` is the command layer's job (this module stays
-    /// Tauri-free).
+    /// Scan one source end-to-end for a scope: builds a
+    /// [`SessionBatchFetch`] on the async side (it captures the ambient
+    /// tokio handle), runs the scan core + provider parsers on the
+    /// blocking pool (temp files and parser IO are blocking), then
+    /// applies the disconnect fallback. The remote roots are derived
+    /// inside the scan core from the registry (`roots()` + home-prefix
+    /// strip, ADR 0008 修订 1) — the ssh entry carries no root field.
     pub async fn scan_source(
         &self,
         registry: &Arc<crate::session_manager::providers::ProviderRegistry>,
         session: Arc<RemoteSession>,
         source: &crate::session_manager::settings::SshSource,
+        scope: &crate::session_manager::types::SessionScope,
     ) -> RemoteSourceResult {
         let fetch = SessionBatchFetch::new(session);
         let registry = Arc::clone(registry);
         let last_scan = Arc::clone(&self.last_scan);
         let source = source.clone();
         let source_id = source.id.clone();
+        let scope = *scope;
         let join = tokio::task::spawn_blocking(move || {
             // StdMutex guard moved into the closure: lock scope == task
             // scope, and the task never awaits while holding it.
             let mut guard = last_scan.lock().expect("remote scan cache lock");
-            scan::scan_source_with_fallback(&mut guard, &registry, &fetch, &source)
+            scan::scan_source_with_fallback(&mut guard, &registry, &fetch, &source, &scope)
         })
         .await;
         match join {
@@ -275,9 +277,7 @@ mod tests {
             host: "h".to_string(),
             port: 22,
             user: "u".to_string(),
-            root: "~/.claude/projects".to_string(),
             auth: crate::session_manager::settings::SourceAuth::Agent,
-            provider_hint: None,
             enabled: true,
             extra: std::collections::BTreeMap::new(),
         }

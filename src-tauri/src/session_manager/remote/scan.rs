@@ -1,18 +1,54 @@
-//! Remote batch scan (phase 3): build a source's session list from ONE
-//! discovery exec + ONE batch-metadata exec, reusing the LOCAL provider
-//! parsers through a temp-file bridge (ADR 0007 "batch" exit; the P1
-//! real-alias benchmark: ~14 ms/file vs ~710 ms per-file).
+//! Remote batch scan (phase 3, ADR 0008 修订 1): build a source's
+//! session list from ONE discovery exec + ONE batch-metadata exec,
+//! reusing the LOCAL provider parsers through a temp-file bridge
+//! (ADR 0007 "batch" exit; the P1 real-alias benchmark: ~14 ms/file vs
+//! ~710 ms per-file).
 //!
-//! ## Layering (auto-heal is DECIDED here, EXECUTED by the command layer)
+//! ## Root derivation — "remote source = another machine"
 //!
-//! This module is Tauri-free. `scan_remote_source` returns a
-//! `RemoteScanOutcome` whose `detected_provider` is a *decision*: when the
-//! ssh source has no `providerHint` and the sampled probe agrees on
-//! exactly one provider, the outcome carries `(source_id, provider_id)`.
-//! The command layer (`commands/session_manager.rs`) turns that into
-//! `SettingsManager::heal_provider_hint` + a `settings-changed` event on
-//! `Applied`; the scan core and the settings manager never emit events,
-//! and the CLI adapter never calls heal (ADR 0008 §1a conditions).
+//! There is NO root field in the ssh settings entry and NO provider
+//! probing (both removed by ADR 0008 修订 1). The remote machine is
+//! assumed to be isomorphic to the local one: every provider scans its
+//! own standard roots there, exactly like the local scan core
+//! (`scan.rs`):
+//!
+//! - each registry provider's `roots()` (LOCAL absolute paths, e.g.
+//!   `C:\Users\u\.claude\projects`) is stripped of the local home
+//!   prefix (`dirs::home_dir()`), with separators normalized to `/`,
+//!   yielding a home-relative path (`.claude/projects`);
+//! - the remote directory is `$HOME/<rel>` — expanded by the REMOTE
+//!   shell, never locally (the remote user's home is unknown here);
+//! - scope semantics are copied verbatim from the local scan:
+//!   `roots()[0]` = active, `roots()[1]` = archived. Active scans only
+//!   the active root; Archived scans only the archived root, and a
+//!   provider with no archived root is skipped (same rule as local);
+//! - roots NOT under the local home prefix (if any provider ever has
+//!   one) are skipped with a debug log — they have no derivable remote
+//!   counterpart;
+//! - a file's provider is the provider OWNING the root it was found
+//!   under (directory ownership, no content probing).
+//!
+//! ## Discovery shape (one exec for ALL roots of the scope)
+//!
+//! ADR 0007 batch discipline forbids per-root round-trips, so one exec
+//! walks every derived root. Before each root's `find` output, the
+//! script prints an attribution header:
+//!
+//! ```text
+//! ROOT\t<provider_id>\t<$HOME/rel>
+//! ```
+//!
+//! The parser switches the "current provider" on each `ROOT` line and
+//! attributes every following path line to it. Collision risk is nil
+//! in practice: `find` output lines are absolute paths (they start
+//! with `/`), a `ROOT\t…` line never does.
+//!
+//! ## Layering
+//!
+//! This module is Tauri-free and makes no decisions for the command
+//! layer: `scan_remote_source` returns plain sessions, the disconnect
+//! fallback keeps the last successful list, and nothing here writes
+//! settings or emits events.
 //!
 //! ## Temp-file bridge semantics (the load-bearing invariant)
 //!
@@ -61,7 +97,9 @@
 //! Discovery only collects `*.jsonl`, which satisfies the P0a matrix by
 //! construction: gemini (`.json` chats) and opencode (sqlite / storage
 //! directory tree) are never returned, so no per-provider branch is
-//! needed here.
+//! needed here. (gemini's derived roots are `.json`-backed and simply
+//! yield no files; opencode's roots are outside `~` on the scanning
+//! machine and are skipped by the home-prefix rule.)
 //!
 //! ## Disconnect fallback (v1 simplification)
 //!
@@ -80,17 +118,91 @@ use super::RemotePath;
 use super::RemoteSession;
 use crate::session_manager::providers::ProviderRegistry;
 use crate::session_manager::settings::SshSource;
-use crate::session_manager::types::{SessionLocator, SessionMeta};
+use crate::session_manager::types::{SessionLocator, SessionMeta, SessionScope};
 
-/// How many leading files (after sorting) feed the provider probe when
-/// `provider_hint` is absent. Small on purpose: the probe only needs a
-/// consistent witness, while every extra sample is another temp-file
-/// parse per registered provider.
-pub const PROBE_SAMPLE_COUNT: usize = 5;
+// ---------------------------------------------------------------------------
+// Root derivation (ADR 0008 修订 1): remote roots from provider roots()
+// ---------------------------------------------------------------------------
+
+/// One derived remote scan root: `provider_id` owns the remote
+/// directory `$HOME/<rel>`, where `rel` is the provider's LOCAL root
+/// with the home prefix stripped and separators normalized to `/`
+/// (empty `rel` means home itself).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRoot {
+    pub provider_id: String,
+    pub rel: String,
+}
+
+/// Derive the remote scan roots for `scope` from every registry
+/// provider's `roots()`, against an explicit home prefix (the
+/// production path passes the REAL local home — see
+/// [`scan_remote_source`]; tests pass a temp "home").
+///
+/// - `roots()[0]` for Active, `roots()[1]` for Archived (scope
+///   semantics copied from the local scan core);
+/// - a provider with no root for the scope (e.g. no archived root) is
+///   skipped — local parity;
+/// - roots not under `home` are skipped with a debug log (no derivable
+///   remote counterpart).
+pub fn derive_remote_roots_with_home(
+    registry: &ProviderRegistry,
+    scope: &SessionScope,
+    home: &Path,
+) -> Vec<RemoteRoot> {
+    let mut out = Vec::new();
+    for provider in registry.all() {
+        let roots = provider.roots();
+        let root = match scope {
+            SessionScope::Active => roots.first(),
+            SessionScope::Archived => roots.get(1),
+        };
+        let Some(root) = root else {
+            continue; // provider has no root for this scope (local parity)
+        };
+        match home_relative_posix(root, home) {
+            Some(rel) => out.push(RemoteRoot {
+                provider_id: provider.id().to_string(),
+                rel,
+            }),
+            None => log::debug!(
+                "remote scan: provider `{}` root {} is not under the home prefix {} — no remote counterpart, skipped",
+                provider.id(),
+                root.display(),
+                home.display()
+            ),
+        }
+    }
+    out
+}
+
+/// Strip the `home` prefix from a local root and normalize to a posix
+/// home-relative path (`C:\Users\u\.claude\projects` →
+/// `.claude/projects`; `~` itself → `""`). `None` when the root is not
+/// under `home` (component-wise comparison — a sibling directory like
+/// `C:\Users\other` never matches a `C:\Users\u` home prefix).
+pub fn home_relative_posix(root: &Path, home: &Path) -> Option<String> {
+    let rel = root.strip_prefix(home).ok()?;
+    Some(
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // BatchFetch: the IO surface the scan core consumes
 // ---------------------------------------------------------------------------
+
+/// One discovered file: its remote path plus the provider that OWNS
+/// the root it was found under (directory ownership — no content
+/// probing, ADR 0008 修订 1).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DiscoveredFile {
+    pub provider_id: String,
+    pub path: RemotePath,
+}
 
 /// The two exec round-trips a remote scan needs, as a trait so tests can
 /// install a fake (the transport itself is `RemoteSession`, wrapped by
@@ -98,9 +210,11 @@ pub const PROBE_SAMPLE_COUNT: usize = 5;
 /// scan core (temp files + provider parsers, all blocking local IO) run
 /// on the blocking pool.
 pub trait BatchFetch {
-    /// One exec: list `*.jsonl` files under `root` (sorted by the
-    /// implementation for deterministic probe sampling).
-    fn list_jsonl_files(&self, root: &str) -> Result<Vec<RemotePath>, RemoteError>;
+    /// One exec: list `*.jsonl` files under ALL of `roots` (the
+    /// attribution wire shape lives in [`build_find_command`] /
+    /// [`parse_find_output`]). Returned files are attributed to their
+    /// root's provider.
+    fn list_jsonl_files(&self, roots: &[RemoteRoot]) -> Result<Vec<DiscoveredFile>, RemoteError>;
     /// One exec: stat + head + tail for many files (the `batch_metadata`
     /// wire protocol lives in `frame.rs`).
     fn batch_metadata(&self, files: &[RemotePath]) -> Result<Vec<FileMetadataBlob>, RemoteError>;
@@ -127,8 +241,8 @@ impl SessionBatchFetch {
 }
 
 impl BatchFetch for SessionBatchFetch {
-    fn list_jsonl_files(&self, root: &str) -> Result<Vec<RemotePath>, RemoteError> {
-        let script = build_find_command(root);
+    fn list_jsonl_files(&self, roots: &[RemoteRoot]) -> Result<Vec<DiscoveredFile>, RemoteError> {
+        let script = build_find_command(roots);
         let stdout = self.handle.block_on(self.session.exec_script(&script))?;
         Ok(parse_find_output(&stdout))
     }
@@ -139,39 +253,91 @@ impl BatchFetch for SessionBatchFetch {
 }
 
 // ---------------------------------------------------------------------------
-// File discovery (one exec)
+// File discovery (one exec for all roots)
 // ---------------------------------------------------------------------------
 
-/// Build the discovery command: `find <root> -type f -name '*.jsonl'`.
-///
-/// `root` may start with `~` (the settings format allows it): a leading
-/// `~` is rewritten to the remote shell's `"$HOME"` so the *remote* side
-/// expands it (we never expand `~` locally — it denotes the remote
-/// user's home). Everything after `~/` is single-quoted via
-/// [`shell_quote`], as is any absolute root.
-pub fn build_find_command(root: &str) -> String {
-    let root_arg = if root == "~" {
+/// The `find` argument for one derived root: `"$HOME"/'<rel>'` — the
+/// REMOTE shell expands `$HOME` (the remote user's home); the
+/// home-relative part is single-quoted so spaces/globs stay literal.
+fn root_find_arg(rel: &str) -> String {
+    if rel.is_empty() {
         "\"$HOME\"".to_string()
-    } else if let Some(rest) = root.strip_prefix("~/") {
-        format!("\"$HOME\"/{}", shell_quote(rest))
     } else {
-        shell_quote(root)
-    };
-    // stderr silenced: unreadable subdirectories must not fail the scan.
-    format!("find {root_arg} -type f -name '*.jsonl' 2>/dev/null")
+        format!("\"$HOME\"/{}", shell_quote(rel))
+    }
 }
 
-/// Parse `find` output into paths (newline-separated, CRLF tolerated,
-/// blank lines dropped). The batch protocol requires UTF-8 paths;
-/// non-UTF-8 output is lossily converted rather than failing the whole
-/// scan (such paths fail batch framing later and get skipped there).
-pub fn parse_find_output(bytes: &[u8]) -> Vec<RemotePath> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .map(|line| line.trim_end_matches('\r'))
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
+/// Human-readable label for one derived root (`$HOME/<rel>`), echoed in
+/// the ROOT attribution header for diagnostics.
+fn root_label(rel: &str) -> String {
+    if rel.is_empty() {
+        "$HOME".to_string()
+    } else {
+        format!("$HOME/{rel}")
+    }
+}
+
+/// Build the ONE discovery exec covering every root of the scope (ADR
+/// 0007 batch discipline: no per-root round-trips). Per root, in
+/// order:
+///
+/// ```sh
+/// printf 'ROOT\t%s\t%s\n' '<provider_id>' '<$HOME/rel>';
+/// find "$HOME"/'<rel>' -type f -name '*.jsonl' 2>/dev/null
+/// ```
+///
+/// The `ROOT` line attributes every following path line to that root's
+/// provider (see [`parse_find_output`]). stderr is silenced per root:
+/// an unreadable remote directory must not fail the whole scan.
+pub fn build_find_command(roots: &[RemoteRoot]) -> String {
+    roots
+        .iter()
+        .map(|r| {
+            // `|| true` per find: a MISSING root dir makes find exit 1 —
+            // that root simply has no sessions and must not fail the whole
+            // discovery exec (stderr is already silenced for unreadables).
+            format!(
+                "printf 'ROOT\\t%s\\t%s\\n' {} {}; find {} -type f -name '*.jsonl' 2>/dev/null || true",
+                shell_quote(&r.provider_id),
+                shell_quote(&root_label(&r.rel)),
+                root_find_arg(&r.rel),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Parse discovery output into provider-attributed paths. A line of
+/// the shape `ROOT\t<provider_id>\t<label>` switches the current
+/// provider; every other non-empty line (CRLF tolerated) is a path
+/// attributed to it. Path lines before the first `ROOT` header are
+/// dropped (cannot happen with [`build_find_command`], defensive). The
+/// batch protocol requires UTF-8 paths; non-UTF-8 output is lossily
+/// converted rather than failing the whole scan (such paths fail batch
+/// framing later and get skipped there).
+pub fn parse_find_output(bytes: &[u8]) -> Vec<DiscoveredFile> {
+    let mut files = Vec::new();
+    let mut current: Option<String> = None;
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        if let ("ROOT", Some(provider_id), Some(_label)) =
+            (parts.next().unwrap_or(""), parts.next(), parts.next())
+        {
+            current = Some(provider_id.to_string());
+            continue;
+        }
+        if let Some(provider_id) = &current {
+            files.push(DiscoveredFile {
+                provider_id: provider_id.clone(),
+                path: line.to_string(),
+            });
+        }
+    }
+    files
 }
 
 // ---------------------------------------------------------------------------
@@ -218,87 +384,51 @@ pub fn write_bridge_file(dir: &Path, blob: &FileMetadataBlob) -> std::io::Result
 // Scan core
 // ---------------------------------------------------------------------------
 
-/// Result of scanning one remote source.
-#[derive(Debug, Clone)]
-pub struct RemoteScanOutcome {
-    /// Parsed sessions, locator = `Remote { source_id, path }`,
-    /// `source_path = None` (keeps "source_path = a LOCAL path" clean;
-    /// the disable gate keys on the locator, not source_path — P0b).
-    pub sessions: Vec<SessionMeta>,
-    /// `Some((source_id, provider_id))` ONLY when `provider_hint` was
-    /// absent and the sampled probe agreed on exactly one provider. This
-    /// is a decision for the command layer, which owns heal execution +
-    /// the `settings-changed` event; the CLI adapter ignores it.
-    pub detected_provider: Option<(String, String)>,
-}
-
-/// Scan one remote source: discovery exec → batch-metadata exec →
-/// temp-file bridge → provider `parse_session` per file. Files that fail
-/// to parse are skipped, matching local scan behavior.
+/// Scan one remote source for `scope`: derive the roots from the
+/// registry (`roots()`, home-prefix strip — no settings involvement) →
+/// ONE discovery exec over all roots → ONE batch-metadata exec →
+/// temp-file bridge → each file parsed by its root's OWN provider.
+/// Files that fail to parse are skipped, matching local scan behavior.
 pub fn scan_remote_source(
     registry: &ProviderRegistry,
     fetch: &dyn BatchFetch,
     source: &SshSource,
-) -> Result<RemoteScanOutcome, RemoteError> {
-    let mut files = fetch.list_jsonl_files(&source.root)?;
+    scope: &SessionScope,
+) -> Result<Vec<SessionMeta>, RemoteError> {
+    scan_remote_source_with_home(registry, fetch, source, scope, &crate::config::get_home_dir())
+}
+
+/// Test seam / core of [`scan_remote_source`] with an explicit home
+/// prefix for root derivation (see [`derive_remote_roots_with_home`]).
+pub fn scan_remote_source_with_home(
+    registry: &ProviderRegistry,
+    fetch: &dyn BatchFetch,
+    source: &SshSource,
+    scope: &SessionScope,
+    home: &Path,
+) -> Result<Vec<SessionMeta>, RemoteError> {
+    let roots = derive_remote_roots_with_home(registry, scope, home);
+    let mut files = fetch.list_jsonl_files(&roots)?;
     if files.is_empty() {
-        return Ok(RemoteScanOutcome {
-            sessions: Vec::new(),
-            detected_provider: None,
-        });
+        return Ok(Vec::new());
     }
-    // Deterministic order: stable probe sampling and stable output lists.
+    // Deterministic order: stable output lists (blob zip below relies on
+    // the batch protocol returning metadata in request order).
     files.sort();
 
-    let blobs = fetch.batch_metadata(&files)?;
-
-    // Provider selection: explicit hint wins; otherwise probe.
-    let (provider_id, detected) = match &source.provider_hint {
-        Some(hint) => match registry.get(hint) {
-            Ok(provider) => (provider.id().to_string(), None),
-            Err(err) => {
-                // Warn-only, like the local overlay's unknown-provider
-                // path (D4): the entry survives in settings so the user
-                // can fix the hint by hand.
-                log::warn!(
-                    "remote scan: source `{}` has unknown providerHint `{hint}` ({err}) — no sessions this round",
-                    source.id
-                );
-                return Ok(RemoteScanOutcome {
-                    sessions: Vec::new(),
-                    detected_provider: None,
-                });
-            }
-        },
-        None => {
-            let temp = tempfile::tempdir()
-                .map_err(|e| RemoteError::Io(format!("probe tempdir: {e}")))?;
-            match probe_provider(registry, &blobs, temp.path()) {
-                Some(id) => (id.clone(), Some((source.id.clone(), id))),
-                None => {
-                    // Ambiguous or empty probe: refuse to guess (a wrong
-                    // parser risks wrong session semantics, D5). The user
-                    // sets providerHint by hand; next scan uses it.
-                    log::warn!(
-                        "remote scan: source `{}` provider probe inconclusive (empty or ambiguous samples) — returning no sessions; set providerHint in settings",
-                        source.id
-                    );
-                    return Ok(RemoteScanOutcome {
-                        sessions: Vec::new(),
-                        detected_provider: None,
-                    });
-                }
-            }
-        }
-    };
+    let paths: Vec<RemotePath> = files.iter().map(|f| f.path.clone()).collect();
+    let blobs = fetch.batch_metadata(&paths)?;
 
     let temp = tempfile::tempdir()
         .map_err(|e| RemoteError::Io(format!("scan tempdir: {e}")))?;
-    let provider = registry
-        .get(&provider_id)
-        .expect("provider id validated above");
     let mut sessions = Vec::new();
-    for (idx, blob) in blobs.iter().enumerate() {
+    for (idx, (file, blob)) in files.iter().zip(&blobs).enumerate() {
+        // Directory ownership: the provider that owns the root the file
+        // was found under owns the parse. Registry lookup cannot fail —
+        // the id came from the registry itself in derive_remote_roots.
+        let provider = registry
+            .get(&file.provider_id)
+            .expect("provider id originated from the registry");
         // Per-blob subdirectory: same basenames must not collide.
         let blob_dir = temp.path().join(format!("{idx:05}"));
         if let Err(e) = std::fs::create_dir_all(&blob_dir) {
@@ -329,80 +459,19 @@ pub fn scan_remote_source(
     }
     // The tempdir (and every bridge file) is dropped here — scratch by
     // construction, cleaned even on early returns via tempdir's Drop.
-    Ok(RemoteScanOutcome {
-        sessions,
-        detected_provider: detected,
-    })
-}
-
-/// Probe the provider by sampling: for each of the first
-/// [`PROBE_SAMPLE_COUNT`] blobs, every registered provider (registration
-/// order) tries `parse_session` on the bridge file. Detection succeeds
-/// only when EVERY sample matches EXACTLY ONE provider and all samples
-/// agree. Anything else — zero files, a sample matching none, a sample
-/// matching several, disagreement between samples — is inconclusive.
-fn probe_provider(
-    registry: &ProviderRegistry,
-    blobs: &[FileMetadataBlob],
-    scratch: &Path,
-) -> Option<String> {
-    // Mirrors the LOCAL parse semantics (`parse_session_meta`): the first
-    // provider in registration order that parses the file wins. Requiring
-    // a UNIQUE match across all providers is impossible for this format
-    // family — a claude JSONL line carries sessionId+type, which also
-    // satisfies the weaker checks of later-registered providers (qoder's
-    // same-line check). Registration order is the tie-breaker locally, so
-    // it is the tie-breaker here too; unanimity is then required ACROSS
-    // samples of that first-match result.
-    let mut agreed: Option<String> = None;
-    for (idx, blob) in blobs.iter().take(PROBE_SAMPLE_COUNT).enumerate() {
-        let blob_dir = scratch.join(format!("probe-{idx}"));
-        std::fs::create_dir_all(&blob_dir).ok()?;
-        let bridge = write_bridge_file(&blob_dir, blob).ok()?;
-        let first_match = registry
-            .all()
-            .find(|p| p.parse_session(&bridge).is_some())
-            .map(|p| p.id().to_string());
-        match first_match {
-            None => {
-                // This sample parses under NO provider — the scan loop
-                // would skip this file anyway (same semantics as the
-                // local scan). A few unparsable files (subagent sidecars,
-                // foreign formats) must not disqualify an otherwise
-                // unanimous root.
-                log::debug!(
-                    "remote scan probe: {} matched no provider — skipping sample",
-                    blob.path
-                );
-                continue;
-            }
-            Some(id) => match &agreed {
-                Some(previous) if previous != &id => {
-                    log::debug!(
-                        "remote scan probe: sample {idx} says {id}, earlier said {previous} — inconclusive"
-                    );
-                    return None;
-                }
-                _ => agreed = Some(id),
-            },
-        }
-    }
-    agreed
+    Ok(sessions)
 }
 
 // ---------------------------------------------------------------------------
-// Disconnect fallback wrapper (decision made here, heal executed above)
+// Disconnect fallback wrapper
 // ---------------------------------------------------------------------------
 
 /// Per-source scan result handed to the command layer: the session list
-/// to append, plus the auto-heal decision to execute there.
+/// to append (cached list on failure).
 #[derive(Debug, Clone)]
 pub struct RemoteSourceResult {
     /// Sessions to append to the list result (cached list on failure).
     pub sessions: Vec<SessionMeta>,
-    /// Auto-heal decision from this scan (see [`RemoteScanOutcome`]).
-    /// The command layer executes it; CLI adapters ignore it.
-    pub heal: Option<(String, String)>,
     /// True when `sessions` came from the disconnect cache (v1: the UI
     /// stale badge is phase 4; callers may only log).
     // Read by tests today; the phase 4 UI stale marker is the production
@@ -416,29 +485,27 @@ impl RemoteSourceResult {
     pub fn fallback(sessions: Vec<SessionMeta>) -> Self {
         Self {
             sessions,
-            heal: None,
             from_cache: true,
         }
     }
 }
 
 /// Scan one source with the v1 disconnect semantics: on success, refresh
-/// `last_scan` and report the heal decision; on failure, serve the
-/// cached list (empty when the very first scan failed) with a warn — a
-/// dead remote source must never block or empty the local list.
+/// `last_scan`; on failure, serve the cached list (empty when the very
+/// first scan failed) with a warn — a dead remote source must never
+/// block or empty the local list.
 pub fn scan_source_with_fallback(
     last_scan: &mut HashMap<String, Vec<SessionMeta>>,
     registry: &ProviderRegistry,
     fetch: &dyn BatchFetch,
     source: &SshSource,
+    scope: &SessionScope,
 ) -> RemoteSourceResult {
-    match scan_remote_source(registry, fetch, source) {
-        Ok(outcome) => {
-            let heal = outcome.detected_provider;
-            last_scan.insert(source.id.clone(), outcome.sessions.clone());
+    match scan_remote_source(registry, fetch, source, scope) {
+        Ok(sessions) => {
+            last_scan.insert(source.id.clone(), sessions.clone());
             RemoteSourceResult {
-                sessions: outcome.sessions,
-                heal,
+                sessions,
                 from_cache: false,
             }
         }
@@ -459,6 +526,7 @@ mod tests {
     use crate::session_manager::providers::SessionProvider;
     use crate::session_manager::providers::utils::read_head_tail_lines;
     use super::super::frame::HEAD_MAX;
+    use std::cell::RefCell;
     use tempfile::tempdir;
 
     // ── fixtures ────────────────────────────────────────────────────────
@@ -491,30 +559,43 @@ mod tests {
         out
     }
 
-    fn ssh_source(id: &str, hint: Option<&str>) -> SshSource {
+    fn ssh_source(id: &str) -> SshSource {
         SshSource {
             id: id.to_string(),
             label: None,
             host: "h".to_string(),
             port: 22,
             user: "u".to_string(),
-            root: "~/.fake/projects".to_string(),
             auth: crate::session_manager::settings::SourceAuth::Agent,
-            provider_hint: hint.map(str::to_string),
             enabled: true,
             extra: std::collections::BTreeMap::new(),
         }
     }
 
-    /// Fake transport: canned file list + contents, switchable failure.
+    /// Fake transport: canned attributed file list + contents,
+    /// switchable failure, and a recorder for the roots each discovery
+    /// call received (to pin the scope plumbing).
     struct FakeFetch {
-        files: Vec<RemotePath>,
+        files: Vec<DiscoveredFile>,
         contents: HashMap<RemotePath, Vec<u8>>,
         fail: bool,
+        seen_roots: RefCell<Vec<Vec<RemoteRoot>>>,
+    }
+
+    impl FakeFetch {
+        fn new(files: Vec<DiscoveredFile>, contents: HashMap<RemotePath, Vec<u8>>) -> Self {
+            Self {
+                files,
+                contents,
+                fail: false,
+                seen_roots: RefCell::new(Vec::new()),
+            }
+        }
     }
 
     impl BatchFetch for FakeFetch {
-        fn list_jsonl_files(&self, _root: &str) -> Result<Vec<RemotePath>, RemoteError> {
+        fn list_jsonl_files(&self, roots: &[RemoteRoot]) -> Result<Vec<DiscoveredFile>, RemoteError> {
+            self.seen_roots.borrow_mut().push(roots.to_vec());
             Ok(self.files.clone())
         }
         fn batch_metadata(&self, files: &[RemotePath]) -> Result<Vec<FileMetadataBlob>, RemoteError> {
@@ -529,11 +610,11 @@ mod tests {
     }
 
     /// Marker-based fixture provider: parses a file iff its first line
-    /// contains `"provider":"<id>"`. Lets probe tests control exactly
-    /// which providers match a sample.
+    /// contains `"provider":"<id>"`. Roots are injected so root-derivation
+    /// tests control the home layout.
     struct MarkerProvider {
         id: &'static str,
-        loose: bool,
+        roots: Vec<PathBuf>,
     }
 
     impl SessionProvider for MarkerProvider {
@@ -541,7 +622,7 @@ mod tests {
             self.id
         }
         fn roots(&self) -> Vec<PathBuf> {
-            Vec::new()
+            self.roots.clone()
         }
         fn scan_sessions(&self, _root: &Path) -> Vec<SessionMeta> {
             Vec::new()
@@ -556,7 +637,7 @@ mod tests {
             let (head, _) = read_head_tail_lines(path, 1, 1).ok()?;
             let first = head.first()?;
             let marker = format!("\"provider\":\"{}\"", self.id);
-            if !self.loose && !first.contains(&marker) {
+            if !first.contains(&marker) {
                 return None;
             }
             let session_id = path.file_stem()?.to_str()?.to_string();
@@ -588,35 +669,174 @@ mod tests {
         registry
     }
 
-    // ── discovery command ───────────────────────────────────────────────
+    // ── root derivation (ADR 0008 修订 1) ───────────────────────────────
 
     #[test]
-    fn find_command_expands_home_and_quotes_paths() {
-        // Bare ~ and ~/roots delegate expansion to the remote $HOME.
+    fn derive_roots_strips_home_and_normalizes_separators() {
+        // Fake home: the tempdir stands in for the real home prefix, so
+        // the test is OS-independent. On Windows the provider roots are
+        // built with native backslashes via PathBuf::join — the derived
+        // rel must come out posix-normalized either way.
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![
+                home.path().join(".alpha").join("projects"),
+                home.path().join(".alpha").join("archived"),
+            ],
+        }]);
+
+        let active = derive_remote_roots_with_home(&registry, &SessionScope::Active, home.path());
         assert_eq!(
-            build_find_command("~"),
-            "find \"$HOME\" -type f -name '*.jsonl' 2>/dev/null"
+            active,
+            vec![RemoteRoot {
+                provider_id: "alpha".to_string(),
+                rel: ".alpha/projects".to_string(),
+            }],
+            "active = roots()[0], home-stripped, '/'-separated"
         );
+
+        let archived = derive_remote_roots_with_home(&registry, &SessionScope::Archived, home.path());
         assert_eq!(
-            build_find_command("~/.claude/projects"),
-            "find \"$HOME\"/'.claude/projects' -type f -name '*.jsonl' 2>/dev/null"
+            archived,
+            vec![RemoteRoot {
+                provider_id: "alpha".to_string(),
+                rel: ".alpha/archived".to_string(),
+            }],
+            "archived = roots()[1]"
         );
-        // Absolute roots are single-quoted (spaces, quotes, globs stay
-        // literal).
-        assert_eq!(
-            build_find_command("/data/my sessions"),
-            "find '/data/my sessions' -type f -name '*.jsonl' 2>/dev/null"
-        );
-        assert!(build_find_command("/data/it's").contains("'/data/it'\\''s'"));
     }
 
     #[test]
-    fn find_output_parses_lines_and_drops_blanks() {
+    fn derive_roots_archived_skips_providers_without_archive_root() {
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![
+            MarkerProvider {
+                id: "one-root",
+                roots: vec![home.path().join(".one")],
+            },
+            MarkerProvider {
+                id: "two-root",
+                roots: vec![home.path().join(".two"), home.path().join(".two-arch")],
+            },
+        ]);
+        let archived = derive_remote_roots_with_home(&registry, &SessionScope::Archived, home.path());
         assert_eq!(
-            parse_find_output(b"/a.jsonl\r\n\n/b.jsonl\n"),
-            vec!["/a.jsonl".to_string(), "/b.jsonl".to_string()]
+            archived,
+            vec![RemoteRoot {
+                provider_id: "two-root".to_string(),
+                rel: ".two-arch".to_string(),
+            }],
+            "no archived root → provider skipped (local parity)"
         );
+    }
+
+    #[test]
+    fn derive_roots_skips_roots_outside_home() {
+        let home = tempdir().expect("tempdir");
+        let outside = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![outside.path().join("data")],
+        }]);
+        // Sibling directories must NOT match the home prefix
+        // (component-wise strip, not a string prefix).
+        assert!(derive_remote_roots_with_home(&registry, &SessionScope::Active, home.path()).is_empty());
+    }
+
+    #[test]
+    fn home_relative_root_itself_is_empty_rel() {
+        let home = tempdir().expect("tempdir");
+        assert_eq!(
+            home_relative_posix(home.path(), home.path()),
+            Some(String::new()),
+            "root == home → empty rel → the remote dir is $HOME itself"
+        );
+    }
+
+    // ── discovery command + attribution parsing ─────────────────────────
+
+    #[test]
+    fn find_command_covers_all_roots_with_attribution_headers() {
+        let roots = vec![
+            RemoteRoot {
+                provider_id: "claude".to_string(),
+                rel: ".claude/projects".to_string(),
+            },
+            RemoteRoot {
+                provider_id: "codex".to_string(),
+                rel: ".codex/sessions".to_string(),
+            },
+        ];
+        assert_eq!(
+            build_find_command(&roots),
+            "printf 'ROOT\\t%s\\t%s\\n' 'claude' '$HOME/.claude/projects'; \
+             find \"$HOME\"/'.claude/projects' -type f -name '*.jsonl' 2>/dev/null || true; \
+             printf 'ROOT\\t%s\\t%s\\n' 'codex' '$HOME/.codex/sessions'; \
+             find \"$HOME\"/'.codex/sessions' -type f -name '*.jsonl' 2>/dev/null || true"
+        );
+    }
+
+    #[test]
+    fn find_command_home_root_and_special_characters_stay_quoted() {
+        // rel == "" (a provider whose root IS home) → bare $HOME.
+        assert_eq!(
+            build_find_command(&[RemoteRoot {
+                provider_id: "odd".to_string(),
+                rel: String::new(),
+            }]),
+            "printf 'ROOT\\t%s\\t%s\\n' 'odd' '$HOME'; \
+             find \"$HOME\" -type f -name '*.jsonl' 2>/dev/null || true"
+        );
+        // Provider ids / rels with shell metacharacters stay literal.
+        assert!(build_find_command(&[RemoteRoot {
+            provider_id: "a'b".to_string(),
+            rel: "my sessions".to_string(),
+        }])
+        .contains("'a'\\''b' '$HOME/my sessions'"));
+    }
+
+    #[test]
+    fn find_output_attributes_paths_to_the_last_root_header() {
+        let out = parse_find_output(
+            b"ROOT\tclaude\t$HOME/.claude/projects\n\
+              /home/u/.claude/projects/p/one.jsonl\r\n\
+              /home/u/.claude/projects/p/two.jsonl\n\
+              ROOT\tcodex\t$HOME/.codex/sessions\n\
+              /home/u/.codex/sessions/three.jsonl\n",
+        );
+        assert_eq!(
+            out,
+            vec![
+                DiscoveredFile {
+                    provider_id: "claude".to_string(),
+                    path: "/home/u/.claude/projects/p/one.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "claude".to_string(),
+                    path: "/home/u/.claude/projects/p/two.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "codex".to_string(),
+                    path: "/home/u/.codex/sessions/three.jsonl".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn find_output_drops_blanks_and_unheaded_paths() {
         assert!(parse_find_output(b"").is_empty());
+        // A path line before any ROOT header has no owner → dropped
+        // (defensive; build_find_command always emits a header first).
+        assert!(parse_find_output(b"/orphan.jsonl\n").is_empty());
+        assert_eq!(
+            parse_find_output(b"ROOT\tp\t$HOME/p\n\n/p/a.jsonl\n"),
+            vec![DiscoveredFile {
+                provider_id: "p".to_string(),
+                path: "/p/a.jsonl".to_string(),
+            }]
+        );
     }
 
     // ── A. temp-file bridge semantics vs direct read ────────────────────
@@ -688,47 +908,66 @@ mod tests {
         assert_bridge_equivalence(&content);
     }
 
-    // ── scan core: hint, probe, locators, skip semantics ────────────────
+    // ── scan core: per-root provider ownership, locators, skip semantics
 
     #[test]
-    fn scan_with_hint_parses_files_and_anchors_remote_locators() {
+    fn scan_routes_each_file_to_its_roots_provider_and_anchors_remote_locators() {
+        let home = tempdir().expect("tempdir");
         let registry = registry_of(vec![
-            MarkerProvider { id: "alpha", loose: false },
-            MarkerProvider { id: "beta", loose: false },
+            MarkerProvider {
+                id: "alpha",
+                roots: vec![home.path().join(".alpha")],
+            },
+            MarkerProvider {
+                id: "beta",
+                roots: vec![home.path().join(".beta")],
+            },
         ]);
         let mut contents = HashMap::new();
         contents.insert(
             "/r/one.jsonl".to_string(),
             session_bytes("{\"provider\":\"alpha\"}", 20, 5),
         );
-        // A file the hinted provider cannot parse is skipped (local scan
-        // parity), and a mid-size file still round-trips.
+        // alpha's parser cannot parse this one (beta marker) → skipped,
+        // matching local scan parity: the ROOT OWNS the file, content
+        // never overrides ownership.
         contents.insert(
             "/r/broken.jsonl".to_string(),
             session_bytes("{\"provider\":\"beta\"}", 20, 5),
         );
         contents.insert(
             "/r/two.jsonl".to_string(),
-            session_bytes("{\"provider\":\"alpha\"}", 500, 60),
+            session_bytes("{\"provider\":\"beta\"}", 500, 60),
         );
-        let fetch = FakeFetch {
-            files: vec![
-                "/r/one.jsonl".to_string(),
-                "/r/broken.jsonl".to_string(),
-                "/r/two.jsonl".to_string(),
+        let fetch = FakeFetch::new(
+            vec![
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/one.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/broken.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "beta".to_string(),
+                    path: "/r/two.jsonl".to_string(),
+                },
             ],
             contents,
-            fail: false,
-        };
+        );
 
-        let outcome =
-            scan_remote_source(&registry, &fetch, &ssh_source("srv", Some("alpha"))).expect("scan");
-        // Hint given → no heal decision.
-        assert!(outcome.detected_provider.is_none());
-        let ids: Vec<&str> = outcome.sessions.iter().map(|m| m.session_id.as_str()).collect();
-        assert_eq!(ids, vec!["one", "two"], "unparseable file skipped");
-        for meta in &outcome.sessions {
-            assert_eq!(meta.provider_id, "alpha");
+        let sessions = scan_remote_source_with_home(
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+            home.path(),
+        )
+        .expect("scan");
+        let ids: Vec<&str> = sessions.iter().map(|m| m.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["one", "two"], "unparseable-for-owner file skipped");
+        for meta in &sessions {
             assert_eq!(meta.source_path, None, "source_path stays a LOCAL-path concept");
             match &meta.locator {
                 Some(SessionLocator::Remote { source_id, path }) => {
@@ -738,157 +977,96 @@ mod tests {
                 other => panic!("expected Remote locator, got {other:?}"),
             }
         }
-    }
-
-    #[test]
-    fn scan_unknown_hint_warns_and_returns_empty() {
-        let registry = registry_of(vec![MarkerProvider { id: "alpha", loose: false }]);
-        let mut contents = HashMap::new();
-        contents.insert(
-            "/r/one.jsonl".to_string(),
-            session_bytes("{\"provider\":\"alpha\"}", 5, 5),
-        );
-        let fetch = FakeFetch {
-            files: vec!["/r/one.jsonl".to_string()],
-            contents,
-            fail: false,
-        };
-        let outcome =
-            scan_remote_source(&registry, &fetch, &ssh_source("srv", Some("nope"))).expect("ok");
-        assert!(outcome.sessions.is_empty());
-        assert!(outcome.detected_provider.is_none());
-    }
-
-    #[test]
-    fn probe_consistent_samples_detect_provider_and_heal_decision() {
-        let registry = registry_of(vec![
-            MarkerProvider { id: "alpha", loose: false },
-            MarkerProvider { id: "beta", loose: false },
-        ]);
-        let mut contents = HashMap::new();
-        for i in 0..(PROBE_SAMPLE_COUNT + 2) {
-            contents.insert(
-                format!("/r/{i}.jsonl"),
-                session_bytes("{\"provider\":\"alpha\"}", 10, 5),
-            );
-        }
-        let fetch = FakeFetch {
-            files: (0..PROBE_SAMPLE_COUNT + 2).map(|i| format!("/r/{i}.jsonl")).collect(),
-            contents,
-            fail: false,
-        };
-
-        let outcome = scan_remote_source(&registry, &fetch, &ssh_source("srv", None)).expect("scan");
+        // Ownership: each parsed file was parsed by its ROOT's provider.
+        assert_eq!(sessions[0].provider_id, "alpha");
+        assert_eq!(sessions[1].provider_id, "beta");
+        // The scope flowed into the discovery call: the derived roots
+        // (active roots of both providers) are what the fetch saw.
+        let seen = fetch.seen_roots.borrow().clone();
         assert_eq!(
-            outcome.detected_provider,
-            Some(("srv".to_string(), "alpha".to_string())),
-            "unanimous samples → heal decision"
+            seen,
+            &[vec![
+                RemoteRoot {
+                    provider_id: "alpha".to_string(),
+                    rel: ".alpha".to_string(),
+                },
+                RemoteRoot {
+                    provider_id: "beta".to_string(),
+                    rel: ".beta".to_string(),
+                },
+            ]],
+            "discovery received the scope-derived roots"
         );
-        // All 7 files parsed with the detected provider.
-        assert_eq!(outcome.sessions.len(), PROBE_SAMPLE_COUNT + 2);
-        assert!(outcome
-            .sessions
-            .iter()
-            .all(|m| m.provider_id == "alpha"));
     }
 
     #[test]
-    fn probe_first_match_registration_order_wins_over_loose_providers() {
-        // beta is loose (matches anything) but registered LATER: the probe
-        // mirrors local `parse_session_meta` semantics — first match in
-        // registration order wins, so the sample resolves to alpha and a
-        // unanimous root heals to alpha. (Uniqueness-across-all is
-        // impossible in the real format family: a claude line's
-        // sessionId+type also satisfies qoder's weaker same-line check,
-        // and qoder is registered after claude precisely for that reason.)
-        let registry = registry_of(vec![
-            MarkerProvider { id: "alpha", loose: false },
-            MarkerProvider { id: "beta", loose: true },
-        ]);
-        let mut contents = HashMap::new();
-        contents.insert(
-            "/r/one.jsonl".to_string(),
-            session_bytes("{\"provider\":\"alpha\"}", 10, 5),
-        );
-        let fetch = FakeFetch {
-            files: vec!["/r/one.jsonl".to_string()],
-            contents,
-            fail: false,
-        };
-        let outcome = scan_remote_source(&registry, &fetch, &ssh_source("srv", None)).expect("scan");
-        assert_eq!(
-            outcome.detected_provider,
-            Some(("srv".to_string(), "alpha".to_string()))
-        );
-        assert_eq!(outcome.sessions.len(), 1);
-    }
-
-    #[test]
-    fn probe_disagreeing_samples_is_inconclusive() {
-        let registry = registry_of(vec![
-            MarkerProvider { id: "alpha", loose: false },
-            MarkerProvider { id: "beta", loose: false },
-        ]);
-        let mut contents = HashMap::new();
-        contents.insert(
-            "/r/a.jsonl".to_string(),
-            session_bytes("{\"provider\":\"alpha\"}", 10, 5),
-        );
-        contents.insert(
-            "/r/b.jsonl".to_string(),
-            session_bytes("{\"provider\":\"beta\"}", 10, 5),
-        );
-        let fetch = FakeFetch {
-            files: vec!["/r/a.jsonl".to_string(), "/r/b.jsonl".to_string()],
-            contents,
-            fail: false,
-        };
-        let outcome = scan_remote_source(&registry, &fetch, &ssh_source("srv", None)).expect("scan");
-        assert!(outcome.detected_provider.is_none());
-        assert!(outcome.sessions.is_empty());
-    }
-
-    #[test]
-    fn empty_remote_root_returns_empty_without_batch_call() {
-        let registry = registry_of(vec![MarkerProvider { id: "alpha", loose: false }]);
+    fn empty_discovery_returns_empty_without_batch_call() {
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![home.path().join(".alpha")],
+        }]);
         let fetch = FakeFetch {
             files: Vec::new(),
             contents: HashMap::new(),
             fail: true, // would fail if batch_metadata were called
+            seen_roots: RefCell::new(Vec::new()),
         };
-        let outcome = scan_remote_source(&registry, &fetch, &ssh_source("srv", None)).expect("scan");
-        assert!(outcome.sessions.is_empty());
-        assert!(outcome.detected_provider.is_none());
+        let sessions = scan_remote_source_with_home(
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+            home.path(),
+        )
+        .expect("scan");
+        assert!(sessions.is_empty());
     }
 
     // ── disconnect fallback (decision D) ────────────────────────────────
 
     #[test]
     fn fallback_serves_cached_list_then_survives_disconnect() {
-        let registry = registry_of(vec![MarkerProvider { id: "alpha", loose: false }]);
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![home.path().join(".alpha")],
+        }]);
         let mut contents = HashMap::new();
         contents.insert(
             "/r/one.jsonl".to_string(),
             session_bytes("{\"provider\":\"alpha\"}", 10, 5),
         );
-        let mut fetch = FakeFetch {
-            files: vec!["/r/one.jsonl".to_string()],
+        let mut fetch = FakeFetch::new(
+            vec![DiscoveredFile {
+                provider_id: "alpha".to_string(),
+                path: "/r/one.jsonl".to_string(),
+            }],
             contents,
-            fail: false,
-        };
+        );
         let mut cache: HashMap<String, Vec<SessionMeta>> = HashMap::new();
 
-        // First scan: success, populates the cache, reports heal decision.
-        let first = scan_source_with_fallback(&mut cache, &registry, &fetch, &ssh_source("srv", None));
+        // First scan: success, populates the cache.
+        let first = scan_source_with_fallback(
+            &mut cache,
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+        );
         assert!(!first.from_cache);
-        assert_eq!(first.heal, Some(("srv".to_string(), "alpha".to_string())));
         assert_eq!(first.sessions.len(), 1);
 
-        // Connection dies: the cached list is served, no heal decision.
+        // Connection dies: the cached list is served.
         fetch.fail = true;
-        let second = scan_source_with_fallback(&mut cache, &registry, &fetch, &ssh_source("srv", None));
+        let second = scan_source_with_fallback(
+            &mut cache,
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+        );
         assert!(second.from_cache);
-        assert!(second.heal.is_none());
         // Stale-but-identical list: SessionMeta has no PartialEq, so
         // compare the identity-bearing projection (locator path, in
         // order).
@@ -900,7 +1078,13 @@ mod tests {
         );
 
         // First-ever failure (no cache entry): empty list, not an error.
-        let third = scan_source_with_fallback(&mut cache, &registry, &fetch, &ssh_source("other", None));
+        let third = scan_source_with_fallback(
+            &mut cache,
+            &registry,
+            &fetch,
+            &ssh_source("other"),
+            &SessionScope::Active,
+        );
         assert!(third.from_cache);
         assert!(third.sessions.is_empty());
     }

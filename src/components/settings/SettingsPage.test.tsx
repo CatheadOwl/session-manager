@@ -31,7 +31,6 @@ const fixture = (): SettingsSnapshot => ({
           id: "ali",
           host: "192.0.2.10",
           user: "admin",
-          root: "~/.claude/projects",
           auth: { mode: "agent" },
           enabled: true,
         },

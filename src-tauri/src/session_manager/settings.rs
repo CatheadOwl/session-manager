@@ -81,11 +81,15 @@ fn default_port() -> u16 {
     22
 }
 
-/// SSH `sources[]` payload (ADR 0008 §1). `id`/`host`/`root` are required
-/// by the loader (warn + skip when missing); `user` and `auth` are required
-/// by the shape (a missing field fails entry parse → warn + skip, same net
-/// behavior). `extra` preserves unknown fields (e.g. a stray `provider`)
-/// verbatim through saves — forward compatibility per ADR 0008 §2.
+/// SSH `sources[]` payload (ADR 0008 §1 修订 1: "remote source = another
+/// machine" — minimal shape). `id`/`host` are required by the loader
+/// (warn + skip when missing); `user` and `auth` are required by the
+/// shape (a missing field fails entry parse → warn + skip, same net
+/// behavior). There is NO `root`/`providerHint` field anymore: the
+/// remote scan derives its roots from each provider's `roots()`, and
+/// probing/heal is gone. `extra` preserves unknown fields verbatim
+/// through saves — a legacy `root` or `providerHint` key in an old file
+/// is swallowed here (forward compatibility per ADR 0008 §2).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SshSource {
     pub id: String,
@@ -95,10 +99,7 @@ pub struct SshSource {
     #[serde(default = "default_port")]
     pub port: u16,
     pub user: String,
-    pub root: String,
     pub auth: SourceAuth,
-    #[serde(rename = "providerHint", default, skip_serializing_if = "Option::is_none")]
-    pub provider_hint: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(flatten)]
@@ -159,18 +160,6 @@ impl<'de> Deserialize<'de> for SourceEntry {
 
 fn default_true() -> bool {
     true
-}
-
-/// Outcome of an ADR 0008 §1a auto-heal attempt (`heal_provider_hint`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderHintHeal {
-    /// Hint persisted (atomic save done); caller emits `settings-changed`.
-    Applied,
-    /// File contained comments — write refused to protect them (§1a
-    /// condition 1). The probe itself may still have run.
-    SkippedComments,
-    /// Entry already carries this exact hint — idempotent no-op.
-    AlreadySet,
 }
 
 /// Externally-tagged setting value: `{"bool": true}`, `{"stringList": [...]}`.
@@ -472,51 +461,6 @@ impl SettingsManager {
         }
     }
 
-    /// ADR 0008 §1a auto-heal write path: persist a scan-detected provider
-    /// onto the ssh source identified by `source_id` (the same id the Remote
-    /// locator anchors to). This is the ONLY sanctioned way for scan-layer
-    /// code to write a detected hint — it reuses the D7 comment guard, the
-    /// atomic sparse save, and the full-list round-trip in one place, so no
-    /// second comment-detection or settings-writing logic may grow beside it.
-    /// CLI adapters MUST NOT call this (read-only semantics, §1a condition 2).
-    /// The caller emits `settings-changed` when the outcome is `Applied`.
-    pub fn heal_provider_hint(
-        &self,
-        source_id: &str,
-        hint: &str,
-    ) -> Result<ProviderHintHeal, String> {
-        let mut store = self.store.lock().unwrap();
-        let mut list: Vec<SourceEntry> = match store.overrides.get("sources") {
-            Some(SettingValue::SourceList(list)) => list.clone(),
-            _ => return Err(format!("Unknown source id: {source_id}")),
-        };
-        let entry = list
-            .iter_mut()
-            .find(|e| matches!(e, SourceEntry::Ssh(s) if s.id == source_id))
-            .ok_or_else(|| format!("Unknown source id: {source_id}"))?;
-        let SourceEntry::Ssh(ssh) = entry else {
-            unreachable!("find matched an Ssh entry");
-        };
-        if ssh.provider_hint.as_deref() == Some(hint) {
-            return Ok(ProviderHintHeal::AlreadySet);
-        }
-        if store.had_comments {
-            // §1a condition 1: commented files are never healed — the probe
-            // may run, the write does not (D7 strip-diff detection lives
-            // here, nowhere else).
-            log::warn!(
-                "settings: auto-heal skipped for source `{source_id}` — file contains comments (ADR 0008 §1a)"
-            );
-            return Ok(ProviderHintHeal::SkippedComments);
-        }
-        ssh.provider_hint = Some(hint.to_string());
-        store
-            .overrides
-            .insert("sources".to_string(), SettingValue::SourceList(list));
-        self.save(&mut store)?;
-        Ok(ProviderHintHeal::Applied)
-    }
-
     /// Sparse pretty-JSON atomic write: keys equal to defaults are omitted
     /// (except `version`), unknown keys are re-serialized verbatim.
     fn save(&self, store: &mut SettingsStore) -> Result<(), String> {
@@ -614,8 +558,10 @@ fn default_of(key: &str) -> SettingValue {
 /// rest of the list. Per-kind rules fall out of the typed payload parse:
 /// - unknown `kind` → error → warn + skip that entry only;
 /// - `local` missing `provider` (or wrong-typed path/enabled) → skip (D5);
-/// - `ssh` missing `id`/`host`/`root` (or `user`/`auth`) → skip;
-/// - ssh extra unknown fields (e.g. `provider`) → tolerated and preserved;
+/// - `ssh` missing `id`/`host` (or `user`/`auth`) → skip;
+/// - ssh extra unknown fields (e.g. a stray `provider`, or the legacy
+///   `root`/`providerHint` keys removed by ADR 0008 修订 1) → tolerated
+///   and preserved;
 /// - duplicate `id` across the file (ssh AND local share the namespace)
 ///   → warn + skip the LATER entry.
 fn parse_sources(value: &Value) -> Option<Vec<SourceEntry>> {
@@ -872,9 +818,7 @@ mod tests {
             host: host.to_string(),
             port: 22,
             user: "u".to_string(),
-            root: "~".to_string(),
             auth: SourceAuth::Agent,
-            provider_hint: None,
             enabled: true,
             extra: BTreeMap::new(),
         })
@@ -923,9 +867,8 @@ mod tests {
         let path = write_settings(
             dir.path(),
             "{\"sources\": [\
-                {\"kind\": \"ssh\", \"host\": \"h\", \"root\": \"~\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
-                {\"kind\": \"ssh\", \"id\": \"i\", \"root\": \"~\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
-                {\"kind\": \"ssh\", \"id\": \"i\", \"host\": \"h\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}}\
+                {\"kind\": \"ssh\", \"host\": \"h\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"i\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}}\
             ]}",
         );
         let manager = SettingsManager::new(path);
@@ -941,8 +884,8 @@ mod tests {
         let path = write_settings(
             dir.path(),
             "{\"sources\": [\
-                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h1\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
-                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h2\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h1\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h2\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
                 {\"path\": \"D:/a\", \"provider\": \"claude\", \"id\": \"dup\"},\
                 {\"path\": \"D:/b\", \"provider\": \"codex\", \"id\": \"other\"}\
             ]}",
@@ -970,9 +913,9 @@ mod tests {
             dir.path(),
             "{\"sources\": [{\
                 \"kind\": \"ssh\", \"id\": \"ali\", \"label\": \"Aliyun dev\",\
-                \"host\": \"192.0.2.10\", \"user\": \"admin\", \"root\": \"~/.claude/projects\",\
+                \"host\": \"192.0.2.10\", \"user\": \"admin\",\
                 \"auth\": {\"mode\": \"key\", \"keyPath\": \"~/.ssh/id_ed25519\"},\
-                \"providerHint\": \"claude\", \"provider\": \"stray-local-field\"\
+                \"provider\": \"stray-local-field\"\
             }]}",
         );
         let manager = SettingsManager::new(path);
@@ -990,11 +933,46 @@ mod tests {
             s.auth,
             SourceAuth::Key { key_path: "~/.ssh/id_ed25519".to_string() }
         );
-        assert_eq!(s.provider_hint.as_deref(), Some("claude"));
         // Forward compat: the stray local field is tolerated AND preserved.
         assert_eq!(
             s.extra.get("provider"),
             Some(&serde_json::json!("stray-local-field"))
+        );
+    }
+
+    /// ADR 0008 修订 1 compatibility pin: a file written by the OLD
+    /// model (ssh entries carrying `root` + `providerHint`) must still
+    /// load, with both keys swallowed into `extra` — no skip, no error.
+    #[test]
+    fn loader_ssh_legacy_root_and_provider_hint_load_into_extra() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\
+                \"kind\": \"ssh\", \"id\": \"ali\", \"host\": \"192.0.2.10\", \"user\": \"admin\",\
+                \"root\": \"~/.claude/projects\", \"providerHint\": \"claude\",\
+                \"auth\": {\"mode\": \"agent\"}\
+            }]}",
+        );
+        let manager = SettingsManager::new(path);
+        let entry = match manager.get_value("sources") {
+            Some(SettingValue::SourceList(mut list)) => list.remove(0),
+            _ => panic!("expected a source list"),
+        };
+        let SourceEntry::Ssh(s) = entry else {
+            panic!("expected an ssh entry (legacy fields must not skip it)"
+            );
+        };
+        assert_eq!(s.id, "ali");
+        // The removed schema fields are preserved verbatim as unknowns —
+        // a save round-trips them instead of dropping data.
+        assert_eq!(
+            s.extra.get("root"),
+            Some(&serde_json::json!("~/.claude/projects"))
+        );
+        assert_eq!(
+            s.extra.get("providerHint"),
+            Some(&serde_json::json!("claude"))
         );
     }
 
@@ -1052,8 +1030,8 @@ mod tests {
         let path = write_settings(
             dir.path(),
             "{\"sources\": [\
-                {\"kind\": \"ssh\", \"id\": \"a\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
-                {\"kind\": \"ssh\", \"id\": \"b\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}, \"enabled\": false}\
+                {\"kind\": \"ssh\", \"id\": \"a\", \"host\": \"h\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"b\", \"host\": \"h\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}, \"enabled\": false}\
             ]}",
         );
         let manager = SettingsManager::new(path);
@@ -1092,60 +1070,5 @@ mod tests {
         assert_eq!(snapshot.descriptors.len(), SETTINGS.len());
         assert_eq!(snapshot.values["update.autoCheck"], SettingValue::Bool(false));
         assert_eq!(snapshot.values["sources"], SettingValue::SourceList(Vec::new()));
-    }
-
-    #[test]
-    fn heal_applies_persists_and_is_idempotent() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_settings(
-            dir.path(),
-            "{\"sources\": [{\"kind\": \"ssh\", \"id\": \"srv\", \"host\": \"h\", \
-              \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}}]}",
-        );
-        let manager = SettingsManager::new(path.clone());
-        assert_eq!(
-            manager.heal_provider_hint("srv", "claude").expect("heal"),
-            ProviderHintHeal::Applied
-        );
-        // Persisted: a fresh manager sees the hint (terminal state explicit).
-        let reloaded = SettingsManager::new(path);
-        match reloaded.enabled_sources()[0] {
-            SourceEntry::Ssh(ref s) => assert_eq!(s.provider_hint.as_deref(), Some("claude")),
-            ref other => panic!("expected ssh entry, got {other:?}"),
-        }
-        // Idempotent: same hint again is a no-op outcome.
-        assert_eq!(
-            reloaded.heal_provider_hint("srv", "claude").expect("heal"),
-            ProviderHintHeal::AlreadySet
-        );
-    }
-
-    #[test]
-    fn heal_refuses_commented_files_without_writing() {
-        let dir = tempdir().expect("tempdir");
-        let original = "{\n  // my annotated server\n  \"sources\": [{\"kind\": \"ssh\", \
-            \"id\": \"srv\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \
-            \"auth\": {\"mode\": \"agent\"}}]\n}";
-        let path = write_settings(dir.path(), original);
-        let manager = SettingsManager::new(path.clone());
-        assert_eq!(
-            manager.heal_provider_hint("srv", "claude").expect("heal"),
-            ProviderHintHeal::SkippedComments
-        );
-        // File untouched: comment survives, no hint written.
-        let text = std::fs::read_to_string(&path).expect("read");
-        assert_eq!(text, original);
-    }
-
-    #[test]
-    fn heal_unknown_source_id_is_an_error() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_settings(
-            dir.path(),
-            "{\"sources\": [{\"kind\": \"ssh\", \"id\": \"srv\", \"host\": \"h\", \
-              \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}}]}",
-        );
-        let manager = SettingsManager::new(path);
-        assert!(manager.heal_provider_hint("nope", "claude").is_err());
     }
 }

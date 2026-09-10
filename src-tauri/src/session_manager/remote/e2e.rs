@@ -8,16 +8,14 @@
 //! REMOTE_E2E_PORT=22 \
 //! REMOTE_E2E_USER=admin \
 //! REMOTE_E2E_KEY=~/.ssh/id_ed25519 \
-//! REMOTE_E2E_ROOT='~/.claude/projects' \
 //! REMOTE_E2E_SOURCE_ID=ali \
-//! REMOTE_E2E_PROVIDER=claude \
 //! cargo test --offline remote_e2e -- --ignored --nocapture
 //! ```
 //!
-//! `REMOTE_E2E_PROVIDER` sets the providerHint (the auto-heal probe path
-//! is covered by unit tests; on real mixed corpora — subagent sidecars
-//! that first-match a fallback provider — a unanimous probe is often
-//! correctly inconclusive and refuses to guess per ADR 0008 §1a).
+//! The scan roots are DERIVED from each provider's `roots()`
+//! (home-prefix strip, ADR 0008 修订 1) — there is no root/provider
+//! env knob anymore; the host simply must have at least one populated
+//! standard provider root.
 //!
 //! When direct outbound from a freshly built test binary is firewalled
 //! (unsigned exe), run through an SSH local forward and point HOST/PORT at
@@ -56,14 +54,9 @@ fn e2e_config() -> Option<SshSource> {
             .and_then(|p| p.parse().ok())
             .unwrap_or(22),
         user: std::env::var("REMOTE_E2E_USER").unwrap_or_else(|_| "admin".into()),
-        root: std::env::var("REMOTE_E2E_ROOT").unwrap_or_else(|_| "~/.claude/projects".into()),
         auth: SourceAuth::Key {
             key_path: shellexpand_tilde(&key_path),
         },
-        provider_hint: Some(
-            std::env::var("REMOTE_E2E_PROVIDER")
-                .expect("REMOTE_E2E_PROVIDER is required — see module docs"),
-        ),
         enabled: true,
         extra: Default::default(),
     })
@@ -111,7 +104,7 @@ async fn g2_remote_v1_end_to_end() {
     let registry_arc = registry.clone();
     let t = Instant::now();
     let result = state
-        .scan_source(&registry_arc, session, &source)
+        .scan_source(&registry_arc, session, &source, &SessionScope::Active)
         .await;
     let outcome_sessions = result.sessions.clone();
     println!(
@@ -123,18 +116,13 @@ async fn g2_remote_v1_end_to_end() {
     assert!(!result.from_cache, "first scan must hit the network, not the cache");
     assert!(
         !outcome_sessions.is_empty(),
-        "remote root has no sessions — pick a populated root"
+        "remote machine has no sessions in its standard provider roots — pick a populated host"
     );
     for meta in &outcome_sessions {
         assert!(
             matches!(meta.locator.as_ref(), Some(SessionLocator::Remote { source_id, .. }) if source_id == &sid),
             "every remote session must carry a Remote locator anchored to the source id"
         );
-    }
-    if let Some((probed_sid, provider)) = &result.heal {
-        println!("[g2.1] heal decision unexpectedly present with explicit hint: {probed_sid} -> {provider}");
-    } else {
-        println!("[g2.1] provider came from providerHint (expected with explicit hint)");
     }
 
     // ---- G2.2 open: message load through the cache bridge ----

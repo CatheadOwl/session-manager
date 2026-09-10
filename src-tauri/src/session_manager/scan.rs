@@ -237,9 +237,7 @@ mod tests {
             host: host.to_string(),
             port: 22,
             user: "admin".to_string(),
-            root: "~/.claude/projects".to_string(),
             auth: super::super::settings::SourceAuth::Agent,
-            provider_hint: None,
             enabled,
             extra: std::collections::BTreeMap::new(),
         })

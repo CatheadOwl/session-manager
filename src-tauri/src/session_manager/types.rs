@@ -284,6 +284,7 @@ pub struct DeleteSessionOutcome {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionScope {
     Active,
     Archived,

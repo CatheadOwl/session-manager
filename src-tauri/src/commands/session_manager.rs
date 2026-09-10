@@ -5,13 +5,12 @@ use std::sync::Arc;
 use super::run_blocking;
 
 use serde::Deserialize;
-use tauri::Emitter;
 
 use crate::session_manager;
 use crate::session_manager::metadata::MetadataManager;
 use crate::session_manager::providers::ProviderRegistry;
 use crate::session_manager::remote::{RemoteScanState, resolve_remote_to_local};
-use crate::session_manager::settings::{ProviderHintHeal, SettingsManager, SshSource, SourceEntry};
+use crate::session_manager::settings::{SettingsManager, SshSource, SourceEntry};
 
 /// Extract the enabled ssh source entries up front so blocking closures
 /// can own them without borrowing the settings state (Send + Tauri-free
@@ -36,16 +35,15 @@ pub struct ListSessionsOptions {
 
 /// List sessions: local scan + remote (SSH) sources merged.
 ///
-/// Remote line (ADR 0007/0008 phase 3): after the local
+/// Remote line (ADR 0007/0008 修订 1 phase 3): after the local
 /// `scan_sessions_with_scope`, every enabled ssh source from the
 /// settings overlay is scanned over the batch channel and appended.
-/// This command is ALSO the auto-heal execution point (ADR 0008 §1a):
-/// the scan core only decides (`RemoteSourceResult::heal`), while the
-/// heal write + `settings-changed` event happen here — the only layer
-/// that may emit events. The CLI adapter never calls heal.
+/// The remote scan honors the SAME scope as the local scan — its roots
+/// are derived per scope from each provider's `roots()` (active root
+/// for Active, archived root for Archived), so remote sources enrich
+/// both scopes instead of active-only.
 #[tauri::command]
 pub async fn list_sessions(
-    app: tauri::AppHandle,
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     settings: tauri::State<'_, SettingsManager>,
     remote: tauri::State<'_, RemoteScanState>,
@@ -61,7 +59,6 @@ pub async fn list_sessions(
     // Read the settings sources overlay before entering the blocking task so
     // the closure stays Send and the scan core stays Tauri-free.
     let extra_sources = settings.enabled_sources();
-    let is_active = matches!(&session_scope, session_manager::SessionScope::Active);
     // Extract the ssh entries up front so the blocking closure can own
     // the whole overlay without borrowing it back.
     let ssh_sources: Vec<_> = extra_sources
@@ -76,64 +73,32 @@ pub async fn list_sessions(
         reg,
         session_manager::scan_sessions_with_scope(&reg, &session_scope, &extra_sources)
     );
-    // Remote sources only enrich the active scope (a remote source has
-    // no archive root; same rule as the local overlay).
-    if is_active {
-        for source in &ssh_sources {
-            let session = match remote.pool.get(source).await {
-                Ok(session) => session,
-                Err(err) => {
-                    // First-connect failure: cached list (empty on the
-                    // very first run) + warn — never block local listing.
-                    log::warn!(
-                        "remote source `{}` unreachable ({err}) — serving cached sessions",
-                        source.id
-                    );
-                    sessions.extend(remote.cached_sessions(&source.id));
-                    continue;
-                }
-            };
-            let result = remote.scan_source(&registry, session, source).await;
-            // Auto-heal execution (ADR 0008 §1a): Applied → persist done
-            // inside SettingsManager; the event fires here. The sessions
-            // returned by THIS scan stay valid — the hint takes effect on
-            // the next scan.
-            if let Some((source_id, hint)) = &result.heal {
-                match settings.heal_provider_hint(source_id, hint) {
-                    Ok(ProviderHintHeal::Applied) => {
-                        app.emit(
-                            "settings-changed",
-                            serde_json::json!({ "keys": ["sources"] }),
-                        )
-                        .map_err(|e| format!("Failed to emit settings-changed: {e}"))?;
-                        log::info!(
-                            "remote scan: healed providerHint of source `{source_id}` to `{hint}`"
-                        );
-                    }
-                    Ok(ProviderHintHeal::SkippedComments) => {
-                        log::warn!(
-                            "remote scan: provider hint heal for `{source_id}` skipped — \
-                             settings file contains comments (ADR 0008 §1a)"
-                        );
-                    }
-                    Ok(ProviderHintHeal::AlreadySet) => {}
-                    Err(err) => {
-                        log::warn!(
-                            "remote scan: provider hint heal for `{source_id}` failed: {err}"
-                        );
-                    }
-                }
+    for source in &ssh_sources {
+        let session = match remote.pool.get(source).await {
+            Ok(session) => session,
+            Err(err) => {
+                // First-connect failure: cached list (empty on the
+                // very first run) + warn — never block local listing.
+                log::warn!(
+                    "remote source `{}` unreachable ({err}) — serving cached sessions",
+                    source.id
+                );
+                sessions.extend(remote.cached_sessions(&source.id));
+                continue;
             }
-            sessions.extend(result.sessions);
-        }
-        // Global ordering across local + remote (same comparator as the
-        // local scan core).
-        sessions.sort_by(|a, b| {
-            let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
-            let b_ts = b.last_active_at.or(b.created_at).unwrap_or(0);
-            b_ts.cmp(&a_ts)
-        });
+        };
+        let result = remote
+            .scan_source(&registry, session, source, &session_scope)
+            .await;
+        sessions.extend(result.sessions);
     }
+    // Global ordering across local + remote (same comparator as the
+    // local scan core). Applied whenever any remote results exist.
+    sessions.sort_by(|a, b| {
+        let a_ts = a.last_active_at.or(a.created_at).unwrap_or(0);
+        let b_ts = b.last_active_at.or(b.created_at).unwrap_or(0);
+        b_ts.cmp(&a_ts)
+    });
     Ok(sessions)
 }
 

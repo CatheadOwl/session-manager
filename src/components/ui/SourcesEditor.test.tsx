@@ -128,9 +128,7 @@ describe("SourcesEditor", () => {
     host: "192.0.2.10",
     port: 2222,
     user: "admin",
-    root: "~/.claude/projects",
     auth: { mode: "key", keyPath: "~/.ssh/id_ed25519" },
-    providerHint: "claude",
     enabled: true,
   };
 

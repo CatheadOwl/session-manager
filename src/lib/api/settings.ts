@@ -46,11 +46,7 @@ export interface SshSourceEntry {
   /** Defaults to 22 on the Rust side. */
   port?: number;
   user: string;
-  /** Remote session root. */
-  root: string;
   auth: SshSourceAuth;
-  /** Optional; auto-heal converges it when absent (ADR 0008 §1a). */
-  providerHint?: string;
   enabled: boolean;
   /** Forward-compat: unknown fields round-trip through the Rust loader. */
   [extra: string]: unknown;

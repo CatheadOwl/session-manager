@@ -627,9 +627,7 @@ mod integration {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(22),
             user,
-            root: "~".to_string(),
             auth: SourceAuth::Key { key_path: key },
-            provider_hint: None,
             enabled: true,
             extra,
         })

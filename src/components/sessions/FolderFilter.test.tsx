@@ -83,13 +83,18 @@ describe("FolderFilter sorting", () => {
     expect(trigger.textContent).toContain("A-Z");
   });
 
-  it("renders a settings gear button with an accessible name that fires onOpenSettings", () => {
+  it("renders a settings gear button in the collapsed strip that fires onOpenSettings", () => {
     const onOpenSettings = vi.fn();
-    renderFilter({ onOpenSettings });
+    renderFilter({ isCollapsed: true, onOpenSettings });
     const gear = screen.getByRole("button", { name: "Settings" });
     expect(gear).toHaveAttribute("title", "Settings");
     fireEvent.click(gear);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the settings gear from the expanded header", () => {
+    renderFilter();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 });
 

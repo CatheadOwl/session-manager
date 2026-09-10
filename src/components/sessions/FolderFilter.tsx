@@ -132,15 +132,6 @@ export const FolderFilter = memo(function FolderFilter({
         <div className="folder-header-actions">
           <button
             type="button"
-            className="folder-settings-btn"
-            onClick={onOpenSettings}
-            title="Settings"
-            aria-label="Settings"
-          >
-            <SettingsIcon />
-          </button>
-          <button
-            type="button"
             className="folder-collapse-btn"
             onClick={onToggleCollapse}
             title="Collapse folder panel"

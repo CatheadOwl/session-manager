@@ -72,7 +72,16 @@ pub fn scan_sessions_with_scope(
         }
     }
     if matches!(scope, SessionScope::Active) {
-        for entry in extra_sources.iter().filter(|e| e.enabled) {
+        for entry in extra_sources.iter().filter(|e| e.is_enabled()) {
+            // ADR 0008 §3: only local entries flow through the synchronous
+            // overlay; ssh entries belong to the remote scan line (future
+            // consumption there) and are skipped here.
+            let SourceEntry::Local(entry) = entry else {
+                log::debug!(
+                    "list_scan sources overlay: skipping non-local entry (owned by the remote scan line)"
+                );
+                continue;
+            };
             let provider = match registry.get(&entry.provider) {
                 Ok(p) => p,
                 Err(err) => {
@@ -213,11 +222,27 @@ mod tests {
     }
 
     fn source(path: &Path, provider: &str) -> SourceEntry {
-        SourceEntry {
+        SourceEntry::Local(super::super::settings::LocalSource {
             path: path.to_string_lossy().into_owned(),
             provider: provider.to_string(),
             enabled: true,
-        }
+            id: None,
+        })
+    }
+
+    fn ssh_source(id: &str, host: &str, enabled: bool) -> SourceEntry {
+        SourceEntry::Ssh(super::super::settings::SshSource {
+            id: id.to_string(),
+            label: None,
+            host: host.to_string(),
+            port: 22,
+            user: "admin".to_string(),
+            root: "~/.claude/projects".to_string(),
+            auth: super::super::settings::SourceAuth::Agent,
+            provider_hint: None,
+            enabled,
+            extra: std::collections::BTreeMap::new(),
+        })
     }
 
     fn registry_with(provider: FixtureProvider) -> ProviderRegistry {
@@ -294,7 +319,7 @@ mod tests {
     fn overlay_appends_extra_root_and_sorts_by_last_active_at() {
         let root = tempdir().expect("tempdir");
         let extra = tempdir().expect("tempdir extra");
-        let registry = registry_with(FixtureProvider {
+        let _ = registry_with(FixtureProvider {
             id: "alpha",
             root: root.path().to_path_buf(),
             session_id: "builtin",
@@ -340,9 +365,14 @@ mod tests {
             last_active_at: 100,
         });
 
-        let mut disabled = source(extra.path(), "alpha");
-        disabled.enabled = false;
-        let active = scan_sessions_with_scope(&registry, &SessionScope::Active, &[disabled]);
+        let mut entries = vec![source(extra.path(), "alpha")];
+        if let SourceEntry::Local(local) = &mut entries[0] {
+            local.enabled = false;
+        }
+        // ADR 0008 §3: enabled ssh entries reach the overlay but must be
+        // skipped (remote line owns their consumption).
+        entries.push(ssh_source("ali", "192.0.2.10", true));
+        let active = scan_sessions_with_scope(&registry, &SessionScope::Active, &entries);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].session_id, "builtin");
 

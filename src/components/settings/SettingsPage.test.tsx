@@ -21,7 +21,22 @@ const fixture = (): SettingsSnapshot => ({
   ],
   values: {
     "update.autoCheck": { bool: true },
-    sources: { sourceList: [{ path: "D:\\dump", provider: "codex", enabled: true }] },
+    sources: {
+      sourceList: [
+        { path: "D:\\dump", provider: "codex", enabled: true },
+        // ADR 0008: mixed-kind lists must render (ssh read-only row) without
+        // crashing the single sourceList renderer.
+        {
+          kind: "ssh",
+          id: "ali",
+          host: "192.0.2.10",
+          user: "admin",
+          root: "~/.claude/projects",
+          auth: { mode: "agent" },
+          enabled: true,
+        },
+      ],
+    },
   },
 });
 
@@ -59,6 +74,9 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("navigation", { name: "Settings categories" })).toHaveTextContent("General");
     fireEvent.click(screen.getByRole("button", { name: "Sources" }));
     expect(screen.getByLabelText("Source 1 path")).toHaveValue("D:\\dump");
+    // Mixed-kind list: the ssh entry renders as a read-only summary row.
+    expect(screen.getByText("SSH")).toBeInTheDocument();
+    expect(screen.getByText("ali")).toBeInTheDocument();
   });
 
   it("switches categories via the sidebar", async () => {

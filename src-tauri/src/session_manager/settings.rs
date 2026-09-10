@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -19,14 +19,142 @@ use std::sync::Mutex;
 /// Current on-disk schema version (migration chain anchor).
 pub const SETTINGS_VERSION: u64 = 1;
 
-/// One extra scan root (D2 additive overlay). `provider` is REQUIRED (D5):
-/// a guessed parser risks wrong session semantics.
+/// One `sources[]` entry (ADR 0008): a kind-discriminated union. `kind`
+/// defaults to `"local"` when absent, so pre-ADR-0008 files parse unchanged
+/// (zero migration, no version bump). Serialization omits `kind` for local
+/// entries — a local entry is the file's minimal historical shape
+/// `{ path, provider, enabled }`; ssh entries always carry `"kind": "ssh"`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SourceEntry {
+    /// Local extra scan root (ADR 0006 D2 overlay). `provider` is required
+    /// (D5): a guessed parser risks wrong session semantics. `id` is
+    /// optional for local entries (ADR 0008 §1).
+    Local(LocalSource),
+    /// SSH remote source (ADR 0008 / ADR 0007 remote v1). Consumed by the
+    /// remote scan line; the local overlay skips it. Unknown fields are
+    /// preserved verbatim through saves (forward compatibility).
+    Ssh(SshSource),
+}
+
+impl SourceEntry {
+    pub fn is_enabled(&self) -> bool {
+        match self {
+            SourceEntry::Local(l) => l.enabled,
+            SourceEntry::Ssh(s) => s.enabled,
+        }
+    }
+
+    /// Stable entry id when present (ssh: always; local: optional). Ids
+    /// share one namespace across kinds within a file (ADR 0008 §1).
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            SourceEntry::Local(l) => l.id.as_deref(),
+            SourceEntry::Ssh(s) => Some(s.id.as_str()),
+        }
+    }
+}
+
+/// Local `sources[]` payload: zero-migration superset of the pre-ADR-0008
+/// shape (`id` is the only addition, and it is optional).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct SourceEntry {
+pub struct LocalSource {
     pub path: String,
     pub provider: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+/// SSH auth block (ADR 0008 §1): tagged by `mode`, camelCase `keyPath`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum SourceAuth {
+    Agent,
+    Key {
+        #[serde(rename = "keyPath")]
+        key_path: String,
+    },
+}
+
+fn default_port() -> u16 {
+    22
+}
+
+/// SSH `sources[]` payload (ADR 0008 §1). `id`/`host`/`root` are required
+/// by the loader (warn + skip when missing); `user` and `auth` are required
+/// by the shape (a missing field fails entry parse → warn + skip, same net
+/// behavior). `extra` preserves unknown fields (e.g. a stray `provider`)
+/// verbatim through saves — forward compatibility per ADR 0008 §2.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SshSource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    pub user: String,
+    pub root: String,
+    pub auth: SourceAuth,
+    #[serde(rename = "providerHint", default, skip_serializing_if = "Option::is_none")]
+    pub provider_hint: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Serialize for SourceEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::Error as _;
+        match self {
+            // No `kind` on the wire for local entries: keeps saved files in
+            // the minimal historical shape (kind defaults to "local").
+            SourceEntry::Local(l) => l.serialize(serializer),
+            SourceEntry::Ssh(s) => {
+                let mut value = serde_json::to_value(s).map_err(S::Error::custom)?;
+                if let Value::Object(map) = &mut value {
+                    map.insert("kind".to_string(), Value::String("ssh".to_string()));
+                }
+                value.serialize(serializer)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = Value::deserialize(deserializer)?;
+        // Kind-first discrimination (ADR 0008 §2); absent kind = "local".
+        let kind = value.get("kind").and_then(Value::as_str).unwrap_or("local");
+        match kind {
+            "local" => serde_json::from_value(value)
+                .map(SourceEntry::Local)
+                .map_err(D::Error::custom),
+            "ssh" => {
+                // Strip the tag so the flatten catch-all doesn't capture it
+                // (it is re-emitted by Serialize, not stored in `extra`).
+                let mut value = value;
+                if let Value::Object(map) = &mut value {
+                    map.remove("kind");
+                }
+                serde_json::from_value(value)
+                    .map(SourceEntry::Ssh)
+                    .map_err(D::Error::custom)
+            }
+            other => Err(D::Error::custom(format!(
+                "unknown sources entry kind `{other}`"
+            ))),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -321,7 +449,9 @@ impl SettingsManager {
             .cloned()
             .unwrap_or_else(|| default_of("sources"))
         {
-            SettingValue::SourceList(list) => list.into_iter().filter(|s| s.enabled).collect(),
+            SettingValue::SourceList(list) => {
+                list.into_iter().filter(|s| s.is_enabled()).collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -418,38 +548,36 @@ fn default_of(key: &str) -> SettingValue {
         .expect("known setting key")
 }
 
+/// Kind-first lenient loader (ADR 0008 §2): each entry is parsed
+/// independently and a bad entry is warned + skipped WITHOUT dropping the
+/// rest of the list. Per-kind rules fall out of the typed payload parse:
+/// - unknown `kind` → error → warn + skip that entry only;
+/// - `local` missing `provider` (or wrong-typed path/enabled) → skip (D5);
+/// - `ssh` missing `id`/`host`/`root` (or `user`/`auth`) → skip;
+/// - ssh extra unknown fields (e.g. `provider`) → tolerated and preserved;
+/// - duplicate `id` across the file (ssh AND local share the namespace)
+///   → warn + skip the LATER entry.
 fn parse_sources(value: &Value) -> Option<Vec<SourceEntry>> {
     let array = value.as_array()?;
     let mut list = Vec::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
     for entry in array {
-        let obj = entry.as_object()?;
-        let path = obj.get("path")?.as_str()?.to_string();
-        let provider = match obj.get("provider").and_then(|p| p.as_str()) {
-            Some(p) => p.to_string(),
-            // D5: provider is required — a source without it is wrong-typed.
-            None => {
-                log::warn!(
-                    "settings: sources entry missing required `provider` — skipped: {entry}"
-                );
-                continue;
+        match serde_json::from_value::<SourceEntry>(entry.clone()) {
+            Ok(parsed) => {
+                if let Some(id) = parsed.id() {
+                    if !seen_ids.insert(id.to_string()) {
+                        log::warn!(
+                            "settings: duplicate sources id `{id}` — later entry skipped: {entry}"
+                        );
+                        continue;
+                    }
+                }
+                list.push(parsed);
             }
-        };
-        let enabled = match obj.get("enabled") {
-            None => true,
-            Some(Value::Bool(b)) => *b,
-            Some(other) => {
-                log::warn!(
-                    "settings: wrong-typed `sources[].enabled` ({}) — entry skipped",
-                    json_kind(other)
-                );
-                continue;
+            Err(err) => {
+                log::warn!("settings: sources entry skipped ({err}): {entry}");
             }
-        };
-        if obj.get("path").map(|p| !p.is_string()).unwrap_or(true) {
-            log::warn!("settings: wrong-typed `sources[].path` — entry skipped: {entry}");
-            continue;
         }
-        list.push(SourceEntry { path, provider, enabled });
     }
     Some(list)
 }
@@ -656,30 +784,219 @@ mod tests {
             ]}",
         );
         let manager = SettingsManager::new(path);
-        assert_eq!(
-            manager.enabled_sources(),
-            vec![SourceEntry {
-                path: "D:/jsonl/dump".to_string(),
-                provider: "codex".to_string(),
-                enabled: true
-            }]
-        );
+        assert_eq!(manager.enabled_sources(), vec![local("D:/jsonl/dump", "codex", true)]);
         // The disabled entry is kept in the merged view...
         assert_eq!(
             manager.get_value("sources"),
             Some(SettingValue::SourceList(vec![
-                SourceEntry {
-                    path: "D:/jsonl/dump".to_string(),
-                    provider: "codex".to_string(),
-                    enabled: true
-                },
-                SourceEntry {
-                    path: "D:/other".to_string(),
-                    provider: "claude".to_string(),
-                    enabled: false
-                },
+                local("D:/jsonl/dump", "codex", true),
+                local("D:/other", "claude", false),
             ]))
         );
+    }
+
+    fn local(path: &str, provider: &str, enabled: bool) -> SourceEntry {
+        SourceEntry::Local(LocalSource {
+            path: path.to_string(),
+            provider: provider.to_string(),
+            enabled,
+            id: None,
+        })
+    }
+
+    fn ssh(id: &str, host: &str) -> SourceEntry {
+        SourceEntry::Ssh(SshSource {
+            id: id.to_string(),
+            label: None,
+            host: host.to_string(),
+            port: 22,
+            user: "u".to_string(),
+            root: "~".to_string(),
+            auth: SourceAuth::Agent,
+            provider_hint: None,
+            enabled: true,
+            extra: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn zero_migration_old_file_parses_unchanged() {
+        // A pre-ADR-0008 file (no kind field anywhere) parses as-is.
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\"path\": \"D:/a\", \"provider\": \"claude\", \"enabled\": true},\
+                {\"path\": \"D:/b\", \"provider\": \"codex\"}]}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(
+            manager.get_value("sources"),
+            Some(SettingValue::SourceList(vec![
+                local("D:/a", "claude", true),
+                local("D:/b", "codex", true),
+            ]))
+        );
+    }
+
+    #[test]
+    fn loader_unknown_kind_skips_entry_only() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [\
+                {\"kind\": \"warp\", \"path\": \"D:/w\"},\
+                {\"path\": \"D:/a\", \"provider\": \"claude\"}\
+            ]}",
+        );
+        let manager = SettingsManager::new(path);
+        // The rest of the list survives the unknown-kind entry.
+        assert_eq!(
+            manager.get_value("sources"),
+            Some(SettingValue::SourceList(vec![local("D:/a", "claude", true)]))
+        );
+    }
+
+    #[test]
+    fn loader_ssh_missing_required_fields_skipped() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [\
+                {\"kind\": \"ssh\", \"host\": \"h\", \"root\": \"~\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"i\", \"root\": \"~\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"i\", \"host\": \"h\", \"user\": \"u\", \"auth\": {\"mode\": \"agent\"}}\
+            ]}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(
+            manager.get_value("sources"),
+            Some(SettingValue::SourceList(Vec::new()))
+        );
+    }
+
+    #[test]
+    fn loader_duplicate_id_skips_later_entry_across_kinds() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [\
+                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h1\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"dup\", \"host\": \"h2\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"path\": \"D:/a\", \"provider\": \"claude\", \"id\": \"dup\"},\
+                {\"path\": \"D:/b\", \"provider\": \"codex\", \"id\": \"other\"}\
+            ]}",
+        );
+        let manager = SettingsManager::new(path);
+        let first = ssh("dup", "h1");
+        assert_eq!(
+            manager.get_value("sources"),
+            Some(SettingValue::SourceList(vec![
+                first,
+                SourceEntry::Local(LocalSource {
+                    path: "D:/b".to_string(),
+                    provider: "codex".to_string(),
+                    enabled: true,
+                    id: Some("other".to_string()),
+                }),
+            ]))
+        );
+    }
+
+    #[test]
+    fn loader_ssh_parses_and_preserves_unknown_fields() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\
+                \"kind\": \"ssh\", \"id\": \"ali\", \"label\": \"Aliyun dev\",\
+                \"host\": \"192.0.2.10\", \"user\": \"admin\", \"root\": \"~/.claude/projects\",\
+                \"auth\": {\"mode\": \"key\", \"keyPath\": \"~/.ssh/id_ed25519\"},\
+                \"providerHint\": \"claude\", \"provider\": \"stray-local-field\"\
+            }]}",
+        );
+        let manager = SettingsManager::new(path);
+        let entry = match manager.get_value("sources") {
+            Some(SettingValue::SourceList(mut list)) => list.remove(0),
+            _ => panic!("expected a source list"),
+        };
+        let SourceEntry::Ssh(s) = entry else {
+            panic!("expected an ssh entry")
+        };
+        assert_eq!(s.id, "ali");
+        assert_eq!(s.label.as_deref(), Some("Aliyun dev"));
+        assert_eq!(s.port, 22); // defaulted
+        assert_eq!(
+            s.auth,
+            SourceAuth::Key { key_path: "~/.ssh/id_ed25519".to_string() }
+        );
+        assert_eq!(s.provider_hint.as_deref(), Some("claude"));
+        // Forward compat: the stray local field is tolerated AND preserved.
+        assert_eq!(
+            s.extra.get("provider"),
+            Some(&serde_json::json!("stray-local-field"))
+        );
+    }
+
+    #[test]
+    fn local_edit_round_trip_preserves_ssh_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [\
+                {\"path\": \"D:/a\", \"provider\": \"claude\"},\
+                {\"kind\": \"ssh\", \"id\": \"ali\", \"label\": \"Aliyun dev\",\
+                    \"host\": \"192.0.2.10\", \"port\": 2222, \"user\": \"admin\",\
+                    \"root\": \"~/.claude/projects\", \"auth\": {\"mode\": \"key\", \"keyPath\": \"~/.ssh/k\"},\
+                    \"providerHint\": \"claude\", \"enabled\": true}\
+            ]}",
+        );
+        let manager = SettingsManager::new(path.clone());
+
+        // The UI commit shape (documented): set_value("sources", …) carries
+        // the FULL list — the edited local entries plus the ssh entries
+        // verbatim, exactly as get_value served them.
+        let SettingValue::SourceList(mut current) =
+            manager.get_value("sources").expect("sources")
+        else {
+            panic!("expected source list")
+        };
+        let ssh_entry = current.remove(1);
+        current[0] = local("D:/renamed", "codex", true);
+        let next = vec![current[0].clone(), ssh_entry.clone()];
+        manager
+            .set_value("sources", SettingValue::SourceList(next))
+            .expect("set");
+
+        // Reload from disk: both entries round-trip faithfully.
+        let reloaded = SettingsManager::new(path.clone());
+        assert_eq!(
+            reloaded.get_value("sources"),
+            Some(SettingValue::SourceList(vec![
+                local("D:/renamed", "codex", true),
+                ssh_entry,
+            ]))
+        );
+        // Spot-check the serialized ssh JSON shape (kind tag, camelCase).
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("\"kind\": \"ssh\""));
+        assert!(text.contains("\"keyPath\": \"~/.ssh/k\""));
+        assert!(text.contains("\"providerHint\": \"claude\""));
+    }
+
+    #[test]
+    fn enabled_sources_includes_enabled_ssh_entries() {
+        // enabled_sources() is kind-agnostic (the scan overlay, not the
+        // settings core, filters to Local — ADR 0008 §3).
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [\
+                {\"kind\": \"ssh\", \"id\": \"a\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}},\
+                {\"kind\": \"ssh\", \"id\": \"b\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}, \"enabled\": false}\
+            ]}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(manager.enabled_sources(), vec![ssh("a", "h")]);
     }
 
     #[test]

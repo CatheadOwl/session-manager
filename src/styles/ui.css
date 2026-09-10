@@ -266,6 +266,56 @@
   margin-top: 0;
 }
 
+/* ADR 0008: read-only SSH summary row (badge + identity + hand-edit note). */
+.setting-source-row--ssh {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+}
+
+.setting-source-kind-badge {
+  align-self: start;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.4rem;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+}
+
+.setting-source-ssh-summary {
+  display: flex;
+  min-width: 0;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.setting-source-ssh-title {
+  overflow: hidden;
+  min-width: 0;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setting-source-ssh-host {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.setting-source-ssh-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 550;
+}
+
 .setting-source-input {
   width: 100%;
   height: 1.72rem;

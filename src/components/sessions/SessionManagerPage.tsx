@@ -24,9 +24,10 @@ import { SessionList } from "./SessionList";
 
 export function SessionManagerPage() {
   const ui = useSessionUIState();
-  // Settings overlay page: gear entry lives in FolderFilter's header; the
-  // page mounts here (page level) so the only new prop is FolderFilter's
-  // onOpenSettings — no deeper drilling, and query context is already shared.
+  // Settings overlay page: gear entry is pinned to the bottom of the
+  // collapsed folder strip; the page mounts here (page level) so the only
+  // new prop is FolderFilter's onOpenSettings — no deeper drilling, and
+  // query context is already shared.
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const queries = useSessionQueries(
     ui.scope,

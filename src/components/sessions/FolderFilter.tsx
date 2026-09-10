@@ -100,6 +100,15 @@ export const FolderFilter = memo(function FolderFilter({
           version={updateVersion}
           onInstall={onInstallUpdate}
         />
+        <button
+          type="button"
+          className="folder-settings-btn folder-settings-btn--collapsed"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <SettingsIcon />
+        </button>
       </div>
     );
   }

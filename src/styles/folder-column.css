@@ -109,6 +109,12 @@
   color: var(--text);
 }
 
+/* Collapsed strip: gear pinned to the bottom (mainstream sidebar layout —
+   expand stays on top, settings anchors the column's end). */
+.folder-settings-btn--collapsed {
+  margin-top: auto;
+}
+
 .folder-scope-block {
   padding: 0 0.25rem 0.55rem;
 }

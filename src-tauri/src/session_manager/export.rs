@@ -141,6 +141,12 @@ fn export_one(
 /// all same-turn assistant texts are joined (`"\n\n"`); tool calls, tool
 /// results, and non-conversation roles are skipped; `ts` comes from the
 /// question message.
+///
+/// Export-only cleanup (mirrors what the UI renders structurally): providers
+/// embed tool placeholders (`[Tool: X]` / `[Tool Result]`) as text inside
+/// assistant `content`, and system metadata blocks inside question/answer
+/// text — the UI view shows those via cards, so the materialized export must
+/// strip them instead of joining them into the answer.
 pub fn extract_qa_entries(messages: &[super::types::SessionMessage]) -> Vec<QaEntry> {
     let mut entries = Vec::new();
     let mut pending_question: Option<(String, Option<i64>)> = None;
@@ -165,11 +171,14 @@ pub fn extract_qa_entries(messages: &[super::types::SessionMessage]) -> Vec<QaEn
         match message.role.to_lowercase().as_str() {
             "user" => {
                 flush(&mut entries, &mut pending_question, &mut pending_answer);
-                pending_question = Some((message.content.clone(), message.ts));
+                pending_question = Some((strip_system_blocks(&message.content), message.ts));
             }
             "assistant" => {
-                if pending_question.is_some() && !message.content.trim().is_empty() {
-                    pending_answer.push(message.content.clone());
+                if pending_question.is_some()
+                    && !message.content.trim().is_empty()
+                    && !is_tool_placeholder_message(&message.content)
+                {
+                    pending_answer.push(strip_system_blocks(&message.content));
                 }
             }
             _ => {}
@@ -178,6 +187,88 @@ pub fn extract_qa_entries(messages: &[super::types::SessionMessage]) -> Vec<QaEn
     flush(&mut entries, &mut pending_question, &mut pending_answer);
 
     entries
+}
+
+/// True when the whole message body consists solely of tool placeholder
+/// lines (`[Tool: name]` / `[Tool Result]`) — the textual fallback providers
+/// embed for tool-call messages (see `providers/utils.rs` and the per-provider
+/// mappers). Such messages carry no conversational text and must not be
+/// joined into an export answer. Mixed bodies (placeholder lines plus real
+/// text) keep their real text.
+fn is_tool_placeholder_message(content: &str) -> bool {
+    let mut saw_placeholder = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let is_placeholder = line == "[Tool Result]"
+            || (line.starts_with("[Tool: ") && line.ends_with(']') && line.len() > "[Tool: ]".len());
+        if !is_placeholder {
+            return false;
+        }
+        saw_placeholder = true;
+    }
+    saw_placeholder
+}
+
+/// Remove XML-like system metadata blocks embedded in message text (e.g.
+/// `<system-reminder>...</system-reminder>`), mirroring the client-side
+/// `extractSystemBlocks` (`src/utils/system-blocks.ts`): a block opens with
+/// `<tag>` at the start of a line (tag = word chars, spaces, hyphens) and
+/// closes with `</tag>` at the start of a later line. Returns the remaining
+/// text, trimmed.
+fn strip_system_blocks(text: &str) -> String {
+    fn valid_tag(tag: &str) -> bool {
+        let mut chars = tag.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_alphanumeric() || c == '_' => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ' ')
+    }
+
+    // Open tag at line start: `<tag ...>` where the name is word chars /
+    // spaces / hyphens. The remainder of the opening line after `>` belongs
+    // to the block content (the TS regex captures it); the remainder of the
+    // closing line after `</tag>` is kept.
+    fn parse_open_tag(line: &str) -> Option<&str> {
+        let rest = line.strip_prefix('<')?;
+        let gt = rest.find('>')?;
+        let tag = &rest[..gt];
+        if valid_tag(tag) {
+            Some(tag)
+        } else {
+            None
+        }
+    }
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0usize;
+    while i < lines.len() {
+        if let Some(tag) = parse_open_tag(lines[i]) {
+            let close = format!("</{tag}>");
+            // Find the closing tag at a later line start.
+            if let Some((j, _)) = lines
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .find(|(_, l)| l.starts_with(close.as_str()))
+            {
+                if let Some(tail) = lines[j].strip_prefix(close.as_str()) {
+                    if !tail.is_empty() {
+                        kept.push(tail.to_string());
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        kept.push(lines[i].to_string());
+        i += 1;
+    }
+    kept.join("\n").trim().to_string()
 }
 
 fn session_in_range(meta: &SessionMeta, from: i64, to: i64) -> bool {
@@ -492,6 +583,58 @@ mod tests {
         let msgs = vec![message("user", "u1"), message("assistant", "a1")];
         let entries = extract_qa_entries(&msgs);
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn qa_entries_drop_pure_tool_placeholder_messages() {
+        let msgs = vec![
+            message("user", "u1"),
+            message("assistant", "[Tool: exec_command]"),
+            message("assistant", "working on it"),
+            message("assistant", "[Tool: Read]\n[Tool Result]"),
+            message("assistant", "final answer"),
+        ];
+        let entries = extract_qa_entries(&msgs);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].answer, "working on it\n\nfinal answer");
+    }
+
+    #[test]
+    fn qa_entries_keep_placeholder_lines_mixed_with_real_text() {
+        let msgs = vec![
+            message("user", "u1"),
+            message("assistant", "I will run a tool\n[Tool: Bash]\ndone running"),
+        ];
+        let entries = extract_qa_entries(&msgs);
+
+        // Mixed bodies keep their text verbatim — only whole-message
+        // placeholders are dropped.
+        assert_eq!(entries[0].answer, "I will run a tool\n[Tool: Bash]\ndone running");
+    }
+
+    #[test]
+    fn qa_entries_strip_system_blocks_from_question_and_answer() {
+        let question = "<system-reminder>\nbe brief\n</system-reminder>\n\nWhat is 1+1?";
+        let answer = "Thinking.\n\n<permissions instructions>\nread only\n</permissions instructions> trailing kept";
+        let msgs = vec![message("user", question), message("assistant", answer)];
+        let entries = extract_qa_entries(&msgs);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].question, "What is 1+1?");
+        assert_eq!(entries[0].answer, "Thinking.\n\n trailing kept");
+    }
+
+    #[test]
+    fn strip_system_blocks_unclosed_block_is_kept_verbatim() {
+        let text = "<system-reminder>\nnever closed";
+        assert_eq!(strip_system_blocks(text), text);
+    }
+
+    #[test]
+    fn strip_system_blocks_multiple_blocks_and_plain_lines() {
+        let text = "before\n<system-reminder>\nx\n</system-reminder>\nmiddle\n<warnings>\ny\n</warnings>\nafter";
+        assert_eq!(strip_system_blocks(text), "before\nmiddle\nafter");
     }
 
     #[test]

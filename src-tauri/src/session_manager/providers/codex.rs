@@ -410,9 +410,11 @@ fn infer_session_id_from_filename(path: &Path) -> Option<String> {
 
 /// Split Codex tool output at the "Output:" delimiter.
 ///
-/// Codex often embeds explanatory text before the actual output, separated
-/// by "Output:" on its own line. We split so the explanatory text becomes
-/// part of the message content and the structured output becomes `tool_result`.
+/// Codex tool output often carries a metadata header (e.g. "Chunk ID /
+/// Wall time / Process exited" for exec commands) before the actual output,
+/// separated by "Output:" on its own line. We split so both halves stay in
+/// the structured `tool_result` (header + payload); neither half is
+/// assistant commentary.
 ///
 /// Returns `(before_delimiter, after_delimiter)`.
 fn split_codex_output(output: &str) -> (String, String) {
@@ -536,17 +538,23 @@ fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
                     if let Some(msg) = messages.get_mut(cid) {
                         if msg.tool_calls.is_some() {
                             let (explanatory, result) = split_codex_output(&output);
-                            if !result.is_empty() {
+                            // Both halves are machine tool output (the
+                            // pre-"Output:" header is metadata like "Chunk
+                            // ID/Wall time", not assistant commentary) — keep
+                            // them together in tool_result. Appending the
+                            // header to `content` polluted both the message
+                            // view and the Q&A export's joined answers.
+                            let merged = match (explanatory.is_empty(), result.is_empty()) {
+                                (true, false) => result,
+                                (false, true) => explanatory,
+                                (false, false) => format!("{explanatory}\n\n{result}"),
+                                (true, true) => String::new(),
+                            };
+                            if !merged.is_empty() {
                                 msg.tool_result = Some(ToolResultInfo {
-                                    content: result,
+                                    content: merged,
                                     call_id: None,
                                 });
-                            }
-                            if !explanatory.is_empty() {
-                                if !msg.content.is_empty() && !msg.content.ends_with('\n') {
-                                    msg.content.push('\n');
-                                }
-                                msg.content.push_str(&explanatory);
                             }
                             // Consumed — skip creating a separate message
                             continue;

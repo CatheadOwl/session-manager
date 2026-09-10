@@ -156,7 +156,10 @@ pub fn extract_qa_entries(messages: &[super::types::SessionMessage]) -> Vec<QaEn
                  question: &mut Option<(String, Option<i64>)>,
                  answer: &mut Vec<String>| {
         if let Some((q, ts)) = question.take() {
-            if !answer.is_empty() {
+            // Guard: a user message that was pure system-block content
+            // distills to an empty question — such a "pair" has no
+            // interrogative content, drop it (spec: pairing rule 2).
+            if !answer.is_empty() && !q.trim().is_empty() {
                 entries.push(QaEntry {
                     question: q,
                     answer: answer.join("\n\n"),
@@ -576,6 +579,19 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].question, "u2");
+    }
+
+    #[test]
+    fn qa_entries_drop_empty_question_after_system_block_strip() {
+        let msgs = vec![
+            message("user", "<system-reminder>\nresume context\n</system-reminder>"),
+            message("assistant", "handoff summary text"),
+        ];
+        let entries = extract_qa_entries(&msgs);
+
+        // The user message was pure system-block content; the distilled
+        // question is empty, so no pair is emitted.
+        assert!(entries.is_empty());
     }
 
     #[test]

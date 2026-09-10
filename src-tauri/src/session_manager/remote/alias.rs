@@ -17,10 +17,12 @@
 //! directly would be wrong. Unknown aliases fail with an actionable
 //! message pointing at `~/.ssh/config`.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use ssh2_config::{ParseRule, SshConfig};
 
 use super::error::RemoteError;
@@ -111,6 +113,119 @@ pub fn resolve_alias_in(config_path: &Path, alias: &str) -> Result<ResolvedAlias
             .identity_file
             .and_then(|files| files.into_iter().next()),
     })
+}
+
+/// One selectable alias for the settings UI's "Add SSH source" picker
+/// (ADR 0010 Decision 5 — the alias dropdown this type feeds). The
+/// `host`/`user` pair is a PREVIEW rendered as `user@host`; it is
+/// derived at listing time and never persisted into the settings entry
+/// (the entry keeps a live `sshConfig` reference instead, ADR 0010
+/// Option A). `supported: false` marks a ProxyJump block — greyed out
+/// in the picker with a "not supported yet" note (v1 boundary,
+/// Decision 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshAliasInfo {
+    pub alias: String,
+    /// HostName of the matching block, or the alias itself when the
+    /// block sets none (OpenSSH default).
+    pub host: String,
+    /// `User` of the matching block, when present.
+    pub user: Option<String>,
+    /// False iff the block (or an earlier matching block) sets a
+    /// non-empty ProxyJump — the russh stack cannot dial jump hosts.
+    pub supported: bool,
+}
+
+/// The user's real `~/.ssh/config` path (actionable error when the
+/// home directory cannot be determined). Consumed by the empty-state
+/// guide in the add-source UI and by [`list_aliases`].
+pub fn ssh_config_path() -> Result<PathBuf, RemoteError> {
+    dirs::home_dir()
+        .map(|home| home.join(".ssh").join("config"))
+        .ok_or_else(|| {
+            RemoteError::SshConfigAlias("cannot determine the user home directory".to_string())
+        })
+}
+
+/// List every selectable Host alias from the user's real
+/// `~/.ssh/config`. A missing or EMPTY config is NOT an error — the
+/// empty Vec is exactly what drives the UI's empty-state guide
+/// (path display + example config + manual fallback form). Only an
+/// existing-but-unparseable file errors.
+pub fn list_aliases() -> Result<Vec<SshAliasInfo>, RemoteError> {
+    list_aliases_in(&ssh_config_path()?)
+}
+
+/// Test seam: same listing against an explicit config file path
+/// (temp-file backed unit tests; `Include` directives are honored by
+/// the same ssh2-config parse as [`resolve_alias_in`]).
+///
+/// Only LITERAL Host patterns become picker entries: wildcard
+/// (`*`/`?`) patterns name host GROUPS rather than connectable
+/// aliases (VS Code's picker shows them, but they have no stable
+/// identity to store in settings), and negated clauses (`!host`) are
+/// exclusions, never destinations. Each alias's preview comes from
+/// `config.query(alias)` — the same first-match-wins merged
+/// resolution the connect path uses, so the preview can never
+/// disagree with what a later connect would dial. The parse uses
+/// `ALLOW_UNKNOWN_FIELDS`: one unrecognized keyword in a hand-edited
+/// file must not blank the whole picker.
+pub fn list_aliases_in(config_path: &Path) -> Result<Vec<SshAliasInfo>, RemoteError> {
+    if !config_path.exists() {
+        // The documented "no config yet" state — empty list, not an
+        // error (the UI shows the setup guide).
+        return Ok(Vec::new());
+    }
+    let file = File::open(config_path).map_err(|e| {
+        RemoteError::SshConfigAlias(format!(
+            "cannot open ssh config at {} ({e}) — check that the file exists and readable",
+            config_path.display()
+        ))
+    })?;
+    let config = SshConfig::default()
+        .parse(&mut BufReader::new(file), ParseRule::ALLOW_UNKNOWN_FIELDS)
+        .map_err(|e| {
+            RemoteError::SshConfigAlias(format!(
+                "failed to parse ssh config at {} ({e})",
+                config_path.display()
+            ))
+        })?;
+
+    // Collect literal aliases in file order, deduped (a `Host a b`
+    // clause and a later `Host a` must not produce two rows).
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut aliases: Vec<String> = Vec::new();
+    for host in config.get_hosts() {
+        for clause in &host.pattern {
+            if clause.negated {
+                continue;
+            }
+            let pattern = clause.pattern.as_str();
+            if pattern.is_empty() || pattern.contains('*') || pattern.contains('?') {
+                continue;
+            }
+            if seen.insert(pattern.to_string()) {
+                aliases.push(pattern.to_string());
+            }
+        }
+    }
+
+    Ok(aliases
+        .into_iter()
+        .map(|alias| {
+            let params = config.query(&alias);
+            SshAliasInfo {
+                alias: alias.clone(),
+                host: params.host_name.unwrap_or_else(|| alias.clone()),
+                user: params.user,
+                supported: !params
+                    .proxy_jump
+                    .as_ref()
+                    .is_some_and(|j| !j.is_empty()),
+            }
+        })
+        .collect())
 }
 
 /// Expand a leading `~` to the user's home directory (ADR 0010
@@ -222,6 +337,92 @@ mod tests {
             ),
             "exact ADR 0010 message"
         );
+    }
+
+    // ── alias listing (ADR 0010 Decision 5 picker) ────────────────────
+
+    #[test]
+    fn listing_reports_alias_host_user_previews() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "Host ali\n  HostName 192.0.2.10\n  User admin\n\
+             Host bare\n  User op\n",
+        );
+        let list = list_aliases_in(&path).expect("list");
+        assert_eq!(
+            list,
+            vec![
+                SshAliasInfo {
+                    alias: "ali".to_string(),
+                    host: "192.0.2.10".to_string(),
+                    user: Some("admin".to_string()),
+                    supported: true,
+                },
+                // No HostName → the alias itself (OpenSSH default).
+                SshAliasInfo {
+                    alias: "bare".to_string(),
+                    host: "bare".to_string(),
+                    user: Some("op".to_string()),
+                    supported: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn listing_marks_proxy_jump_unsupported() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "Host plain\n  HostName 192.0.2.10\n\
+             Host jumped\n  HostName 192.0.2.20\n  ProxyJump bastion\n",
+        );
+        let list = list_aliases_in(&path).expect("list");
+        assert!(list[0].supported);
+        assert!(!list[1].supported, "ProxyJump row is greyed out in the UI");
+    }
+
+    #[test]
+    fn listing_skips_wildcards_negations_and_duplicates() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "Host *\n  User default\n\
+             Host *.example.com\n\
+             Host !excluded\n\
+             Host pair1 pair2\n  HostName 192.0.2.1\n\
+             Host pair1\n  HostName 192.0.2.9\n",
+        );
+        let list = list_aliases_in(&path).expect("list");
+        let aliases: Vec<&str> = list.iter().map(|a| a.alias.as_str()).collect();
+        assert_eq!(aliases, vec!["pair1", "pair2"], "literal, deduped, in order");
+        // The preview uses merged query semantics: the later `Host
+        // pair1` block does NOT override the earlier HostName
+        // (first-match-wins), matching what connect would dial.
+        assert_eq!(list[0].host, "192.0.2.1");
+    }
+
+    #[test]
+    fn listing_missing_or_empty_config_is_an_empty_list_not_an_error() {
+        let dir = tempdir().expect("tempdir");
+        assert!(list_aliases_in(&dir.path().join("nope")).expect("missing file")
+            .is_empty());
+        let empty = write_config(dir.path(), "");
+        assert!(list_aliases_in(&empty).expect("empty file").is_empty());
+    }
+
+    #[test]
+    fn listing_tolerates_unknown_keywords() {
+        // ALLOW_UNKNOWN_FIELDS: one unrecognized directive must not
+        // blank the whole picker (hand-edited configs drift).
+        let dir = tempdir().expect("tempdir");
+        let path = write_config(
+            dir.path(),
+            "Host ali\n  HostName 192.0.2.10\n  SomeFutureKeyword yes\n",
+        );
+        let list = list_aliases_in(&path).expect("list");
+        assert_eq!(list.len(), 1);
     }
 
     // ── ~ expansion (ADR 0010 Decision 3) ─────────────────────────────

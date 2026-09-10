@@ -48,6 +48,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
+pub use alias::SshAliasInfo;
+pub use alias::{list_aliases, ssh_config_path};
 pub use error::RemoteError;
 pub use scan::{RemoteSourceResult, SessionBatchFetch};
 pub use session::RemoteSession;
@@ -55,6 +57,8 @@ pub use session::RemoteSession;
 // bridge window constants). Exercised by tests.
 #[allow(unused_imports)]
 pub use frame::{FileMetadataBlob, HEAD_MAX, TAIL_MAX};
+
+use serde::Serialize;
 
 use crate::session_manager::settings::SshSource;
 use crate::session_manager::types::{SessionHandle, SessionLocator, SessionMeta};
@@ -260,9 +264,130 @@ impl RemoteScanState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Add-source test connection (ADR 0010 / ADR 0008 修订 1 UI flow)
+// ---------------------------------------------------------------------------
+
+/// Outcome of `test_ssh_source`: connect + auth + known_hosts + one
+/// quick Active-scope scan of a DRAFT ssh entry, before the user
+/// commits it to settings. Success reports the discovered session
+/// count so the UI can say "Connected — N sessions found"; failure
+/// carries the actionable `RemoteError` display verbatim (ProxyJump /
+/// unknown host / auth each have their own remedy text).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTestResult {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl SshTestResult {
+    /// Success shape served to the UI.
+    pub fn ok(session_count: usize) -> Self {
+        Self {
+            ok: true,
+            session_count: Some(session_count),
+            error: None,
+        }
+    }
+
+    /// Failure shape: `RemoteError`'s Display is already actionable —
+    /// pass it through unmangled.
+    pub fn fail(error: String) -> Self {
+        Self {
+            ok: false,
+            session_count: None,
+            error: Some(error),
+        }
+    }
+}
+
+/// Test one draft ssh source end-to-end. Reuses the pool so a
+/// successful test WARMS the per-source session a later "Add"
+/// reuses (and a failed one leaves nothing cached). The scan half is
+/// the same blocking-pool shape as `RemoteScanState::scan_source`,
+/// but WITHOUT the disconnect fallback — a test connection must
+/// surface the real error, never a stale cached list.
+pub async fn test_source(
+    registry: &Arc<crate::session_manager::providers::ProviderRegistry>,
+    pool: &RemoteSessionPool,
+    source: &SshSource,
+) -> SshTestResult {
+    let session = match pool.get(source).await {
+        Ok(session) => session,
+        Err(err) => return SshTestResult::fail(err.to_string()),
+    };
+    let fetch = SessionBatchFetch::new(session);
+    let registry = Arc::clone(registry);
+    let source = source.clone();
+    let join = tokio::task::spawn_blocking(move || {
+        scan::scan_remote_source(
+            &registry,
+            &fetch,
+            &source,
+            &crate::session_manager::types::SessionScope::Active,
+        )
+    })
+    .await;
+    match join {
+        Ok(Ok(sessions)) => SshTestResult::ok(sessions.len()),
+        Ok(Err(err)) => SshTestResult::fail(err.to_string()),
+        Err(err) => SshTestResult::fail(format!("test scan task failed: {err}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SshTestResult wire shapes (the add-source UI contract) ──────
+
+    #[test]
+    fn test_result_ok_serializes_camel_case_with_count_only() {
+        let json = serde_json::to_value(SshTestResult::ok(7)).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "ok": true, "sessionCount": 7 }),
+            "no error key on success"
+        );
+    }
+
+    #[test]
+    fn test_result_fail_serializes_error_only() {
+        let json = serde_json::to_value(SshTestResult::fail(
+            "ssh config alias `ali` uses ProxyJump, not supported yet".to_string(),
+        ))
+        .expect("serialize");
+        assert_eq!(json.get("sessionCount"), None, "no count on failure");
+        assert_eq!(json["ok"], false);
+        assert!(json["error"].as_str().expect("error").contains("ProxyJump"));
+    }
+
+    #[test]
+    fn test_source_surfaces_connect_failure_before_any_scan() {
+        // Offline-safe by construction: the bogus host fails in
+        // pool.get (connect) — the scan half is never reached, and the
+        // result carries ok=false + a non-empty actionable error. Same
+        // offline shape as `resolve_bridge_fails_closed...` above.
+        let pool = RemoteSessionPool::with_cache_base(PathBuf::from("Z:/nope"));
+        let result = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                test_source(
+                    &Arc::new(crate::session_manager::providers::ProviderRegistry::new()),
+                    &pool,
+                    &ssh_source("srv"),
+                )
+                .await
+            });
+        assert!(!result.ok);
+        assert!(result.error.as_deref().is_some_and(|e| !e.is_empty()));
+        assert_eq!(result.session_count, None);
+    }
 
     #[test]
     fn pool_starts_empty_and_drops_cleanly() {

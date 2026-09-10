@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { LocalSourceEntry, SourceEntry } from "@/lib/api/settings";
+import type { LocalSourceEntry, SourceEntry, SshSourceEntry } from "@/lib/api/settings";
 import { ConfirmDeleteDialog, type ConfirmActionTarget } from "@/components/sessions/ConfirmDeleteDialog";
+import { AddSshSourcePanel } from "./AddSshSourcePanel";
 import { Menu, MenuItem } from "./Menu";
 import { SettingRow } from "./SettingRow";
 
@@ -39,15 +40,19 @@ const toDraft = (value: SourceEntry[]): DraftRow[] =>
  * validation (empty path, duplicate paths) is display-only — the Rust core
  * re-validates on save.
  *
- * ADR 0008: ssh entries render as a READ-ONLY summary row (the remote-line
- * editor is future work) and MUST be included verbatim in every `onChange`
+ * ADR 0008: ssh entries render as a READ-ONLY summary row (per-field remote
+ * editing is future work) and MUST be included verbatim in every `onChange`
  * commit — a local edit must never drop them from the file. The commit shape
  * is therefore the FULL list: edited local entries + ssh entries untouched.
+ * Adding NEW ssh entries goes through the "Add SSH source…" flow
+ * (`AddSshSourcePanel`: ssh-config alias picker or manual form, with a test
+ * connection step — ADR 0010).
  */
 export function SourcesEditor({ label, description, value, providers, onChange, error }: SourcesEditorProps) {
   const [rows, setRows] = useState<DraftRow[]>(() => toDraft(value));
   const [pendingRemove, setPendingRemove] = useState<number | null>(null);
   const [openProvider, setOpenProvider] = useState<number | null>(null);
+  const [sshAddOpen, setSshAddOpen] = useState(false);
 
   // Resync when a new value arrives from outside (query refetch after
   // settings-changed). Local drafts are intentionally discarded.
@@ -89,6 +94,14 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
     commit([...rows, { entry: { path: "", provider: providers[0], enabled: true }, pathDraft: "" }]);
   };
 
+  // The add-SSH flow commits a fully-formed entry from AddSshSourcePanel
+  // (sshConfig alias reference or hand-filled fields) — same full-list
+  // commit shape as every other structural change.
+  const addSshSource = (entry: SshSourceEntry) => {
+    setSshAddOpen(false);
+    commit([...rows, { entry, pathDraft: "" }]);
+  };
+
   const removeRow = (index: number) => {
     setPendingRemove(null);
     commit(rows.filter((_, i) => i !== index));
@@ -114,6 +127,12 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
           // commit untouched (see the component doc comment).
           if (row.entry.kind === "ssh") {
             const ssh = row.entry;
+            // sshConfig entries keep placeholder host/user fields (ADR
+            // 0010): the identity line shows the LIVE alias reference
+            // instead — no resolution request here, by design (a config
+            // edit must not need a settings round-trip to render).
+            const viaAlias =
+              ssh.auth.mode === "sshConfig" ? ssh.auth.alias : null;
             return (
               <div className="setting-source-row setting-source-row--ssh" key={index}>
                 <span className="setting-source-kind-badge">SSH</span>
@@ -122,9 +141,11 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
                     {ssh.label ? `${ssh.label} (${ssh.id})` : ssh.id}
                   </span>
                   <span className="setting-source-ssh-host">
-                    {ssh.user ? `${ssh.user}@` : ""}
-                    {ssh.host}
-                    {ssh.port && ssh.port !== 22 ? `:${ssh.port}` : ""}
+                    {viaAlias !== null
+                      ? `ssh config alias: ${viaAlias}`
+                      : `${ssh.user ? `${ssh.user}@` : ""}${ssh.host}${
+                          ssh.port && ssh.port !== 22 ? `:${ssh.port}` : ""
+                        }`}
                   </span>
                   <span className="setting-source-ssh-note">
                     Edit in settings.json — remote editor coming
@@ -219,6 +240,17 @@ export function SourcesEditor({ label, description, value, providers, onChange, 
         <button type="button" className="secondary-button setting-source-add" onClick={addSource} disabled={providers.length === 0}>
           Add source…
         </button>
+        {sshAddOpen ? (
+          <AddSshSourcePanel onAdd={addSshSource} onClose={() => setSshAddOpen(false)} />
+        ) : (
+          <button
+            type="button"
+            className="secondary-button setting-source-add"
+            onClick={() => setSshAddOpen(true)}
+          >
+            Add SSH source…
+          </button>
+        )}
         {removeTarget ? (
           <ConfirmDeleteDialog
             target={removeTarget}

@@ -102,3 +102,51 @@ export async function setSettingValue(key: string, value: SettingValue): Promise
 export async function fetchProviders(): Promise<string[]> {
   return await invoke("list_providers");
 }
+
+/**
+ * One selectable Host alias from `~/.ssh/config` (ADR 0010 Decision 5 — the
+ * add-source picker). `host`/`user` are display previews resolved with the
+ * same first-match-wins semantics the connect path uses; `supported: false`
+ * marks a ProxyJump block (greyed out with a "not supported yet" note).
+ */
+export interface SshAliasInfo {
+  alias: string;
+  host: string;
+  user: string | null;
+  supported: boolean;
+}
+
+/**
+ * Outcome of `test_ssh_source`: on success the Active-scope scan's session
+ * count; on failure the actionable Rust-side error text (ProxyJump / unknown
+ * host / auth each carry their own remedy).
+ */
+export interface SshTestResult {
+  ok: boolean;
+  sessionCount?: number;
+  error?: string;
+}
+
+/**
+ * List every selectable ssh config alias. An EMPTY array is a signal, not an
+ * error: no `~/.ssh/config` (or no Host blocks) drives the picker's
+ * empty-state guide.
+ */
+export async function fetchSshAliases(): Promise<SshAliasInfo[]> {
+  return await invoke("list_ssh_aliases");
+}
+
+/** The absolute `~/.ssh/config` path (OS-accurate) for the empty-state guide. */
+export async function fetchSshConfigPath(): Promise<string> {
+  return await invoke("get_ssh_config_path");
+}
+
+/**
+ * Test a DRAFT ssh source before committing it: connect + auth +
+ * known_hosts + one quick Active-scope scan. The `request` is a full
+ * `SshSourceEntry` (the shape the entry will have once added; sshConfig
+ * entries carry placeholder host/user/port fields).
+ */
+export async function testSshSource(request: SshSourceEntry): Promise<SshTestResult> {
+  return await invoke("test_ssh_source", { request });
+}

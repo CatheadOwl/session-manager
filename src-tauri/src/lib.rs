@@ -162,6 +162,9 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::set_setting_value,
             commands::settings::list_providers,
+            commands::remote::list_ssh_aliases,
+            commands::remote::get_ssh_config_path,
+            commands::remote::test_ssh_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

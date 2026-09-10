@@ -1,4 +1,5 @@
 pub mod fork_tree;
+pub mod remote;
 pub mod session_manager;
 pub mod settings;
 

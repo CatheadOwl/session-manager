@@ -366,3 +366,209 @@
 .setting-source-add {
   align-self: flex-start;
 }
+
+/* ─── Add SSH source flow (ui/AddSshSourcePanel, ADR 0010) ─────────────── */
+
+.setting-ssh-add-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--panel);
+  font-size: 0.78rem;
+}
+
+.setting-ssh-add-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.setting-ssh-add-title {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.setting-ssh-add-close {
+  padding: 0 0.35rem;
+}
+
+.setting-ssh-add-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setting-ssh-add-note {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.setting-ssh-add-error-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+
+.setting-ssh-alias-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 14rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.setting-ssh-alias {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--panel-strong);
+  color: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.setting-ssh-alias:hover:not(:disabled),
+.setting-ssh-alias:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.setting-ssh-alias[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.setting-ssh-alias:disabled {
+  opacity: 0.55;
+}
+
+.setting-ssh-alias-name {
+  font-weight: 650;
+}
+
+.setting-ssh-alias-preview {
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.setting-ssh-alias-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.setting-ssh-test-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.setting-ssh-id-input {
+  flex: 1 1 8rem;
+  width: auto;
+}
+
+.setting-ssh-test-ok {
+  color: var(--success);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.setting-ssh-test-error {
+  margin-top: 0;
+  flex-basis: 100%;
+}
+
+.setting-ssh-add-confirm {
+  font-weight: 600;
+}
+
+/* Empty-state guide (no ~/.ssh/config yet). */
+.setting-ssh-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.65rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.6rem;
+}
+
+.setting-ssh-guide-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 550;
+}
+
+.setting-ssh-guide-path {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.setting-ssh-guide-path code {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--panel-strong);
+  font-size: 0.74rem;
+}
+
+.setting-ssh-guide-sample {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--panel-strong);
+  color: inherit;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.setting-ssh-manual-toggle {
+  align-self: flex-start;
+  font-size: 0.76rem;
+}
+
+.setting-ssh-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.setting-ssh-manual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.4rem;
+}
+
+.setting-ssh-manual-auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.setting-ssh-manual-auth .setting-source-input {
+  flex: 1 1 10rem;
+  width: auto;
+}

@@ -161,6 +161,18 @@ fn default_true() -> bool {
     true
 }
 
+/// Outcome of an ADR 0008 §1a auto-heal attempt (`heal_provider_hint`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHintHeal {
+    /// Hint persisted (atomic save done); caller emits `settings-changed`.
+    Applied,
+    /// File contained comments — write refused to protect them (§1a
+    /// condition 1). The probe itself may still have run.
+    SkippedComments,
+    /// Entry already carries this exact hint — idempotent no-op.
+    AlreadySet,
+}
+
 /// Externally-tagged setting value: `{"bool": true}`, `{"stringList": [...]}`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum SettingValue {
@@ -454,6 +466,51 @@ impl SettingsManager {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// ADR 0008 §1a auto-heal write path: persist a scan-detected provider
+    /// onto the ssh source identified by `source_id` (the same id the Remote
+    /// locator anchors to). This is the ONLY sanctioned way for scan-layer
+    /// code to write a detected hint — it reuses the D7 comment guard, the
+    /// atomic sparse save, and the full-list round-trip in one place, so no
+    /// second comment-detection or settings-writing logic may grow beside it.
+    /// CLI adapters MUST NOT call this (read-only semantics, §1a condition 2).
+    /// The caller emits `settings-changed` when the outcome is `Applied`.
+    pub fn heal_provider_hint(
+        &self,
+        source_id: &str,
+        hint: &str,
+    ) -> Result<ProviderHintHeal, String> {
+        let mut store = self.store.lock().unwrap();
+        let mut list: Vec<SourceEntry> = match store.overrides.get("sources") {
+            Some(SettingValue::SourceList(list)) => list.clone(),
+            _ => return Err(format!("Unknown source id: {source_id}")),
+        };
+        let entry = list
+            .iter_mut()
+            .find(|e| matches!(e, SourceEntry::Ssh(s) if s.id == source_id))
+            .ok_or_else(|| format!("Unknown source id: {source_id}"))?;
+        let SourceEntry::Ssh(ssh) = entry else {
+            unreachable!("find matched an Ssh entry");
+        };
+        if ssh.provider_hint.as_deref() == Some(hint) {
+            return Ok(ProviderHintHeal::AlreadySet);
+        }
+        if store.had_comments {
+            // §1a condition 1: commented files are never healed — the probe
+            // may run, the write does not (D7 strip-diff detection lives
+            // here, nowhere else).
+            log::warn!(
+                "settings: auto-heal skipped for source `{source_id}` — file contains comments (ADR 0008 §1a)"
+            );
+            return Ok(ProviderHintHeal::SkippedComments);
+        }
+        ssh.provider_hint = Some(hint.to_string());
+        store
+            .overrides
+            .insert("sources".to_string(), SettingValue::SourceList(list));
+        self.save(&mut store)?;
+        Ok(ProviderHintHeal::Applied)
     }
 
     /// Sparse pretty-JSON atomic write: keys equal to defaults are omitted
@@ -1031,5 +1088,60 @@ mod tests {
         assert_eq!(snapshot.descriptors.len(), SETTINGS.len());
         assert_eq!(snapshot.values["update.autoCheck"], SettingValue::Bool(false));
         assert_eq!(snapshot.values["sources"], SettingValue::SourceList(Vec::new()));
+    }
+
+    #[test]
+    fn heal_applies_persists_and_is_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\"kind\": \"ssh\", \"id\": \"srv\", \"host\": \"h\", \
+              \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}}]}",
+        );
+        let manager = SettingsManager::new(path.clone());
+        assert_eq!(
+            manager.heal_provider_hint("srv", "claude").expect("heal"),
+            ProviderHintHeal::Applied
+        );
+        // Persisted: a fresh manager sees the hint (terminal state explicit).
+        let reloaded = SettingsManager::new(path);
+        match reloaded.enabled_sources()[0] {
+            SourceEntry::Ssh(ref s) => assert_eq!(s.provider_hint.as_deref(), Some("claude")),
+            ref other => panic!("expected ssh entry, got {other:?}"),
+        }
+        // Idempotent: same hint again is a no-op outcome.
+        assert_eq!(
+            reloaded.heal_provider_hint("srv", "claude").expect("heal"),
+            ProviderHintHeal::AlreadySet
+        );
+    }
+
+    #[test]
+    fn heal_refuses_commented_files_without_writing() {
+        let dir = tempdir().expect("tempdir");
+        let original = "{\n  // my annotated server\n  \"sources\": [{\"kind\": \"ssh\", \
+            \"id\": \"srv\", \"host\": \"h\", \"user\": \"u\", \"root\": \"~\", \
+            \"auth\": {\"mode\": \"agent\"}}]\n}";
+        let path = write_settings(dir.path(), original);
+        let manager = SettingsManager::new(path.clone());
+        assert_eq!(
+            manager.heal_provider_hint("srv", "claude").expect("heal"),
+            ProviderHintHeal::SkippedComments
+        );
+        // File untouched: comment survives, no hint written.
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(text, original);
+    }
+
+    #[test]
+    fn heal_unknown_source_id_is_an_error() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sources\": [{\"kind\": \"ssh\", \"id\": \"srv\", \"host\": \"h\", \
+              \"user\": \"u\", \"root\": \"~\", \"auth\": {\"mode\": \"agent\"}}]}",
+        );
+        let manager = SettingsManager::new(path);
+        assert!(manager.heal_provider_hint("nope", "claude").is_err());
     }
 }

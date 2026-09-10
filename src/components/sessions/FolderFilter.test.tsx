@@ -92,3 +92,60 @@ describe("FolderFilter sorting", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("FolderFilter folder lifecycle action", () => {
+  const openFolderActions = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Folder actions" }));
+  };
+
+  it("offers an enabled Archive folder action when a normal folder is selected (active scope)", () => {
+    const onArchiveFolder = vi.fn();
+    renderFilter({ selectedFolder: "alpha", onArchiveFolder });
+    openFolderActions();
+    const item = screen.getByRole("menuitem", { name: "Archive folder" });
+    expect(item).not.toBeDisabled();
+    fireEvent.click(item);
+    expect(onArchiveFolder).toHaveBeenCalledTimes(1);
+    expect(onArchiveFolder).toHaveBeenCalledWith("alpha");
+  });
+
+  it("disables the action for the All pseudo-folder", () => {
+    renderFilter({ selectedFolder: "all" });
+    openFolderActions();
+    expect(screen.getByRole("menuitem", { name: "Archive folder" })).toBeDisabled();
+  });
+
+  it("disables the action for the Unknown pseudo-folder", () => {
+    renderFilter({ selectedFolder: "Unknown" });
+    openFolderActions();
+    expect(screen.getByRole("menuitem", { name: "Archive folder" })).toBeDisabled();
+  });
+
+  it("offers the action for a pinned folder", () => {
+    // gamma is pinned in the default fixtures.
+    const onArchiveFolder = vi.fn();
+    renderFilter({ selectedFolder: "gamma", onArchiveFolder });
+    openFolderActions();
+    const item = screen.getByRole("menuitem", { name: "Archive folder" });
+    expect(item).not.toBeDisabled();
+    fireEvent.click(item);
+    expect(onArchiveFolder).toHaveBeenCalledWith("gamma");
+  });
+
+  it("labels the action Restore folder in archived scope and fires onRestoreFolder", () => {
+    const onRestoreFolder = vi.fn();
+    renderFilter({ selectedFolder: "alpha", scope: "archived", onRestoreFolder });
+    openFolderActions();
+    const item = screen.getByRole("menuitem", { name: "Restore folder" });
+    expect(item).not.toBeDisabled();
+    fireEvent.click(item);
+    expect(onRestoreFolder).toHaveBeenCalledTimes(1);
+    expect(onRestoreFolder).toHaveBeenCalledWith("alpha");
+  });
+
+  it("disables the action while a folder operation is pending", () => {
+    renderFilter({ selectedFolder: "alpha", isFolderOperationPending: true });
+    openFolderActions();
+    expect(screen.getByRole("menuitem", { name: "Archive folder" })).toBeDisabled();
+  });
+});

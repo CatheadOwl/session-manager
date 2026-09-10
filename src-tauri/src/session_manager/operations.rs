@@ -288,6 +288,225 @@ pub fn restore_session(
     restore_session_for_handle(registry, &handle)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TEST_ENV_LOCK;
+    use tempfile::tempdir;
+
+    // Use the global shared lock to prevent parallel tests from racing on
+    // CLAUDE_CONFIG_DIR (same pattern as the tests in mod.rs).
+    static ENV_LOCK: &std::sync::Mutex<()> = &TEST_ENV_LOCK;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let old_value = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old_value }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old_value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn write_claude_session(path: &Path, session_id: &str) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
+        std::fs::write(
+            path,
+            format!(
+                "{{\"sessionId\":\"{session_id}\",\"cwd\":\"/tmp/project\",\"timestamp\":\"2026-03-06T10:00:00Z\"}}\n\
+                 {{\"message\":{{\"role\":\"user\",\"content\":\"hello\"}},\"timestamp\":\"2026-03-06T10:01:00Z\"}}\n",
+            ),
+        )
+        .expect("write source");
+    }
+
+    fn request_for(path: &Path, session_id: &str) -> DeleteSessionRequest {
+        DeleteSessionRequest {
+            provider_id: "claude".to_string(),
+            session_id: session_id.to_string(),
+            source_path: path.to_string_lossy().to_string(),
+            locator: Some(super::super::types::SessionLocator::File {
+                path: path.to_string_lossy().to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn batch_archive_moves_all_sessions_to_archive_root() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let s1 = projects.join("folder-a").join("s1.jsonl");
+        let s2 = projects.join("folder-b").join("s2.jsonl");
+        write_claude_session(&s1, "id-1");
+        write_claude_session(&s2, "id-2");
+
+        let outcomes = archive_sessions(
+            &registry,
+            &[request_for(&s1, "id-1"), request_for(&s2, "id-2")],
+        );
+
+        assert_eq!(outcomes.len(), 2);
+        for outcome in &outcomes {
+            assert!(outcome.success, "expected success: {:?}", outcome.error);
+            assert_eq!(outcome.error, None);
+        }
+        assert!(archived.join("folder-a").join("s1.jsonl").exists());
+        assert!(archived.join("folder-b").join("s2.jsonl").exists());
+        assert!(!s1.exists(), "source should be gone from active root");
+        assert!(!s2.exists(), "source should be gone from active root");
+    }
+
+    #[test]
+    fn batch_restore_moves_all_sessions_back_to_active_root() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let a1 = archived.join("folder-a").join("s1.jsonl");
+        let a2 = archived.join("folder-b").join("s2.jsonl");
+        write_claude_session(&a1, "id-1");
+        write_claude_session(&a2, "id-2");
+
+        let outcomes = restore_sessions(
+            &registry,
+            &[request_for(&a1, "id-1"), request_for(&a2, "id-2")],
+        );
+
+        assert_eq!(outcomes.len(), 2);
+        for outcome in &outcomes {
+            assert!(outcome.success, "expected success: {:?}", outcome.error);
+        }
+        assert!(projects.join("folder-a").join("s1.jsonl").exists());
+        assert!(projects.join("folder-b").join("s2.jsonl").exists());
+        assert!(!a1.exists(), "source should be gone from archive root");
+        assert!(!a2.exists(), "source should be gone from archive root");
+    }
+
+    #[test]
+    fn batch_archive_reports_missing_source_without_aborting_batch() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let valid = projects.join("folder-a").join("valid.jsonl");
+        let stale = projects.join("folder-a").join("stale.jsonl");
+        write_claude_session(&valid, "valid-id");
+        // stale.jsonl is never written: simulates a sourcePath that went away
+        // between listing and the batch operation.
+
+        let outcomes = archive_sessions(
+            &registry,
+            &[request_for(&valid, "valid-id"), request_for(&stale, "stale-id")],
+        );
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].success, "valid item must still move");
+        assert_eq!(outcomes[0].error, None);
+        assert!(archived.join("folder-a").join("valid.jsonl").exists());
+        assert!(!valid.exists());
+
+        assert!(!outcomes[1].success, "missing source must be reported");
+        assert!(outcomes[1]
+            .error
+            .as_deref()
+            .expect("error string")
+            .contains("session source not found"));
+    }
+
+    #[test]
+    fn batch_archive_reports_unknown_provider_without_aborting_batch() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let valid = projects.join("folder-a").join("valid.jsonl");
+        write_claude_session(&valid, "valid-id");
+
+        let mut bogus = request_for(&valid, "other-id");
+        bogus.provider_id = "no-such-provider".to_string();
+        // Give the bogus item its own (nonexistent) path so assertions on the
+        // valid item's file movement stay unambiguous.
+        bogus.source_path = projects.join("folder-a").join("other.jsonl").to_string_lossy().to_string();
+
+        let outcomes = archive_sessions(&registry, &[request_for(&valid, "valid-id"), bogus]);
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].success, "valid item must still move");
+        assert!(archived.join("folder-a").join("valid.jsonl").exists());
+        assert!(!outcomes[1].success, "unknown provider must be reported");
+        assert_eq!(
+            outcomes[1].error.as_deref(),
+            Some("Unknown provider: no-such-provider")
+        );
+    }
+
+    #[test]
+    fn batch_archive_rejects_session_id_mismatch_and_file_survives() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let source = projects.join("folder-a").join("s1.jsonl");
+        write_claude_session(&source, "real-id");
+
+        let outcomes = archive_sessions(
+            &registry,
+            &[request_for(&source, "wrong-id"), request_for(&source, "real-id")],
+        );
+
+        assert_eq!(outcomes.len(), 2);
+        // First item: mismatch rejected, file untouched at that point.
+        assert!(!outcomes[0].success, "mismatched id must be rejected");
+        let err = outcomes[0].error.as_deref().expect("error string");
+        assert!(
+            err.contains("session ID mismatch") || err.contains("ID mismatch"),
+            "error should mention ID mismatch: {err}"
+        );
+        // Second item (correct id) still succeeds: the batch does not abort.
+        assert!(outcomes[1].success, "correct id must still move: {:?}", outcomes[1].error);
+        assert!(archived.join("folder-a").join("s1.jsonl").exists());
+        assert!(!source.exists(), "file ends up moved exactly once");
+    }
+
+    fn build_provider_registry_for_tests() -> ProviderRegistry {
+        // A fresh registry with the real Claude provider: enough for the batch
+        // operations under test (they only need &ProviderRegistry).
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(crate::session_manager::providers::claude::ClaudeProvider));
+        registry
+    }
+}
+
 pub fn restore_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,

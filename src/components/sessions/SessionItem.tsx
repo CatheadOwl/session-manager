@@ -49,11 +49,22 @@ export const SessionItem = memo(function SessionItem({
     [session.summary, search],
   );
 
+  // A div with button semantics, not a <button>: the item embeds CopyButton,
+  // and nested buttons are invalid HTML (React warns) with broken a11y —
+  // screen readers announce the outer button only and keyboard activation
+  // of the inner copy control becomes unreliable.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={`session-item ${selected ? "selected" : ""}${isSelectionSelected ? " selection-selected" : ""}`}
       onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
     >
       <div className="session-item-header">
         <span
@@ -79,7 +90,7 @@ export const SessionItem = memo(function SessionItem({
           />
         </span>
       </div>
-    </button>
+    </div>
   );
 }, (prev, next) => {
   return (

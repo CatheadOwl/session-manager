@@ -160,7 +160,15 @@
   background: rgba(255, 255, 255, 0.72);
   color: inherit;
   text-align: left;
+  cursor: pointer;
   transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+/* The item is a div[role=button] (nested real buttons inside are invalid
+   HTML), so the focus ring is explicit rather than the browser default. */
+.session-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .session-item:hover {

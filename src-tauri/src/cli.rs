@@ -113,10 +113,12 @@ pub enum CliCommand {
 }
 
 /// True when the process should run in CLI mode: the first argument is a
-/// known subcommand or a root help/version flag. Anything else (including
-/// stray flags) falls through to the GUI so GUI launches never break on
-/// unexpected args — but root `--help`/`--version` must answer on the
-/// console, never open a window.
+/// known subcommand (including clap's built-in bare `help`, which our own
+/// `--help` output advertises under Commands — it must reach clap, not the
+/// GUI) or a root help/version flag. Anything else (including stray flags)
+/// falls through to the GUI so GUI launches never break on unexpected
+/// args — but root `--help`/`--version` must answer on the console, never
+/// open a window.
 pub fn is_cli_invocation() -> bool {
     is_cli_arg(std::env::args().nth(1).as_deref())
 }
@@ -124,7 +126,8 @@ pub fn is_cli_invocation() -> bool {
 fn is_cli_arg(arg: Option<&str>) -> bool {
     matches!(
         arg,
-        Some("export") | Some("agents") | Some("--help") | Some("-h") | Some("--version") | Some("-V")
+        Some("export") | Some("agents") | Some("help") | Some("--help") | Some("-h")
+            | Some("--version") | Some("-V")
     )
 }
 
@@ -471,6 +474,25 @@ mod tests {
         // clap's built-in `help` subcommand (clig.dev: git-style help access).
         let err = Cli::try_parse_from(["session-manager", "help", "export"]).expect_err("displays help");
         assert!(err.to_string().contains("Usage"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn bare_help_subcommand_dispatches_to_cli() {
+        // The dispatch entry, not just clap: `--help` output advertises the
+        // built-in `help` subcommand under Commands, so a bare `help` must
+        // route into run_cli() — falling through to the GUI here would
+        // break the advertised contract (regression guard, workunit
+        // 20260910-1421: this was exactly the missed leg — clap-level
+        // tests passed while the whitelist dropped the arg).
+        assert!(is_cli_arg(Some("help")));
+        assert!(is_cli_arg(Some("export")));
+        assert!(is_cli_arg(Some("--help")));
+        // Stray/unknown args still fall through to the GUI (dispatch by
+        // whitelist, not "any arg is CLI" — GUI launches must survive
+        // unexpected argv).
+        assert!(!is_cli_arg(Some("--unknown-flag")));
+        assert!(!is_cli_arg(None));
+        assert!(!is_cli_arg(Some("Help")));
     }
 
     #[test]

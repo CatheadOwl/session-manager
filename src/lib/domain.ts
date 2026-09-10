@@ -16,6 +16,12 @@ const locatorKeyPart = (session: SessionMeta): string => {
     return `file:${session.locator.path}`;
   }
 
+  // Correctness: remote keys must carry sourceId — two sources with the same
+  // remote path would otherwise collide with each other and with file keys.
+  if (session.locator?.kind === "remote") {
+    return `remote:${session.locator.sourceId}:${session.locator.path}`;
+  }
+
   return `file:${session.sourcePath ?? ""}`;
 };
 
@@ -41,7 +47,9 @@ export interface SessionLifecycleOperationOptions {
 export const getLifecycleOperationOptions = (
   session: SessionMeta,
 ): SessionLifecycleOperationOptions | undefined => {
-  if (session.locator?.kind === "database") {
+  // Remote-backed sessions are read-only (ADR 0007): no archive/restore/
+  // delete, mirroring the database-locator rejection above.
+  if (session.locator?.kind === "database" || session.locator?.kind === "remote") {
     return undefined;
   }
 

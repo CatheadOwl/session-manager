@@ -87,6 +87,17 @@ describe("getSessionKey", () => {
       ),
     ).toBe("claude:row-a:database:/data/opencode.db:row-a");
   });
+
+  it("carries sourceId in remote keys — same remote path under two sources must not collide", () => {
+    const base = { kind: "remote", path: "/home/admin/.claude/projects/a/uuid.jsonl" } as const;
+    const left = getSessionKey(session({ locator: { ...base, sourceId: "ali-server" } }));
+    const right = getSessionKey(session({ locator: { ...base, sourceId: "other-host" } }));
+
+    expect(left).toBe("claude:s1:remote:ali-server:/home/admin/.claude/projects/a/uuid.jsonl");
+    expect(left).not.toBe(right);
+    // Must not collide with a local file key for a same-shaped path either.
+    expect(getSessionKey(session({ sourcePath: base.path }))).not.toBe(left);
+  });
 });
 
 describe("getMetadataKey", () => {
@@ -124,6 +135,20 @@ describe("lifecycle operation support", () => {
     const meta = session({
       sourcePath: "/data/opencode.db",
       locator: { kind: "database", path: "/data/opencode.db", recordId: "row-a" },
+    });
+
+    expect(getLifecycleOperationOptions(meta)).toBeUndefined();
+    expect(supportsLifecycleOperations(meta)).toBe(false);
+  });
+
+  it("rejects remote-backed sessions — read-only per ADR 0007", () => {
+    const meta = session({
+      sourcePath: "/home/admin/.claude/projects/a/uuid.jsonl",
+      locator: {
+        kind: "remote",
+        sourceId: "ali-server",
+        path: "/home/admin/.claude/projects/a/uuid.jsonl",
+      },
     });
 
     expect(getLifecycleOperationOptions(meta)).toBeUndefined();

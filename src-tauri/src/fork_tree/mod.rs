@@ -206,6 +206,7 @@ fn supports_fork_tree(session: &session_manager::SessionMeta) -> bool {
         && !matches!(
             session.locator.as_ref(),
             Some(session_manager::SessionLocator::Database { .. })
+                | Some(session_manager::SessionLocator::Remote { .. })
         )
 }
 

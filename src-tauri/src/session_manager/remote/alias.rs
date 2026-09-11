@@ -444,8 +444,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn tilde_backslash_form_expands() {
-        // Hand-edited files on Windows may use backslash separators.
+        // Hand-edited files on Windows may use backslash separators. On unix
+        // a backslash is not a path separator, so this expectation — and the
+        // `~\` tolerance in expand_tilde — only hold on Windows.
         let home = dirs::home_dir().expect("home");
         assert_eq!(
             expand_tilde("~\\.ssh\\id_ed25519"),

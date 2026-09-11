@@ -29,8 +29,8 @@ pub fn parse_session_meta(registry: &ProviderRegistry, path: &Path) -> Option<Se
 // Re-export public types and functions
 pub use types::{
     CumulativeTokenUsage, DeleteSessionOutcome, DeleteSessionRequest, ExportOutcome,
-    SessionDetail, SessionHandle, SessionHandleRequest, SessionLocator, SessionMessage,
-    SessionMeta, SessionScope, TokenUsage, ToolCallInfo,
+    ExportSkippedItem, SessionDetail, SessionHandle, SessionHandleRequest, SessionLocator,
+    SessionMessage, SessionMeta, SessionScope, TokenUsage, ToolCallInfo,
 };
 
 // Registry-aware re-exports: these functions now require a registry reference.
@@ -49,8 +49,8 @@ pub use scan::scan_sessions_with_scope;
 
 // Q&A export capability (time-ranged, session-level, provenance-preserving).
 pub use export::{
-    export_qa_sessions, export_qa_sessions_for_metas, render_export, write_export_file,
-    QaExportFormat,
+    export_qa_sessions, export_qa_sessions_for_metas_with_overrides, render_export,
+    write_export_file, QaExportFormat,
 };
 
 /// Build and return the provider registry with all built-in providers registered.

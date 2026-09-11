@@ -303,12 +303,79 @@ fn default_export_format() -> String {
     "json".to_string()
 }
 
+/// Bridge the Remote-locator metas of an export selection into local cache
+/// copies before the blocking distill core runs (workunit
+/// 20260911-1031-remote-qa-export). Each Remote meta is fetched via
+/// `resolve_remote_to_local` — the same bridge as `get_session_messages`
+/// (ADR 0007 cache exit: mtime+size-gated, re-exports of the same sessions
+/// are free) — and its local path is returned as a load override keyed by
+/// the meta's index in the returned list. A meta whose fetch fails (source
+/// disabled/unreachable, transfer error) is pre-skipped and REMOVED from
+/// the list so the core records exactly one skip per item, never two.
+pub(crate) async fn bridge_remote_export_metas(
+    ssh_sources: &[SshSource],
+    pool: &crate::session_manager::remote::RemoteSessionPool,
+    sessions: Vec<session_manager::SessionMeta>,
+) -> (
+    Vec<session_manager::SessionMeta>,
+    std::collections::HashMap<usize, std::path::PathBuf>,
+    Vec<session_manager::ExportSkippedItem>,
+) {
+    let mut metas = Vec::with_capacity(sessions.len());
+    let mut overrides = std::collections::HashMap::new();
+    let mut skipped = Vec::new();
+    for meta in sessions {
+        let remote_locator = match &meta.locator {
+            Some(loc @ session_manager::SessionLocator::Remote { .. }) => loc.clone(),
+            _ => {
+                metas.push(meta);
+                continue;
+            }
+        };
+        let handle = session_manager::SessionHandle {
+            provider_id: meta.provider_id.clone(),
+            session_id: meta.session_id.clone(),
+            locator: remote_locator,
+        };
+        match resolve_remote_to_local(ssh_sources, pool, &handle).await {
+            Ok(Some(bridged)) => match &bridged.locator {
+                session_manager::SessionLocator::File { path } => {
+                    overrides.insert(metas.len(), std::path::PathBuf::from(path));
+                    metas.push(meta);
+                }
+                // Unreachable by construction: the bridge resolves to a
+                // File locator backed by the transient cache.
+                _ => skipped.push(remote_fetch_skip(&meta, "remote bridge returned no local path")),
+            },
+            Ok(None) => skipped.push(remote_fetch_skip(&meta, "remote bridge returned no local path")),
+            Err(err) => skipped.push(remote_fetch_skip(&meta, err)),
+        }
+    }
+    (metas, overrides, skipped)
+}
+
+fn remote_fetch_skip(
+    meta: &session_manager::SessionMeta,
+    error: impl Into<String>,
+) -> session_manager::ExportSkippedItem {
+    session_manager::ExportSkippedItem {
+        provider_id: meta.provider_id.clone(),
+        session_id: meta.session_id.clone(),
+        error: error.into(),
+    }
+}
+
 /// Adapter for the export core: translates parameters, delegates all logic
 /// to `session_manager::export_qa_sessions`, renders, and writes the file.
+/// Remote-locator metas in an explicit selection are bridged first (see
+/// [`bridge_remote_export_metas`]); the None branch (time-window scan, the
+/// future CLI path) stays local-only — the scan's extra sources are local
+/// mirrors by definition (ADR 0011).
 #[tauri::command]
 pub async fn export_qa_sessions(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
     settings: tauri::State<'_, SettingsManager>,
+    remote: tauri::State<'_, RemoteScanState>,
     options: ExportQaSessionsOptions,
 ) -> Result<session_manager::ExportOutcome, String> {
     let session_scope = match options.scope.as_str() {
@@ -318,23 +385,31 @@ pub async fn export_qa_sessions(
     let format = session_manager::QaExportFormat::parse(&options.format)?;
 
     let extra_sources = settings.enabled_sources();
-    let batch = run_blocking!(
-        registry,
-        reg,
-        match options.sessions {
-            Some(ref sessions) => {
-                session_manager::export_qa_sessions_for_metas(&reg, sessions)
-            }
-            None => session_manager::export_qa_sessions(
+    let batch = if let Some(sessions) = options.sessions {
+        let (metas, overrides, pre_skipped) =
+            bridge_remote_export_metas(&enabled_ssh_sources(&settings), &remote.pool, sessions)
+                .await;
+        let mut batch = run_blocking!(
+            registry,
+            reg,
+            session_manager::export_qa_sessions_for_metas_with_overrides(&reg, &metas, &overrides)
+        );
+        batch.skipped.extend(pre_skipped);
+        batch
+    } else {
+        run_blocking!(
+            registry,
+            reg,
+            session_manager::export_qa_sessions(
                 &reg,
                 &session_scope,
                 options.from,
                 options.to,
                 options.providers.as_deref(),
                 &extra_sources,
-            ),
-        }
-    );
+            )
+        )
+    };
 
     let content = session_manager::render_export(&batch, options.from, options.to, format, true)?;
     let dest = std::path::PathBuf::from(&options.dest_path);

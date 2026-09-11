@@ -240,6 +240,142 @@ fn load_messages(
         .expect("message load via resolved local copy")
 }
 
+/// QA-export bridge E2E (workunit 20260911-1031): runs the REAL backend
+/// export path against a real ssh-config alias — scan →
+/// `bridge_remote_export_metas` (the command layer's bridge, verbatim) →
+/// `export_qa_sessions_for_metas_with_overrides` → `render_export` →
+/// `write_export_file` — i.e. everything `export_qa_sessions` does minus
+/// the Tauri IPC shell and the native dialogs (those are covered by the
+/// mocked frontend tests). The GUI therefore does not have to be the
+/// first place this path runs.
+///
+/// ```text
+/// REMOTE_E2E_ALIAS=mac \
+/// REMOTE_E2E_SOURCE_ID=mac \
+/// cargo test --offline remote_e2e_qa_export -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "needs a real ssh config alias (REMOTE_E2E_ALIAS) to a populated host"]
+async fn remote_e2e_qa_export_ssh_alias() {
+    let alias = std::env::var("REMOTE_E2E_ALIAS").expect(
+        "REMOTE_E2E_ALIAS not set — point it at a Host alias in ~/.ssh/config \
+         whose machine has populated provider roots",
+    );
+    let source = SshSource {
+        id: std::env::var("REMOTE_E2E_SOURCE_ID").unwrap_or_else(|_| "e2e-alias".into()),
+        label: None,
+        host: alias.clone(),
+        port: 22,
+        user: String::new(),
+        auth: SourceAuth::SshConfig {
+            alias: alias.clone(),
+        },
+        enabled: true,
+        extra: Default::default(),
+    };
+    let sid = source.id.clone();
+    let registry = build_provider_registry();
+
+    // 1. Real scan → real Remote-locator metas (first three sessions).
+    let state = crate::session_manager::remote::RemoteScanState::new();
+    let session = state
+        .pool
+        .get(&source)
+        .await
+        .expect("connect + auth via alias");
+    let result = state
+        .scan_source(&registry, session, &source, &SessionScope::Active)
+        .await;
+    let mut metas = result.sessions;
+    assert!(
+        !metas.is_empty(),
+        "aliased machine has no sessions in its standard provider roots"
+    );
+    metas.truncate(3);
+
+    // 2. The command-layer bridge, verbatim: fetch each remote meta into
+    //    the transient cache, producing load overrides + pre-skips.
+    let sources = vec![source.clone()];
+    let t = Instant::now();
+    let (bridged_metas, overrides, pre_skipped) =
+        crate::commands::session_manager::bridge_remote_export_metas(
+            &sources,
+            &state.pool,
+            metas.clone(),
+        )
+        .await;
+    println!(
+        "[e2e-qa] bridge: {} overridden, {} pre-skipped in {} ms",
+        overrides.len(),
+        pre_skipped.len(),
+        t.elapsed().as_millis()
+    );
+    assert_eq!(bridged_metas.len(), metas.len());
+    assert!(pre_skipped.is_empty(), "a healthy source must not pre-skip");
+    assert_eq!(overrides.len(), metas.len(), "every remote meta got an override");
+
+    // 3. Distill core with overrides, then render + write like the command.
+    let batch = crate::session_manager::export_qa_sessions_for_metas_with_overrides(
+        &registry,
+        &bridged_metas,
+        &overrides,
+    );
+    assert_eq!(
+        batch.sessions.len(),
+        metas.len(),
+        "every bridged remote session must export (skipped: {:?})",
+        batch.skipped
+    );
+    for exported in &batch.sessions {
+        assert!(
+            matches!(
+                exported.provenance.locator.as_ref(),
+                Some(SessionLocator::Remote { source_id, .. }) if source_id == &sid
+            ),
+            "provenance must keep the Remote locator anchored to {sid}"
+        );
+    }
+    let total_qa: usize = batch.sessions.iter().map(|s| s.qa.len()).sum();
+    println!("[e2e-qa] exported {} sessions, {} qa pairs total", batch.sessions.len(), total_qa);
+
+    let content = crate::session_manager::render_export(
+        &batch,
+        0,
+        4_102_444_800_000,
+        crate::session_manager::QaExportFormat::Json,
+        true,
+    )
+    .expect("render");
+    let dest = tempfile::tempdir().expect("tempdir").path().join("qa-e2e.json");
+    crate::session_manager::write_export_file(&dest, &content, false).expect("write export file");
+    let written = std::fs::read_to_string(&dest).expect("read back");
+    assert!(written.contains(&sid), "rendered export names the source id");
+    assert!(
+        written.contains(".jsonl"),
+        "rendered export carries remote file paths in provenance"
+    );
+    println!(
+        "[e2e-qa] file {} written, {} bytes, provenance verified",
+        dest.display(),
+        written.len()
+    );
+
+    // 4. Cache re-export: the same selection bridges again without network
+    //    transfers (report-only timing; freshness semantics are pinned by
+    //    the G2.2 structural asserts).
+    let t = Instant::now();
+    let (m2, o2, s2) =
+        crate::commands::session_manager::bridge_remote_export_metas(&sources, &state.pool, metas)
+            .await;
+    println!(
+        "[e2e-qa] second bridge (cache hits): {} ms",
+        t.elapsed().as_millis()
+    );
+    assert_eq!(m2.len(), bridged_metas.len());
+    assert_eq!(o2.len(), overrides.len());
+    assert!(s2.is_empty());
+}
+
 /// ADR 0010 sshConfig-mode E2E (G2.1 scope): when `REMOTE_E2E_ALIAS` is
 /// set, build the source with `auth: { mode: "sshConfig", alias }` —
 /// host/user/port/key all come from the real `~/.ssh/config` Host

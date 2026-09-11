@@ -23,14 +23,15 @@ const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
 const LARGE_EXPORT_THRESHOLD = 50;
 
 /**
- * Remote-backed sessions (SSH sources, ADR 0007) are read-only and their
- * content is not fetched for export in v1: filter them out of the export
- * request BEFORE it is built (P0b B3 — fail earlier, keep the export log
- * clean). The Rust core still skips any remote session defensively (its
- * `skipped` path); this pre-filter is the primary gate.
+ * Remote-backed sessions (SSH sources) export like local ones since the
+ * 20260911 bridge (workunit 20260911-1031-remote-qa-export): the backend
+ * fetches their content into the transient cache (first fetch ~0.2s/file,
+ * P3 bench; re-exports free) and keeps the remote locator in provenance.
+ * A per-item fetch failure surfaces as that session being `skipped`, never
+ * an aborted batch — so no pre-filter is needed here anymore.
  */
-export const filterExportableSessions = (sessions: SessionMeta[]): SessionMeta[] =>
-  sessions.filter((session) => session.locator?.kind !== "remote");
+export const countRemoteSessions = (sessions: SessionMeta[]): number =>
+  sessions.filter((session) => session.locator?.kind === "remote").length;
 
 /**
  * Q&A export orchestration: native save dialog → backend export command →
@@ -54,22 +55,20 @@ export function useQaExport(scope: "active" | "archived") {
         setStatus({ state: "error", message: "No visible sessions to export." });
         return;
       }
-      // Remote sessions never enter the request (see filterExportableSessions).
-      const exportable = filterExportableSessions(sessions);
-      if (exportable.length === 0) {
-        setStatus({
-          state: "error",
-          message: "No exportable sessions — SSH remote sessions are read-only.",
-        });
-        return;
-      }
 
       // Large exports: native confirm BEFORE the save dialog (the user
       // should know the cost before picking a destination). Cancel aborts
-      // silently, same as cancelling the save dialog.
-      if (exportable.length > LARGE_EXPORT_THRESHOLD) {
+      // silently, same as cancelling the save dialog. Remote sessions add a
+      // first-fetch SSH transfer (~0.2s each, P3 bench) — called out in the
+      // message so the count alone doesn't understate the cost.
+      const remoteCount = countRemoteSessions(sessions);
+      if (sessions.length > LARGE_EXPORT_THRESHOLD) {
+        const remoteNote =
+          remoteCount > 0
+            ? ` It includes ${remoteCount} remote session(s) fetched over SSH on first export (cached afterwards).`
+            : "";
         const ok = await confirm(
-          `Export ${exportable.length} sessions? Large exports take a while and cannot be cancelled mid-run.`,
+          `Export ${sessions.length} sessions? Large exports take a while and cannot be cancelled mid-run.${remoteNote}`,
           { title: "Large Q&A export", kind: "warning" },
         );
         if (!ok) return;
@@ -94,7 +93,7 @@ export function useQaExport(scope: "active" | "archived") {
           scope,
           from: range.from,
           to: range.to,
-          sessions: exportable,
+          sessions,
           destPath,
           format,
           // The native save dialog already asked "replace file?" — a returned

@@ -212,7 +212,7 @@ describe("SessionList", () => {
     expect(screen.getByTestId("selected-keys")).toHaveTextContent("");
   });
 
-  it("hover on the export button states the exportable count and remote exclusions", () => {
+  it("hover on the export button states the exportable count and remote sub-count", () => {
     const sessions = [session("one"), session("two"), remoteSession("srv")];
 
     renderList(sessions, { preset: "7d" });
@@ -220,8 +220,9 @@ describe("SessionList", () => {
     const title = screen
       .getByRole("button", { name: /Export Q&A/i })
       .getAttribute("title");
-    expect(title).toContain("2 session(s)");
-    expect(title).toContain("+1 remote, excluded");
+    expect(title).toContain("3 session(s)");
+    expect(title).toContain("(1 remote)");
+    expect(title).not.toContain("excluded");
     expect(title).not.toContain("selected in this view");
   });
 

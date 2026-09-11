@@ -8,7 +8,7 @@ import { TreeView } from "./TreeView";
 import { ExportQaControls } from "./ExportQaControls";
 import { getSessionKey, supportsLifecycleOperations } from "@/lib/domain";
 import type { QaExportStatus } from "@/hooks/useQaExport";
-import { filterExportableSessions } from "@/hooks/useQaExport";
+import { countRemoteSessions } from "@/hooks/useQaExport";
 import type { TimeRange, TimeRangePreset } from "@/utils/time-range";
 
 // ─── Selection context (ref-based, avoids re-render on mode toggle) ────────
@@ -112,19 +112,15 @@ export const SessionList = memo(function SessionList({
   const modeRef = useRef(selectionMode);
   modeRef.current = selectionMode;
 
-  // Hover transparency for the export button: the same pre-filter
-  // (filterExportableSessions) that useQaExport applies when building the
-  // request — remote sessions are excluded before export, so the hover count
-  // must match what the backend will actually receive. Counts derive from
-  // exportSessions (the page's resolved list), not the full visible list, so
-  // selection-mode narrowing is reflected here. The checked set is itself
-  // kept inside the visible list by the page, so there is no hidden
-  // selection to account for.
-  const exportableCount = useMemo(
-    () => filterExportableSessions(exportSessions).length,
-    [exportSessions],
-  );
-  const remoteExcludedCount = exportSessions.length - exportableCount;
+  // Hover transparency for the export button: every session in
+  // exportSessions enters the export request (remote sessions export since
+  // the 20260911 bridge), so the hover count is the plain list length. The
+  // remote sub-count is surfaced for the "(N remote)" hover note — remote
+  // sessions cost a first-fetch SSH transfer the user should see coming.
+  // Counts derive from exportSessions (the page's resolved list), not the
+  // full visible list, so selection-mode narrowing is reflected here.
+  const exportableCount = useMemo(() => exportSessions.length, [exportSessions]);
+  const remoteCount = useMemo(() => countRemoteSessions(exportSessions), [exportSessions]);
 
   const ctxValue = useMemo<SelectionCtxValue>(
     () => ({ modeRef, toggleSessionSelection: onToggleSessionSelection }),
@@ -237,7 +233,7 @@ export const SessionList = memo(function SessionList({
           onExport={onExportQa}
           exportStatus={exportStatus}
           exportableCount={exportableCount}
-          remoteExcludedCount={remoteExcludedCount}
+          remoteCount={remoteCount}
           selectionMode={selectionMode}
         />
 

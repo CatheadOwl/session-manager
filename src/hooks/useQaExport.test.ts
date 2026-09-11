@@ -61,9 +61,9 @@ describe("useQaExport", () => {
     expect(result.current.status.message).toContain("No visible sessions");
   });
 
-  it("prefilters remote sessions out of the export request", async () => {
+  it("includes remote sessions in the export request", async () => {
     mocks.save.mockResolvedValue("/tmp/out.json");
-    mocks.invoke.mockResolvedValue({ count: 1, skipped: [], destPath: "/tmp/out.json" });
+    mocks.invoke.mockResolvedValue({ count: 2, skipped: [], destPath: "/tmp/out.json" });
 
     const local: SessionMeta = {
       providerId: "claude",
@@ -82,15 +82,19 @@ describe("useQaExport", () => {
       await result.current.exportRange(RANGE, [local, remote]);
     });
 
-    // Pin (P0b B3): remote sessions never enter the request; the local
-    // sibling still exports.
+    // Pin (20260911 bridge): remote sessions enter the request like local
+    // ones — the backend fetches them into the transient cache and keeps
+    // the remote locator in provenance.
     expect(mocks.invoke).toHaveBeenCalledWith("export_qa_sessions", {
-      options: expect.objectContaining({ sessions: [local] }),
+      options: expect.objectContaining({ sessions: [local, remote] }),
     });
     expect(result.current.status.state).toBe("done");
   });
 
-  it("errors without invoking when every visible session is remote", async () => {
+  it("exports when every visible session is remote (no read-only refusal)", async () => {
+    mocks.save.mockResolvedValue("/tmp/out.json");
+    mocks.invoke.mockResolvedValue({ count: 1, skipped: [], destPath: "/tmp/out.json" });
+
     const remote: SessionMeta = {
       providerId: "claude",
       sessionId: "r1",
@@ -102,10 +106,8 @@ describe("useQaExport", () => {
       await result.current.exportRange(RANGE, [remote]);
     });
 
-    expect(mocks.save).not.toHaveBeenCalled();
-    expect(mocks.invoke).not.toHaveBeenCalled();
-    expect(result.current.status.state).toBe("error");
-    expect(result.current.status.message).toContain("read-only");
+    expect(mocks.invoke).toHaveBeenCalled();
+    expect(result.current.status.state).toBe("done");
   });
 
   it("errors when no concrete time range is selected", async () => {
@@ -137,6 +139,61 @@ describe("useQaExport", () => {
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1);
     expect(mocks.save).toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalled();
+  });
+
+  it("mentions the remote sub-count in the large-export confirmation", async () => {
+    mocks.save.mockResolvedValue("/tmp/out.json");
+    mocks.invoke.mockResolvedValue({ count: 51, skipped: [], destPath: "/tmp/out.json" });
+
+    const sessions = [
+      ...manySessions(49),
+      {
+        providerId: "claude",
+        sessionId: "r1",
+        locator: { kind: "remote" as const, sourceId: "ali-server", path: "/home/u/r1.jsonl" },
+      },
+      {
+        providerId: "claude",
+        sessionId: "r2",
+        locator: { kind: "remote" as const, sourceId: "ali-server", path: "/home/u/r2.jsonl" },
+      },
+    ];
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, sessions);
+    });
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    const message = mocks.confirm.mock.calls[0][0] as string;
+    expect(message).toContain("2 remote session(s)");
+    expect(mocks.invoke).toHaveBeenCalled();
+  });
+
+  it("does not confirm for a small all-remote export (fetch cost ~0.2s/file)", async () => {
+    mocks.save.mockResolvedValue("/tmp/out.json");
+    mocks.invoke.mockResolvedValue({ count: 2, skipped: [], destPath: "/tmp/out.json" });
+
+    const sessions: SessionMeta[] = [
+      {
+        providerId: "claude",
+        sessionId: "r1",
+        locator: { kind: "remote", sourceId: "ali-server", path: "/home/u/r1.jsonl" },
+      },
+      {
+        providerId: "claude",
+        sessionId: "r2",
+        locator: { kind: "remote", sourceId: "ali-server", path: "/home/u/r2.jsonl" },
+      },
+    ];
+
+    const { result } = renderHook(() => useQaExport("active"));
+    await act(async () => {
+      await result.current.exportRange(RANGE, sessions);
+    });
+
+    expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalled();
   });
 

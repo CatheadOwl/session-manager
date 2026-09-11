@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Q&A export now follows manual selection: in selection mode, export covers the checked sessions (the button hover states the count; nothing checked disables export).
+- Q&A export now covers SSH remote sessions: their content is fetched over SSH on first export (~0.2s per session, cached afterwards — re-exports are free) and the export provenance records the remote source and path. A remote session that fails to fetch is skipped individually; the rest of the export continues. The large-export confirmation and the button hover now state how many remote sessions are included.
 
 ### Changed
 

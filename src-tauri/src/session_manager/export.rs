@@ -12,8 +12,8 @@ use super::providers::ProviderRegistry;
 use super::scan::scan_sessions_with_scope;
 use super::settings::SourceEntry;
 use super::types::{
-    ExportSkippedItem, QaEntry, QaExportBatch, QaSessionExport, SessionHandle, SessionMeta,
-    SessionProvenance, SessionScope,
+    ExportSkippedItem, QaEntry, QaExportBatch, QaSessionExport, SessionHandle, SessionLocator,
+    SessionMeta, SessionProvenance, SessionScope,
 };
 use std::time::Instant;
 
@@ -53,7 +53,7 @@ pub fn export_qa_sessions(
     let mut skipped = Vec::new();
 
     for meta in &selected {
-        export_one(registry, meta, &mut sessions, &mut skipped);
+        export_one(registry, meta, None, &mut sessions, &mut skipped);
     }
 
     log::debug!(
@@ -73,18 +73,34 @@ pub fn export_qa_sessions(
 /// narrowing in selection mode) selects the sessions and passes their
 /// `SessionMeta`; this core only distills and assembles provenance.
 /// Selection logic stays out of the core by design.
-pub fn export_qa_sessions_for_metas(
+///
+/// `overrides` maps a meta's INDEX to a local file path holding its content —
+/// the command layer's bridge (`resolve_remote_to_local` → transient cache
+/// copy) for Remote-locator metas (ADR 0007 cache exit; workunit
+/// 20260911-1031-remote-qa-export). Pass an empty map for local-only
+/// selections; a Remote meta WITHOUT an override keeps the backstop
+/// behavior: rejected into `skipped`, batch continues.
+///
+/// Load path only: an overridden meta loads from the local copy while
+/// `provenance` keeps the ORIGINAL locator (the remote source/path — never
+/// the scratch cache path).
+pub fn export_qa_sessions_for_metas_with_overrides(
     registry: &ProviderRegistry,
     metas: &[SessionMeta],
+    overrides: &std::collections::HashMap<usize, std::path::PathBuf>,
 ) -> QaExportBatch {
     let start = Instant::now();
-    log::debug!("qa_export_for_metas start count={}", metas.len());
+    log::debug!(
+        "qa_export_for_metas start count={} overrides={}",
+        metas.len(),
+        overrides.len()
+    );
 
     let mut sessions = Vec::with_capacity(metas.len());
     let mut skipped = Vec::new();
 
-    for meta in metas {
-        export_one(registry, meta, &mut sessions, &mut skipped);
+    for (idx, meta) in metas.iter().enumerate() {
+        export_one(registry, meta, overrides.get(&idx).map(|p| p.as_path()), &mut sessions, &mut skipped);
     }
 
     log::debug!(
@@ -99,14 +115,17 @@ pub fn export_qa_sessions_for_metas(
 }
 
 /// Load, distill, and append one session's export; record failures in
-/// `skipped` without aborting the batch.
+/// `skipped` without aborting the batch. `override_path` replaces only the
+/// LOAD path (the bridged local cache copy for a Remote meta); provenance
+/// always comes from the original `meta`.
 fn export_one(
     registry: &ProviderRegistry,
     meta: &SessionMeta,
+    override_path: Option<&Path>,
     sessions: &mut Vec<QaSessionExport>,
     skipped: &mut Vec<ExportSkippedItem>,
 ) {
-    let Some(handle) = handle_from_meta(meta) else {
+    let Some(mut handle) = handle_from_meta(meta) else {
         skipped.push(ExportSkippedItem {
             provider_id: meta.provider_id.clone(),
             session_id: meta.session_id.clone(),
@@ -114,6 +133,11 @@ fn export_one(
         });
         return;
     };
+    if let Some(path) = override_path {
+        handle.locator = SessionLocator::File {
+            path: path.to_string_lossy().into_owned(),
+        };
+    }
     match load_messages_for_handle(registry, &handle) {
         Ok(messages) => {
             let qa = extract_qa_entries(&messages);
@@ -761,12 +785,13 @@ mod tests {
         };
 
         let registry = super::super::build_provider_registry();
-        let batch = export_qa_sessions_for_metas(
+        let batch = export_qa_sessions_for_metas_with_overrides(
             &registry,
             &[
                 meta("claude", "picked", Some(projects.join("picked.jsonl").to_string_lossy().into_owned())),
                 meta("claude", "missing-file", Some(projects.join("gone.jsonl").to_string_lossy().into_owned())),
             ],
+            &std::collections::HashMap::new(),
         );
 
         assert_eq!(batch.sessions.len(), 1);
@@ -804,12 +829,13 @@ mod tests {
         let ts = "2026-09-09T10:00:00Z";
         write_claude_session_with_ts(&projects.join("local.jsonl"), "local", ts);
 
-        // Remote-backed sessions are read-only (ADR 0007): v1 export does
-        // not fetch remote content. Pin the BACKSTOP behavior — if the
-        // frontend pre-filter (useQaExport) ever leaks one through, the
-        // backend must route it to `skipped` (the default
-        // load_messages_for_handle rejects the Remote locator) instead of
-        // aborting the batch.
+        // Remote-backed sessions reach the content only through the
+        // command-layer bridge (resolve_remote_to_local → override path,
+        // workunit 20260911-1031). This pins the CORE backstop for a
+        // Remote meta arriving WITHOUT an override (bridge failure mid-batch,
+        // or a future adapter skipping the bridge): route it to `skipped`
+        // (the default load_messages_for_handle rejects the Remote locator)
+        // instead of aborting the batch.
         let remote_meta = SessionMeta {
             provider_id: "claude".to_string(),
             session_id: "remote-1".to_string(),
@@ -843,7 +869,8 @@ mod tests {
         };
 
         let registry = super::super::build_provider_registry();
-        let batch = export_qa_sessions_for_metas(&registry, &[remote_meta, local_meta]);
+        let batch =
+            export_qa_sessions_for_metas_with_overrides(&registry, &[remote_meta, local_meta], &std::collections::HashMap::new());
 
         assert_eq!(batch.sessions.len(), 1, "local session still exports");
         assert_eq!(batch.sessions[0].provenance.session_id, "local");
@@ -852,6 +879,116 @@ mod tests {
         assert!(
             batch.skipped[0].error.contains("Remote-backed"),
             "error should name the remote rejection: {}",
+            batch.skipped[0].error
+        );
+    }
+
+    #[test]
+    fn export_with_override_loads_local_copy_and_keeps_remote_provenance() {
+        use crate::config::TEST_ENV_LOCK;
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+
+        struct EnvVarGuard {
+            key: &'static str,
+            old_value: Option<std::ffi::OsString>,
+        }
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                if let Some(v) = &self.old_value {
+                    std::env::set_var(self.key, v);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+
+        let test_home = tempfile::tempdir().expect("tempdir");
+        let old = std::env::var_os("SESSION_MANAGER_TEST_HOME");
+        std::env::set_var("SESSION_MANAGER_TEST_HOME", test_home.path());
+        let _guard_env = EnvVarGuard { key: "SESSION_MANAGER_TEST_HOME", old_value: old };
+
+        // The "cache copy": a real claude session jsonl OUTSIDE any provider
+        // root (like the transient cache dir), filename-faithful to the
+        // remote file.
+        let cache_dir = test_home.path().join("cache");
+        write_claude_session_with_ts(&cache_dir.join("remote-1.jsonl"), "remote-1", "2026-09-11T10:00:00Z");
+
+        let remote_meta = SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: Some(1),
+            last_active_at: Some(2),
+            source_path: None,
+            locator: Some(SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            }),
+            resume_command: None,
+            forked_from_id: None,
+        };
+
+        let registry = super::super::build_provider_registry();
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(0usize, cache_dir.join("remote-1.jsonl"));
+        let batch =
+            export_qa_sessions_for_metas_with_overrides(&registry, &[remote_meta], &overrides);
+
+        // The override supplied the load path; the export succeeded and the
+        // provenance kept the REMOTE locator — the scratch cache path must
+        // never leak into the export.
+        assert_eq!(batch.sessions.len(), 1, "remote meta with override exports");
+        assert_eq!(batch.skipped.len(), 0);
+        let exported = &batch.sessions[0];
+        assert_eq!(exported.provenance.session_id, "remote-1");
+        match &exported.provenance.locator {
+            Some(SessionLocator::Remote { source_id, path }) => {
+                assert_eq!(source_id, "ali-server");
+                assert_eq!(path, "/home/u/.claude/projects/p/remote-1.jsonl");
+            }
+            other => panic!("provenance must keep the Remote locator, got {other:?}"),
+        }
+        assert!(!exported.qa.is_empty(), "content distilled from the cache copy");
+    }
+
+    #[test]
+    fn export_with_override_missing_local_copy_skips_that_item() {
+        use crate::config::TEST_ENV_LOCK;
+        let _guard = TEST_ENV_LOCK.lock().expect("lock");
+
+        let remote_meta = SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "remote-1".to_string(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: Some(1),
+            last_active_at: Some(2),
+            source_path: None,
+            locator: Some(SessionLocator::Remote {
+                source_id: "ali-server".to_string(),
+                path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
+            }),
+            resume_command: None,
+            forked_from_id: None,
+        };
+
+        let registry = super::super::build_provider_registry();
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(0usize, std::path::PathBuf::from("Z:/nope/remote-1.jsonl"));
+        let batch =
+            export_qa_sessions_for_metas_with_overrides(&registry, &[remote_meta], &overrides);
+
+        // The load genuinely attempted the override path (a file error, not
+        // the Remote-locator rejection) — proving the seam routed the load.
+        assert_eq!(batch.sessions.len(), 0);
+        assert_eq!(batch.skipped.len(), 1);
+        assert_eq!(batch.skipped[0].session_id, "remote-1");
+        assert!(
+            !batch.skipped[0].error.contains("Remote-backed"),
+            "error should be a load failure, not the locator rejection: {}",
             batch.skipped[0].error
         );
     }

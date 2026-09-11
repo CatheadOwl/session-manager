@@ -27,10 +27,11 @@ interface ExportQaControlsProps {
   onExport: () => void;
   exportStatus: QaExportStatus;
   /** Hover transparency: how many visible sessions the export will contain
-   *  (remote sessions are pre-filtered out by useQaExport). */
+   *  (remote sessions export like local ones since the 20260911 bridge). */
   exportableCount?: number;
-  /** How many visible sessions were excluded because they are remote-backed. */
-  remoteExcludedCount?: number;
+  /** How many of those sessions are remote-backed (first export fetches them
+   *  over SSH; surfaced so the cost is visible before the click). */
+  remoteCount?: number;
   /** Selection mode is on: the export follows the checked sessions instead
    *  of the whole visible list. */
   selectionMode?: boolean;
@@ -48,7 +49,7 @@ export const ExportQaControls = memo(function ExportQaControls({
   onExport,
   exportStatus,
   exportableCount,
-  remoteExcludedCount,
+  remoteCount,
   selectionMode = false,
 }: ExportQaControlsProps) {
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -83,23 +84,20 @@ export const ExportQaControls = memo(function ExportQaControls({
       ? "Custom range"
       : (PRESETS.find((p) => p.value === timeRange.preset)?.label ?? "All time");
 
-  // Hover states up front what the export will contain: the visible count is
-  // pre-filtered (remote sessions never enter the export request), so surface
-  // both numbers instead of letting remote exclusions happen silently. In
-  // selection mode the scope narrows to the checked sessions (the checked
-  // set is kept inside the visible list by the page, so nothing is hidden).
-  const selectedInVisibleCount =
-    exportableCount === undefined ? undefined : exportableCount + (remoteExcludedCount ?? 0);
-  // Blocked only when nothing at all is checked: checking only remote
-  // sessions keeps the button enabled — the hover discloses the exclusion
-  // and the click surfaces the remote error toast from useQaExport.
-  const selectionBlocked = selectionMode && selectedInVisibleCount === 0;
+  // Hover states up front what the export will contain: every session in
+  // the resolved list enters the request, and the remote sub-count is
+  // disclosed because those sessions add a first-fetch SSH transfer (cached
+  // afterwards). In selection mode the scope narrows to the checked
+  // sessions (the checked set is kept inside the visible list by the page,
+  // so nothing is hidden).
+  // Blocked only when nothing at all is checked.
+  const selectionBlocked = selectionMode && exportableCount === 0;
 
   const exportCountLabel =
     exportableCount === undefined
       ? ""
       : `${exportableCount} session(s)${selectionMode ? " selected" : ""}` +
-        `${remoteExcludedCount ? ` (+${remoteExcludedCount} remote, excluded)` : ""}`;
+        `${remoteCount ? ` (${remoteCount} remote)` : ""}`;
 
   return (
     <div className="export-row">

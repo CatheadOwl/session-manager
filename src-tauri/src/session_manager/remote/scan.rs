@@ -360,17 +360,46 @@ pub fn scan_remote_source_with_home(
     if files.is_empty() {
         return Ok(Vec::new());
     }
-    // Deterministic order: stable output lists (blob zip below relies on
-    // the batch protocol returning metadata in request order).
+    // Deterministic order: stable output lists.
     files.sort();
 
     let paths: Vec<RemotePath> = files.iter().map(|f| f.path.clone()).collect();
     let blobs = fetch.batch_metadata(&paths)?;
 
+    // Path-keyed join, NOT a positional zip (ADR 0013): the batch
+    // stream drops MISS lines (files deleted between discovery and
+    // batch), so a zip would shift every post-miss blob onto the wrong
+    // file (wrong provider parse) and truncate the tail. Blobs carry
+    // their own `path` — the discovery path echoed back by the remote
+    // script verbatim — so exact-match pairing is free.
+    let blobs_by_path: HashMap<&str, &FileMetadataBlob> =
+        blobs.iter().map(|b| (b.path.as_str(), b)).collect();
+    // A pairing shortfall is also the visible signature of a remote
+    // userland the script cannot stat (the macOS BSD-stat failure:
+    // every file MISS → 0 blobs → previously a silent "0 sessions"
+    // success). Warn, never silently degrade to "no sessions".
+    let paired = files
+        .iter()
+        .filter(|f| blobs_by_path.contains_key(f.path.as_str()))
+        .count();
+    if paired != files.len() {
+        log::warn!(
+            "remote scan: paired {paired}/{} discovered files with batch \
+             metadata — unpaired files skipped (vanished remotely, or a \
+             stat/userland mismatch on the remote host)",
+            files.len()
+        );
+    }
+
     let temp = tempfile::tempdir()
         .map_err(|e| RemoteError::Io(format!("scan tempdir: {e}")))?;
     let mut sessions = Vec::new();
-    for (idx, (file, blob)) in files.iter().zip(&blobs).enumerate() {
+    for (idx, file) in files.iter().enumerate() {
+        // Unpaired (MISS) files are skipped — surfaced in the pairing
+        // warn above.
+        let Some(&blob) = blobs_by_path.get(file.path.as_str()) else {
+            continue;
+        };
         // Directory ownership: the provider that owns the root the file
         // was found under owns the parse. Registry lookup cannot fail —
         // the id came from the registry itself in derive_remote_roots.
@@ -534,12 +563,15 @@ mod tests {
     }
 
     /// Fake transport: canned attributed file list + contents,
-    /// switchable failure, and a recorder for the roots each discovery
-    /// call received (to pin the scope plumbing).
+    /// switchable failure, a recorder for the roots each discovery
+    /// call received (to pin the scope plumbing), and a `reverse_blobs`
+    /// switch to deliver metadata out of request order (the transport
+    /// makes no order promise — pairing must be path-keyed).
     struct FakeFetch {
         files: Vec<DiscoveredFile>,
         contents: HashMap<RemotePath, Vec<u8>>,
         fail: bool,
+        reverse_blobs: bool,
         seen_roots: RefCell<Vec<Vec<RemoteRoot>>>,
     }
 
@@ -549,6 +581,7 @@ mod tests {
                 files,
                 contents,
                 fail: false,
+                reverse_blobs: false,
                 seen_roots: RefCell::new(Vec::new()),
             }
         }
@@ -563,10 +596,17 @@ mod tests {
             if self.fail {
                 return Err(RemoteError::Disconnected);
             }
-            Ok(files
+            // Files absent from `contents` yield no blob — the remote
+            // MISS shape (`parse_batch_stream` drops MISS lines), which
+            // the path-pairing tests rely on.
+            let mut blobs: Vec<FileMetadataBlob> = files
                 .iter()
-                .map(|f| blob_for(f, &self.contents[f]))
-                .collect())
+                .filter_map(|f| self.contents.get(f).map(|c| blob_for(f, c)))
+                .collect();
+            if self.reverse_blobs {
+                blobs.reverse();
+            }
+            Ok(blobs)
         }
     }
 
@@ -1050,6 +1090,7 @@ mod tests {
             files: Vec::new(),
             contents: HashMap::new(),
             fail: true, // would fail if batch_metadata were called
+            reverse_blobs: false,
             seen_roots: RefCell::new(Vec::new()),
         };
         let sessions = scan_remote_source_with_home(
@@ -1061,6 +1102,120 @@ mod tests {
         )
         .expect("scan");
         assert!(sessions.is_empty());
+    }
+
+    // ── ADR 0013: path-keyed blob pairing (no positional zip) ─────────
+
+    /// A blob set missing one file (the MISS shape: the remote deleted
+    /// it between discovery and batch) must skip exactly that file —
+    /// not shift the remaining blobs onto the wrong files and not
+    /// truncate the tail, which is what a positional zip did.
+    #[test]
+    fn scan_pairs_blobs_by_path_and_skips_only_unpaired_files() {
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![MarkerProvider {
+            id: "alpha",
+            roots: vec![home.path().join(".alpha")],
+        }]);
+        let mut contents = HashMap::new();
+        contents.insert(
+            "/r/one.jsonl".to_string(),
+            session_bytes("{\"provider\":\"alpha\"}", 20, 5),
+        );
+        // /r/two.jsonl: discovered, no blob (MISS).
+        contents.insert(
+            "/r/three.jsonl".to_string(),
+            session_bytes("{\"provider\":\"alpha\"}", 20, 5),
+        );
+        let fetch = FakeFetch::new(
+            vec![
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/one.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/two.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/three.jsonl".to_string(),
+                },
+            ],
+            contents,
+        );
+
+        let sessions = scan_remote_source_with_home(
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+            home.path(),
+        )
+        .expect("scan");
+        let ids: Vec<&str> = sessions.iter().map(|m| m.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["one", "three"], "only the unpaired file is skipped");
+    }
+
+    /// The transport makes no order promise: with blobs arriving
+    /// reversed relative to the sorted discovery list, a positional zip
+    /// would hand every file the WRONG provider's parser (alpha file
+    /// parsed as beta → parse fails → silently dropped). Path pairing
+    /// must attribute content to its own file regardless of blob order.
+    #[test]
+    fn scan_out_of_order_blobs_pair_by_path_not_position() {
+        let home = tempdir().expect("tempdir");
+        let registry = registry_of(vec![
+            MarkerProvider {
+                id: "alpha",
+                roots: vec![home.path().join(".alpha")],
+            },
+            MarkerProvider {
+                id: "beta",
+                roots: vec![home.path().join(".beta")],
+            },
+        ]);
+        let mut contents = HashMap::new();
+        contents.insert(
+            "/r/one.jsonl".to_string(),
+            session_bytes("{\"provider\":\"alpha\"}", 20, 5),
+        );
+        contents.insert(
+            "/r/two.jsonl".to_string(),
+            session_bytes("{\"provider\":\"beta\"}", 20, 5),
+        );
+        let mut fetch = FakeFetch::new(
+            vec![
+                DiscoveredFile {
+                    provider_id: "alpha".to_string(),
+                    path: "/r/one.jsonl".to_string(),
+                },
+                DiscoveredFile {
+                    provider_id: "beta".to_string(),
+                    path: "/r/two.jsonl".to_string(),
+                },
+            ],
+            contents,
+        );
+        fetch.reverse_blobs = true;
+
+        let sessions = scan_remote_source_with_home(
+            &registry,
+            &fetch,
+            &ssh_source("srv"),
+            &SessionScope::Active,
+            home.path(),
+        )
+        .expect("scan");
+        let ids: Vec<(&str, &str)> = sessions
+            .iter()
+            .map(|m| (m.provider_id.as_str(), m.session_id.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![("alpha", "one"), ("beta", "two")],
+            "each file parsed by its own provider despite reversed blobs"
+        );
     }
 
     // ── disconnect fallback (decision D) ────────────────────────────────

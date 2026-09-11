@@ -48,9 +48,11 @@ pub const TAIL_MAX: usize = 16384;
 pub struct FileMetadataBlob {
     /// Remote absolute path, as requested.
     pub path: String,
-    /// `stat -c %s` — total size in bytes.
+    /// Total size in bytes (GNU `stat -c %s` / BSD `stat -f %z` — the
+    /// dialect probe lives in [`build_batch_script`]).
     pub size: u64,
-    /// `stat -c %Y` — mtime in whole seconds since the Unix epoch.
+    /// mtime in whole seconds since the Unix epoch (GNU `stat -c %Y` /
+    /// BSD `stat -f %m`).
     pub mtime: i64,
     /// First `min(HEAD_MAX, size)` bytes.
     pub head: Vec<u8>,
@@ -114,8 +116,18 @@ pub fn shell_quote(path: &str) -> String {
     quoted
 }
 
-/// Build the remote batch script for the given files. POSIX sh + GNU
-/// coreutils (`stat`, `head`, `tail`, `printf`) on the remote side.
+/// Build the remote batch script for the given files. POSIX sh +
+/// `stat`/`head`/`tail`/`printf` on the remote side, where `stat` is
+/// probed BY BEHAVIOR, never by platform: GNU `-c '%s %Y'` first, BSD
+/// `-f '%z %m'` fallback (ADR 0013). Both dialects print
+/// `size mtime-seconds` in that order, so the parsing side is
+/// dialect-blind. Order matters: `uname`-style branching breaks when a
+/// GNU coreutils `stat` shadows the BSD one on macOS (or vice versa),
+/// while try-GNU-fail-fallback self-heals in both directions. On
+/// either dialect a file that slips past both probes (vanished mid-
+/// batch, or an unknown userland) lands in the `|| true` → empty
+/// `set --` → MISS guard below — a per-file skip, never wrong data.
+/// (`head -c`/`tail -c` with `--` are valid on both GNU and BSD.)
 ///
 /// Per file (see the module docs for the wire format): stat first, then
 /// the META header, then exact-count head/tail bytes. A missing file
@@ -129,7 +141,7 @@ pub fn build_batch_script(files: &[String]) -> String {
         // chain keeps one vanished file from killing the whole batch.
         script.push_str(&format!(
             "f={quoted}; if [ -f \"$f\" ]; then \
-             set -- $(stat -c '%s %Y' -- \"$f\" 2>/dev/null || true); \
+             set -- $(stat -c '%s %Y' -- \"$f\" 2>/dev/null || stat -f '%z %m' -- \"$f\" 2>/dev/null || true); \
              if [ $# -eq 2 ]; then \
              printf 'META\\t%s\\t%s\\t%s\\n' \"$f\" \"$1\" \"$2\"; \
              head -c {HEAD_MAX} -- \"$f\"; \
@@ -392,5 +404,22 @@ mod tests {
         assert!(script.contains("tail -c 16384"));
         assert!(script.contains("printf 'META\\t%s\\t%s\\t%s\\n'"));
         assert!(script.contains("printf 'MISS\\t%s\\n'"));
+    }
+
+    /// ADR 0013: the stat call must be a BEHAVIOR probe — GNU syntax
+    /// first, BSD fallback, `|| true` into the MISS guard — so GNU,
+    /// BusyBox, and macOS/*BSD hosts all work and a shadowed `stat`
+    /// (GNU coreutils installed over the BSD one, or vice versa) still
+    /// hits its own dialect branch. No `uname`, no per-platform fork.
+    #[test]
+    fn script_probes_gnu_stat_first_with_bsd_fallback() {
+        let script = build_batch_script(&["/r/a.jsonl".to_string()]);
+        assert!(
+            script.contains(
+                "stat -c '%s %Y' -- \"$f\" 2>/dev/null \
+                 || stat -f '%z %m' -- \"$f\" 2>/dev/null || true"
+            ),
+            "stat must probe GNU then BSD by behavior, then fall to the MISS guard"
+        );
     }
 }

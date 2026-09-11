@@ -10,6 +10,12 @@
 //!
 //! NOTE: check_server_key accepts any host key (spike-only); the real
 //! connection layer must honor known_hosts (see phase 2 spec).
+//!
+//! Windows-only: the agent probe targets the Windows OpenSSH named pipe
+//! (`connect_named_pipe` is cfg(windows) in russh), so this example does not
+//! compile on other platforms and is excluded there.
+
+#![cfg(windows)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

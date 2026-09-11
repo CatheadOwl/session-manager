@@ -423,7 +423,7 @@ mod tests {
         // clap handles --help/--version by exiting during parse; from the
         // parser's perspective they are errors of kind DisplayHelp/Version.
         let err = Cli::try_parse_from(["session-manager", "--version"]).expect_err("exits");
-        assert!(err.to_string().contains("0.2"), "unexpected: {err}");
+        assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")), "unexpected: {err}");
     }
 
     #[test]

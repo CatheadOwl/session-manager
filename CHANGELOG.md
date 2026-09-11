@@ -7,18 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-11
+
 ### Added
 
-- Q&A export now follows manual selection: in selection mode, export covers the checked sessions (the button hover states the count; nothing checked disables export).
-- Q&A export now covers SSH remote sessions: their content is fetched over SSH on first export (~0.2s per session, cached afterwards — re-exports are free) and the export provenance records the remote source and path. A remote session that fails to fetch is skipped individually; the rest of the export continues. The large-export confirmation and the button hover now state how many remote sessions are included.
+- Add SSH remote sources: register a remote host as a session source in Settings (ssh-config alias picker, connection test, or manual entry) and browse its sessions read-only; provider roots on the remote host are discovered automatically, and remote sessions cannot be deleted, archived, or restored.
+- Add a Settings panel to manage session sources — local sources point at mirrored home directories and SSH sources at remote hosts — with a shared enable toggle, remove, and a scan overlay showing what each source resolves to.
+- Add Q&A session export: export the visible sessions (folder, search, star filter, time range, or All time with a large-export confirmation) as Q&A-distilled output with full provenance, tool placeholders and system blocks excluded; in selection mode, export covers the checked sessions instead. Results report in a floating toast, and overwriting an existing file is an explicit opt-in.
+- Q&A export also covers SSH remote sessions: their content is fetched over SSH on first export (~0.2s per session, cached afterwards — re-exports are free) and the export provenance records the remote source and path. A remote session that fails to fetch is skipped individually; the rest of the export continues.
+- Add a command-line mode: time-ranged Q&A export runs headlessly from a terminal (JSONL output, short flags), and `--help`/`--version` answer on the console instead of launching the GUI.
+- Add a tri-state select-all control (all / partial / none) to the session list selection mode.
 
 ### Changed
 
-- Manual selection is now scoped to the visible list: switching folder, search, time range, star filter, or scope drops checks that fall out of view (ADR 0012). Batch delete therefore acts only on what is currently visible — previously it resolved all checked sessions across folders, as if the folder filter were "all".
+- Session search now also matches session-id fragments.
 
-### Removed
+### Fixed
 
-- Cross-folder batch selection: checks no longer persist when the visible list changes.
+- Fix batch delete acting on checked sessions that are no longer visible: switching folder, search, time range, star filter, or scope now drops out-of-view checks, so selection and batch delete always operate on the visible list.
+- Fix invalid nested buttons inside session rows — invalid HTML that broke assistive-tech interaction.
 
 ## [0.2.4] - 2026-08-13
 

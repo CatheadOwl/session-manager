@@ -129,7 +129,7 @@ describe("useUpdater", () => {
     expect(result.current.update).toBe(fakeUpdate);
   });
 
-  // Settings gate (ADR 0006): update.autoCheck === false skips the mount auto-check.
+  // Settings gate: update.autoCheck === false skips the mount auto-check.
   it("stays idle and never calls check when update.autoCheck is false", async () => {
     mockSettings(false);
 

@@ -1,4 +1,4 @@
-//! Remote-source spike (workunit 20260910-1145 phase 0).
+//! Remote-source spike (remote-source line, phase 0).
 //!
 //! Validates the russh auth matrix and channel shapes against a real host:
 //!   1. ssh-agent on the Windows named pipe (with key-file fallback)

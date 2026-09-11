@@ -23,10 +23,10 @@ const fixture = (): SettingsSnapshot => ({
     "update.autoCheck": { bool: true },
     sources: {
       sourceList: [
-        // ADR 0011: local entries are `{ path, enabled }` — a legacy
+        // Local entries are `{ path, enabled }` — a legacy
         // `provider` key (as the loader preserves it) must still render.
         { path: "D:\\dump", provider: "codex", enabled: true },
-        // ADR 0008: mixed-kind lists must render (ssh read-only row) without
+        // Mixed-kind lists must render (ssh read-only row) without
         // crashing the single sourceList renderer.
         {
           kind: "ssh",

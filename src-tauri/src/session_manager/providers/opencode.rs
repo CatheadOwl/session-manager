@@ -120,7 +120,7 @@ impl SessionProvider for OpenCodeProvider {
                 result
             }
             SessionLocator::Remote { .. } => {
-                // opencode is excluded from remote v1 (ADR 0007 / P0a:
+                // opencode is excluded from remote v1 (P0a:
                 // sqlite random reads / legacy multi-file scans). If a remote
                 // source ever surfaces an opencode-shaped session anyway,
                 // refuse rather than misread a remote path as local.

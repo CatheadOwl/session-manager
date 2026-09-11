@@ -1,5 +1,5 @@
-//! Thin IPC adapter for the SSH add-source UI flow (ADR 0010 / ADR
-//! 0008 修订 1). All logic lives in `session_manager::remote` — these
+//! Thin IPC adapter for the SSH add-source UI flow. All logic lives in
+//! `session_manager::remote` — these
 //! handlers only delegate, translate, and enforce the UI-facing
 //! timeout. exec/SFTP calls never happen here (remote-module-only
 //! discipline); `test_ssh_source` merely drives the remote layer's

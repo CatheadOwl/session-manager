@@ -694,8 +694,8 @@ mod tests {
         assert_eq!(meta.session_id, "session-abc");
     }
 
-    /// Acceptance test (ADR 0006 §7, planner contract; reworked for the
-    /// ADR 0011 home-mirror model): a HAND-EDITED `settings.json` must
+    /// Acceptance test (planner contract; reworked for the
+    /// home-mirror model): a HAND-EDITED `settings.json` must
     /// drive real behavior with zero UI — the `update.autoCheck` override
     /// is readable through the manager, and a hand-added `sources` entry
     /// (an ALTERNATE HOME whose layout mirrors the real home) surfaces
@@ -725,7 +725,7 @@ mod tests {
         write_claude_session(&extra_dir.join("extra.jsonl"), "extra-session");
 
         // The hand-edited settings file a user would write (the legacy
-        // `provider` key is preserved-but-ignored, ADR 0011 OQ1=a).
+        // `provider` key is preserved-but-ignored).
         let settings_dir = home.path().join(".session-manager");
         std::fs::create_dir_all(&settings_dir).expect("create settings dir");
         let settings_json = format!(

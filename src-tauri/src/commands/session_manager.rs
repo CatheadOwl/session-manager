@@ -35,7 +35,7 @@ pub struct ListSessionsOptions {
 
 /// List sessions: local scan + remote (SSH) sources merged.
 ///
-/// Remote line (ADR 0007/0008 修订 1 phase 3): after the local
+/// Remote line (phase 3): after the local
 /// `scan_sessions_with_scope`, every enabled ssh source from the
 /// settings overlay is scanned over the batch channel and appended.
 /// The remote scan honors the SAME scope as the local scan — its roots
@@ -105,8 +105,8 @@ pub async fn list_sessions(
 /// Load a session's messages. Remote (SSH) locators are bridged FIRST:
 /// `resolve_remote_to_local` fetches the file into the transient cache
 /// (cache hit = zero network) and hands the provider a File-locator handle
-/// pointing at the local cache copy (ADR 0007 cache exit — the remote
-/// source's only content-read path).
+/// pointing at the local cache copy — the remote
+/// source's only content-read path.
 #[tauri::command]
 pub async fn get_session_messages(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,
@@ -304,10 +304,9 @@ fn default_export_format() -> String {
 }
 
 /// Bridge the Remote-locator metas of an export selection into local cache
-/// copies before the blocking distill core runs (workunit
-/// 20260911-1031-remote-qa-export). Each Remote meta is fetched via
+/// copies before the blocking distill core runs. Each Remote meta is fetched via
 /// `resolve_remote_to_local` — the same bridge as `get_session_messages`
-/// (ADR 0007 cache exit: mtime+size-gated, re-exports of the same sessions
+/// (mtime+size-gated cache exit: re-exports of the same sessions
 /// are free) — and its local path is returned as a load override keyed by
 /// the meta's index in the returned list. A meta whose fetch fails (source
 /// disabled/unreachable, transfer error) is pre-skipped and REMOVED from
@@ -370,7 +369,7 @@ fn remote_fetch_skip(
 /// Remote-locator metas in an explicit selection are bridged first (see
 /// [`bridge_remote_export_metas`]); the None branch (time-window scan, the
 /// future CLI path) stays local-only — the scan's extra sources are local
-/// mirrors by definition (ADR 0011).
+/// mirrors by definition (each local extra source is an alternate home).
 #[tauri::command]
 pub async fn export_qa_sessions(
     registry: tauri::State<'_, Arc<ProviderRegistry>>,

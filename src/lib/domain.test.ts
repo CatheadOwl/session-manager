@@ -141,7 +141,7 @@ describe("lifecycle operation support", () => {
     expect(supportsLifecycleOperations(meta)).toBe(false);
   });
 
-  it("rejects remote-backed sessions — read-only per ADR 0007", () => {
+  it("rejects remote-backed sessions — read-only", () => {
     const meta = session({
       sourcePath: "/home/admin/.claude/projects/a/uuid.jsonl",
       locator: {

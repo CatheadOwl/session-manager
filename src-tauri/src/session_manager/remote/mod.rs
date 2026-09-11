@@ -1,9 +1,8 @@
-//! SSH remote-source connection layer (read-only data source, ADR 0007
-//! / ADR 0008 remote v1).
+//! SSH remote-source connection layer (read-only data source).
 //!
 //! Submodules:
 //! - [`error`] — `RemoteError`, the reaction-shaped failure taxonomy;
-//! - [`alias`] — ADR 0010 ssh-config alias resolution: expands the
+//! - [`alias`] — ssh-config alias resolution: expands the
 //!   `sshConfig` auth mode's alias against `~/.ssh/config` (ssh2-config:
 //!   Host patterns, first-match-wins, Include) into host/user/port/
 //!   IdentityFile, with the ProxyJump v1 boundary enforced;
@@ -14,14 +13,14 @@
 //! - `session` — the russh transport: connect/auth/known_hosts, the
 //!   batch exec channel, SFTP fetch. ALL exec/SFTP call sites in the
 //!   product live there.
-//! - [`scan`] — the phase 3 batch scan (ADR 0008 修订 1): remote roots
+//! - [`scan`] — the phase 3 batch scan: remote roots
 //!   DERIVED from each provider's `roots()` (home-prefix strip, scope
 //!   semantics copied from the local scan), ONE discovery exec over all
 //!   roots with `ROOT` attribution headers + batch-metadata exec +
 //!   temp-file bridge into the local provider parsers, and the
 //!   disconnect fallback. Tauri-free.
 //!
-//! ADR 0007 discipline (batch / cache / drop) attribution of this
+//! Remote-line discipline (batch / cache / drop) attribution of this
 //! layer's operations:
 //! - `batch_metadata` / `exec_script` — **batch** (one exec round-trip
 //!   for N files; the P1 real-alias benchmark: ~14 ms/file vs ~710 ms
@@ -67,7 +66,7 @@ use crate::session_manager::types::{SessionHandle, SessionLocator, SessionMeta};
 pub type RemotePath = String;
 
 /// Bridge a Remote-locator handle to a File-locator handle backed by the
-/// transient cache (ADR 0007 "cache" exit — the remote source's ONLY
+/// transient cache (the "cache" exit — the remote source's ONLY
 /// content-read path; phase 4 session-open wiring).
 ///
 /// Semantics:
@@ -121,8 +120,8 @@ pub async fn resolve_remote_to_local(
 /// Per-source session cache: at most one live `RemoteSession` per
 /// source id, lazily connected, guarded so concurrent callers of the
 /// same source share the connection instead of opening new ones (spec
-/// edge case "concurrent fetch of the same source"; ADR 0007 evidence
-/// 02 hard requirement 2 — single-connection concurrency).
+/// edge case "concurrent fetch of the same source" — single-connection
+/// concurrency is a hard requirement).
 pub struct RemoteSessionPool {
     sessions: tokio::sync::Mutex<HashMap<String, Arc<RemoteSession>>>,
     cache_base: PathBuf,
@@ -231,7 +230,7 @@ impl RemoteScanState {
     /// blocking pool (temp files and parser IO are blocking), then
     /// applies the disconnect fallback. The remote roots are derived
     /// inside the scan core from the registry (`roots()` + home-prefix
-    /// strip, ADR 0008 修订 1) — the ssh entry carries no root field.
+    /// strip) — the ssh entry carries no root field.
     pub async fn scan_source(
         &self,
         registry: &Arc<crate::session_manager::providers::ProviderRegistry>,
@@ -265,7 +264,7 @@ impl RemoteScanState {
 }
 
 // ---------------------------------------------------------------------------
-// Add-source test connection (ADR 0010 / ADR 0008 修订 1 UI flow)
+// Add-source test connection (the SSH add-source UI flow)
 // ---------------------------------------------------------------------------
 
 /// Outcome of `test_ssh_source`: connect + auth + known_hosts + one

@@ -78,7 +78,7 @@ describe("SourcesEditor", () => {
   });
 
   it("renders a legacy provider key without any provider picker", () => {
-    // ADR 0011: a pre-0011 file's `provider` key is preserved by the
+    // A legacy file's `provider` key is preserved by the
     // loader and must round-trip; the row itself has NO provider menu.
     renderEditor([{ path: "D:\\dump", provider: "codex", enabled: true }]);
     expect(screen.getByLabelText("Source 1 path")).toHaveValue("D:\\dump");
@@ -121,7 +121,7 @@ describe("SourcesEditor", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  // ADR 0008: ssh entries are read-only in the UI until the remote-line
+  // ssh entries are read-only in the UI until the remote-line
   // editor lands, and every commit must carry them verbatim.
   const SSH_ENTRY: SourceEntry = {
     kind: "ssh",
@@ -196,7 +196,7 @@ describe("SourcesEditor", () => {
     expect(screen.getByText("ssh config alias: ali")).toBeInTheDocument();
   });
 
-  // ── Add SSH source flow (ADR 0010) ────────────────────────────────────
+  // ── Add SSH source flow ─────────────────────────────────────────────
 
   const ALIASES = [
     { alias: "ali", host: "192.0.2.10", user: "admin", supported: true },

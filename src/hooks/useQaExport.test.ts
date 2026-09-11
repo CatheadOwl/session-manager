@@ -239,7 +239,7 @@ describe("useQaExport", () => {
         sessions: SESSIONS,
         destPath: "/tmp/out.json",
         format: "json",
-        // The native dialog already confirmed replacement; see ADR notes in useQaExport.
+        // The native dialog already confirmed replacement.
         overwrite: true,
       },
     });

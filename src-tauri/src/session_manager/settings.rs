@@ -1,4 +1,4 @@
-//! Settings core (ADR 0006): a hand-editable, layered `settings.json`.
+//! Settings core: a hand-editable, layered `settings.json`.
 //!
 //! The file lives at `~/.session-manager/settings.json` and is a sparse
 //! override layer over in-code defaults. It is a public contract: users may
@@ -19,22 +19,23 @@ use std::sync::Mutex;
 /// Current on-disk schema version (migration chain anchor).
 pub const SETTINGS_VERSION: u64 = 1;
 
-/// One `sources[]` entry (ADR 0008): a kind-discriminated union. `kind`
-/// defaults to `"local"` when absent, so pre-ADR-0008 files parse unchanged
+/// One `sources[]` entry: a kind-discriminated union. `kind`
+/// defaults to `"local"` when absent, so legacy files without a `kind`
+/// field parse unchanged
 /// (zero migration, no version bump). Serialization omits `kind` for local
-/// entries — a local entry's minimal shape is `{ path, enabled }` (ADR 0011);
+/// entries — a local entry's minimal shape is `{ path, enabled }`;
 /// ssh entries always carry `"kind": "ssh"`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceEntry {
-    /// Local extra scan root (ADR 0006 D2 overlay, reworked by ADR 0011):
+    /// Local extra scan root:
     /// `path` points at an ALTERNATE HOME — every provider's standard
     /// root is discovered under it via the shared home-relative
     /// derivation (same model as a remote machine). There is NO
-    /// per-entry provider field anymore (ADR 0011 amends D5); a legacy
+    /// per-entry provider field anymore; a legacy
     /// `provider` key from an old file is preserved in `extra`,
-    /// ignored. `id` is optional for local entries (ADR 0008 §1).
+    /// ignored. `id` is optional for local entries.
     Local(LocalSource),
-    /// SSH remote source (ADR 0008 / ADR 0007 remote v1). Consumed by the
+    /// SSH remote source. Consumed by the
     /// remote scan line; the local overlay skips it. Unknown fields are
     /// preserved verbatim through saves (forward compatibility).
     Ssh(SshSource),
@@ -49,7 +50,7 @@ impl SourceEntry {
     }
 
     /// Stable entry id when present (ssh: always; local: optional). Ids
-    /// share one namespace across kinds within a file (ADR 0008 §1).
+    /// share one namespace across kinds within a file.
     pub fn id(&self) -> Option<&str> {
         match self {
             SourceEntry::Local(l) => l.id.as_deref(),
@@ -58,12 +59,12 @@ impl SourceEntry {
     }
 }
 
-/// Local `sources[]` payload (ADR 0011): `{ path, enabled, id? }` — the
+/// Local `sources[]` payload: `{ path, enabled, id? }` — the
 /// path is a HOME-shaped root, providers are auto-discovered under it,
 /// so no provider field exists. Unknown fields are preserved verbatim
-/// through saves (`extra`): a legacy `provider` key from a pre-ADR-0011
+/// through saves (`extra`): a legacy `provider` key from an old
 /// file round-trips instead of dropping data, and the loader warns that
-/// the semantics changed (OQ1=a — no file rewriting).
+/// the semantics changed (no file rewriting).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LocalSource {
     pub path: String,
@@ -75,7 +76,7 @@ pub struct LocalSource {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// SSH auth block (ADR 0008 §1, extended by ADR 0010): tagged by
+/// SSH auth block: tagged by
 /// `mode`, camelCase `keyPath`. Three modes:
 /// - `agent` — ssh-agent identities only;
 /// - `key` — explicit key file (fallback after the agent pass);
@@ -86,7 +87,7 @@ pub struct LocalSource {
 ///
 /// Wire note: the enum-level `rename_all = "lowercase"` would render
 /// `SshConfig` as "sshconfig"; the explicit `#[serde(rename)]` below
-/// pins the camelCase tag (ADR 0010's wire shape).
+/// pins the camelCase wire tag.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum SourceAuth {
@@ -105,7 +106,7 @@ fn default_port() -> u16 {
     22
 }
 
-/// SSH `sources[]` payload (ADR 0008 §1 修订 1: "remote source = another
+/// SSH `sources[]` payload ("remote source = another
 /// machine" — minimal shape). `id`/`host` are required by the loader
 /// (warn + skip when missing); `user` and `auth` are required by the
 /// shape (a missing field fails entry parse → warn + skip, same net
@@ -113,7 +114,7 @@ fn default_port() -> u16 {
 /// remote scan derives its roots from each provider's `roots()`, and
 /// probing/heal is gone. `extra` preserves unknown fields verbatim
 /// through saves — a legacy `root` or `providerHint` key in an old file
-/// is swallowed here (forward compatibility per ADR 0008 §2).
+/// is swallowed here (forward compatibility).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SshSource {
     pub id: String,
@@ -158,7 +159,7 @@ impl<'de> Deserialize<'de> for SourceEntry {
     {
         use serde::de::Error as _;
         let value = Value::deserialize(deserializer)?;
-        // Kind-first discrimination (ADR 0008 §2); absent kind = "local".
+        // Kind-first discrimination; absent kind = "local".
         let kind = value.get("kind").and_then(Value::as_str).unwrap_or("local");
         match kind {
             "local" => serde_json::from_value(value)
@@ -295,7 +296,7 @@ struct SettingsStore {
 }
 
 /// Mutex in-memory store + path, mirroring `MetadataManager`. No Tauri dep —
-/// the CLI adapter (ADR 0005) can consume it too.
+/// the CLI adapter can consume it too.
 pub struct SettingsManager {
     store: Mutex<SettingsStore>,
     path: PathBuf,
@@ -432,7 +433,7 @@ impl SettingsManager {
     /// Per-key read for consumers. `None` for unknown keys.
     // No production caller yet: the IPC layer reads the full `get()` snapshot,
     // so today only tests call this. Kept as the per-key contract for future
-    // consumers (CLI adapter, ADR 0005).
+    // consumers (CLI adapter).
     #[allow(dead_code)]
     pub fn get_value(&self, key: &str) -> Option<SettingValue> {
         let store = self.store.lock().unwrap();
@@ -580,18 +581,18 @@ fn default_of(key: &str) -> SettingValue {
         .expect("known setting key")
 }
 
-/// Kind-first lenient loader (ADR 0008 §2): each entry is parsed
+/// Kind-first lenient loader: each entry is parsed
 /// independently and a bad entry is warned + skipped WITHOUT dropping the
 /// rest of the list. Per-kind rules fall out of the typed payload parse:
 /// - unknown `kind` → error → warn + skip that entry only;
 /// - `local` missing `path` (or wrong-typed path/enabled) → skip;
-/// - a local entry still carrying the LEGACY `provider` key (ADR 0011
-///   removed it from the contract) → tolerated, preserved in `extra`,
+/// - a local entry still carrying the LEGACY `provider` key (no
+///   longer part of the contract) → tolerated, preserved in `extra`,
 ///   and WARNED: the semantics changed (path must now point at a
-///   home-shaped root) but the file is never rewritten (OQ1=a);
+///   home-shaped root) but the file is never rewritten;
 /// - `ssh` missing `id`/`host` (or `user`/`auth`) → skip;
 /// - ssh extra unknown fields (e.g. a stray `provider`, or the legacy
-///   `root`/`providerHint` keys removed by ADR 0008 修订 1) → tolerated
+///   `root`/`providerHint` keys no longer in the contract) → tolerated
 ///   and preserved;
 /// - duplicate `id` across the file (ssh AND local share the namespace)
 ///   → warn + skip the LATER entry.
@@ -605,7 +606,7 @@ fn parse_sources(value: &Value) -> Option<Vec<SourceEntry>> {
                 if let SourceEntry::Local(l) = &parsed {
                     if l.extra.contains_key("provider") {
                         log::warn!(
-                            "settings: local source `{}` carries a legacy `provider` key — since ADR 0011 the path must point at a HOME-shaped root and providers are auto-discovered; the key is preserved but ignored",
+                            "settings: local source `{}` carries a legacy `provider` key — the path must point at a HOME-shaped root and providers are auto-discovered; the key is preserved but ignored",
                             l.path
                         );
                     }
@@ -824,7 +825,7 @@ mod tests {
         );
     }
 
-    /// ADR 0011: `provider` is gone from the local contract — a legacy
+    /// `provider` is gone from the local contract — a legacy
     /// key is tolerated (preserved in `extra`, warned), never skips the
     /// entry, and a plain `{ path }` entry loads as before.
     #[test]
@@ -899,8 +900,8 @@ mod tests {
 
     #[test]
     fn zero_migration_old_file_parses_unchanged() {
-        // A pre-ADR-0008 file (no kind field anywhere) parses as-is; the
-        // pre-ADR-0011 `provider` keys land in `extra` (preserved, ADR 0011).
+        // An old file with no `kind` field anywhere parses as-is; the
+        // legacy `provider` keys land in `extra` (preserved, ignored).
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
@@ -1021,7 +1022,7 @@ mod tests {
         );
     }
 
-    /// ADR 0008 修订 1 compatibility pin: a file written by the OLD
+    /// Compatibility pin: a file written by the OLD
     /// model (ssh entries carrying `root` + `providerHint`) must still
     /// load, with both keys swallowed into `extra` — no skip, no error.
     #[test]
@@ -1104,7 +1105,7 @@ mod tests {
     #[test]
     fn enabled_sources_includes_enabled_ssh_entries() {
         // enabled_sources() is kind-agnostic (the scan overlay, not the
-        // settings core, filters to Local — ADR 0008 §3).
+        // settings core, filters to Local).
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
@@ -1117,7 +1118,7 @@ mod tests {
         assert_eq!(manager.enabled_sources(), vec![ssh("a", "h")]);
     }
 
-    /// ADR 0010 wire pin: the sshConfig variant must serialize with the
+    /// Wire pin: the sshConfig variant must serialize with the
     /// camelCase tag "sshConfig" (the enum-level lowercase rename would
     /// produce "sshconfig"), and parse back symmetrically.
     #[test]

@@ -30,14 +30,13 @@ tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 tempfile = "3"
 trash = "3"
-# Remote-source connection layer (workunit 20260910-1145 phase 2,
-# ADR 0007 / ADR 0008). default-features off: avoid aws-lc-rs (needs
-# NASM on MSVC); ring backend instead.
+# Remote-source connection layer. default-features off: avoid aws-lc-rs
+# (needs NASM on MSVC); ring backend instead.
 russh = { version = "0.63", default-features = false, features = ["ring"] }
 russh-sftp = "3.0"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
-# SSH config alias resolution (ADR 0010): parse ~/.ssh/config (incl.
+# SSH config alias resolution: parse ~/.ssh/config (incl.
 # Include directives and Host patterns) to expand the sshConfig auth
 # mode's alias into host/user/port/IdentityFile. default-features off:
 # the `reload-ssh-algo` feature would pull a git2 build dep; the
@@ -45,7 +44,7 @@ futures-util = "0.3"
 # (the crate's MSRV); the packaged toolchain is 1.94.
 ssh2-config = { version = "0.8", default-features = false }
 
-# Console attach for the CLI branch (workunit 20260910-1408): release builds
+# Console attach for the CLI branch: release builds
 # are GUI-subsystem (windows_subsystem="windows"), so Win32 AttachConsole +
 # SetStdHandle must re-open std handles to CONOUT$ before clap prints help.
 [target.'cfg(windows)'.dependencies]

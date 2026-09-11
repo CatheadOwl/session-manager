@@ -14,7 +14,8 @@ use std::fmt;
 /// taxonomy: `Disconnected` → retry once then surface "reconnect";
 /// `AuthFailed` → surface credentials problem; `NotFound` → converge the
 /// session list on next scan; `ExecUnavailable` → restricted-shell
-/// diagnosis (no SFTP degradation in v1, see ADR 0007 discipline).
+/// diagnosis (no SFTP degradation in v1, see the remote-line
+/// discipline).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteError {
     /// The transport died mid-operation (connection reset, idle timeout,
@@ -31,7 +32,7 @@ pub enum RemoteError {
     NotFound(String),
     /// The exec channel is unusable (e.g. a restricted shell refuses to
     /// run the batch script). v1 performs no SFTP fallback — the batch
-    /// metadata path has no cache/batch-free substitute (ADR 0007).
+    /// metadata path has no cache/batch-free substitute.
     ExecUnavailable(String),
     /// The server host key is not in the user's known_hosts. The user
     /// must connect once with the system `ssh` client to record it —
@@ -43,7 +44,7 @@ pub enum RemoteError {
     /// `HostKeyUnknown` but the user should investigate before trusting.
     HostKeyChanged { host: String, port: u16 },
     /// The `sshConfig` auth mode's alias could not be resolved into a
-    /// usable connection (ADR 0010): missing/unparseable
+    /// usable connection: missing/unparseable
     /// `~/.ssh/config`, no matching `Host` block, or a `ProxyJump`
     /// entry — the russh stack has no jump-host dialing yet, so that
     /// case fails explicitly instead of dialing the target directly.

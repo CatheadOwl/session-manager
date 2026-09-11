@@ -2,7 +2,7 @@
 //! exec channel, and SFTP full/incremental fetch into the transient
 //! cache.
 //!
-//! ADR 0007 attribution of the operations here:
+//! Remote-line discipline attribution of the operations here:
 //! - connection management = infrastructure (no N×IO shape);
 //! - `batch_metadata` = **batch** exit (one exec for N files);
 //! - `fetch_to_local` = **cache** exit (full pull once, mtime+size gate);
@@ -114,7 +114,7 @@ impl RemoteSession {
         source: &SshSource,
         cache_base: PathBuf,
     ) -> Result<Self, RemoteError> {
-        // ADR 0010 sshConfig mode: expand the alias against
+        // sshConfig mode: expand the alias against
         // ~/.ssh/config (a LIVE reference — re-resolved on every
         // connect, reconnects included, so config edits are followed)
         // into concrete host/port/user plus an auth override. The
@@ -225,7 +225,7 @@ impl RemoteSession {
 
         // --- key-file fallback ---
         if let SourceAuth::Key { key_path } = auth {
-            // ADR 0010 Decision 3: every key path is ~-expanded before
+            // Every key path is ~-expanded before
             // it reaches the loader — covers BOTH the hand-typed
             // `Key.keyPath` (v1 gap: `~/...` used to fail verbatim) and
             // IdentityFiles expanded out of ~/.ssh/config (ssh2-config
@@ -259,7 +259,7 @@ impl RemoteSession {
             .unwrap_or(false)
     }
 
-    /// Run one POSIX shell script and collect stdout (ADR 0007 batch
+    /// Run one POSIX shell script and collect stdout (batch
     /// exit). Same one-reconnect retry on a mid-call drop as
     /// `batch_metadata`. This is the sanctioned entry point for the scan
     /// layer's discovery exec — all exec call sites stay in this module.
@@ -275,8 +275,8 @@ impl RemoteSession {
         }
     }
 
-    /// Batch metadata for many files over ONE exec round-trip (ADR 0007
-    /// batch exit; wire format in `frame.rs`). Missing remote files are
+    /// Batch metadata for many files over ONE exec round-trip
+    /// (batch exit; wire format in `frame.rs`). Missing remote files are
     /// skipped (`MISS` frames) — the caller's list converges on the
     /// next scan.
     pub async fn batch_metadata(
@@ -305,8 +305,8 @@ impl RemoteSession {
         })
     }
 
-    /// Full-fetch a single remote file into the transient cache (ADR
-    /// 0007 cache exit) and return the local path.
+    /// Full-fetch a single remote file into the transient cache
+    /// (the cache exit) and return the local path.
     ///
     /// `known_attrs` — the (size, mtime) the caller already holds from
     /// a prior scan/batch. When present, the freshness check skips the

@@ -1,4 +1,4 @@
-//! Binary-safe framing for the batch-metadata exec channel (ADR 0007
+//! Binary-safe framing for the batch-metadata exec channel (the
 //! "batch" exit: one exec round-trip carries stat + head + tail for N
 //! files — the P1 real-alias benchmark showed 12-14 ms/file vs ~710 ms
 //! for per-file reads at 355 ms RTT).
@@ -119,7 +119,7 @@ pub fn shell_quote(path: &str) -> String {
 /// Build the remote batch script for the given files. POSIX sh +
 /// `stat`/`head`/`tail`/`printf` on the remote side, where `stat` is
 /// probed BY BEHAVIOR, never by platform: GNU `-c '%s %Y'` first, BSD
-/// `-f '%z %m'` fallback (ADR 0013). Both dialects print
+/// `-f '%z %m'` fallback. Both dialects print
 /// `size mtime-seconds` in that order, so the parsing side is
 /// dialect-blind. Order matters: `uname`-style branching breaks when a
 /// GNU coreutils `stat` shadows the BSD one on macOS (or vice versa),
@@ -406,7 +406,7 @@ mod tests {
         assert!(script.contains("printf 'MISS\\t%s\\n'"));
     }
 
-    /// ADR 0013: the stat call must be a BEHAVIOR probe — GNU syntax
+    /// The stat call must be a BEHAVIOR probe — GNU syntax
     /// first, BSD fallback, `|| true` into the MISS guard — so GNU,
     /// BusyBox, and macOS/*BSD hosts all work and a shadowed `stat`
     /// (GNU coreutils installed over the BSD one, or vice versa) still

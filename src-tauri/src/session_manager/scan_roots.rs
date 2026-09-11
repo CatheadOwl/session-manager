@@ -1,4 +1,4 @@
-//! Shared home-relative scan-root derivation (ADR 0011).
+//! Shared home-relative scan-root derivation.
 //!
 //! The ONE function both scan lines consume to answer "which standard
 //! provider subdirectories live under a source root": each registry
@@ -7,7 +7,7 @@
 //! with separators normalized to `/`, yielding a home-relative path
 //! (`.claude/projects`). Joining that relative path onto ANY home-shaped
 //! root — a remote machine's `$HOME` (expanded by the remote shell) or a
-//! local extra source root (an alternate home, ADR 0011) — reproduces the
+//! local extra source root (an alternate home) — reproduces the
 //! provider's standard directory there.
 //!
 //! Consumers:

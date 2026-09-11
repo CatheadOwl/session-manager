@@ -137,8 +137,9 @@ pub enum SessionLocator {
         #[serde(rename = "recordId", alias = "record_id")]
         record_id: String,
     },
-    /// A session on a read-only SSH remote source (ADR 0007 remote v1;
-    /// source entries per ADR 0008: `source_id` anchors to the ssh entry's
+    /// A session on a read-only SSH remote source (remote v1;
+    /// source entries per the kind-discriminated settings schema:
+    /// `source_id` anchors to the ssh entry's
     /// required `id` in `settings.json` `sources[]`).
     ///
     /// `path` is the absolute path on the remote host. Remote-backed

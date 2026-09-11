@@ -7,19 +7,19 @@ use super::scan_roots;
 use super::settings::SourceEntry;
 use super::types::{SessionMeta, SessionScope};
 
-/// `extra_sources` is the settings-core sources overlay (ADR 0006 D2,
-/// reworked by ADR 0011): enabled local extra roots from
+/// `extra_sources` is the settings-core sources overlay: enabled local
+/// extra roots from
 /// `~/.session-manager/settings.json`, each an ALTERNATE HOME — the
-/// scan mirrors it exactly like a remote machine's home (ADR 0008 修订 1):
+/// scan mirrors it exactly like a remote machine's home:
 /// every provider's standard root, derived home-relative by the shared
 /// [`scan_roots`] module, is discovered under it. There is no
-/// per-entry provider anymore (ADR 0011) — directory ownership decides.
+/// per-entry provider anymore — directory ownership decides.
 /// The slice is an explicit parameter — NOT a `SettingsManager`
 /// reference tucked into the registry — so this module stays
 /// Tauri-free and unit-testable; callers read
 /// `SettingsManager::enabled_sources()` and pass the slice through.
 ///
-/// Overlay semantics (ADR 0011):
+/// Overlay semantics:
 /// - BOTH scopes: Active scans each provider's active root under the
 ///   extra home, Archived its archived root (a provider without an
 ///   archive root skips Archived — same rule as built-in);
@@ -32,7 +32,7 @@ use super::types::{SessionMeta, SessionScope};
 ///   previously processed overlay dirs, so a joined dir equal to a
 ///   built-in root (e.g. an extra root pointing at the real home)
 ///   never double-scans;
-/// - ssh entries are skipped here (ADR 0008 §3 — the remote scan line
+/// - ssh entries are skipped here (the remote scan line
 ///   owns their consumption);
 /// - disabled entries are skipped defensively (the settings manager
 ///   already filters, but this function does not require it).
@@ -113,11 +113,11 @@ pub fn scan_sessions_with_scope_with_home(
             }));
         }
     }
-    // Home-relative derivation is shared with the remote line (ADR 0011)
+    // Home-relative derivation is shared with the remote line
     // and computed once — registry and scope are fixed for the pass.
     let derived_roots = scan_roots::derive_scan_roots_with_home(registry, scope, home);
     for entry in extra_sources.iter().filter(|e| e.is_enabled()) {
-        // ADR 0008 §3: only local entries flow through the synchronous
+        // Only local entries flow through the synchronous
         // overlay; ssh entries belong to the remote scan line and are
         // skipped here.
         let SourceEntry::Local(entry) = entry else {
@@ -168,7 +168,7 @@ pub fn scan_sessions_with_scope_with_home(
                 continue;
             }
             if !joined.exists() {
-                // Normal shape (ADR 0011): the extra home simply has no
+                // Normal shape: the extra home simply has no
                 // data for this provider — 0 sessions, no warn.
                 log::debug!(
                     "list_scan sources overlay: no {} root under the extra home, provider={}",
@@ -456,7 +456,7 @@ mod tests {
         );
 
         // Both providers discovered under the same extra home (directory
-        // ownership decides — no per-entry provider, ADR 0011).
+        // ownership decides — no per-entry provider).
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "b-extra");
         assert_eq!(sessions[1].session_id, "a-extra");
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn overlay_covers_archived_scope_via_the_archive_root() {
-        // ADR 0011 OQ2=a: extra homes are scanned in BOTH scopes; the
+        // Extra homes are scanned in BOTH scopes; the
         // Archived pass derives `roots()[1]` per provider.
         let home = tempdir().expect("tempdir home");
         let extra = tempdir().expect("tempdir extra");
@@ -522,7 +522,7 @@ mod tests {
         if let SourceEntry::Local(local) = &mut entries[0] {
             local.enabled = false;
         }
-        // ADR 0008 §3: enabled ssh entries reach the overlay but must be
+        // Enabled ssh entries reach the overlay but must be
         // skipped (remote line owns their consumption).
         entries.push(ssh_source("ali", "192.0.2.10", true));
         let active = scan_sessions_with_scope_with_home(

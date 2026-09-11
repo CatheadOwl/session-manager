@@ -8,7 +8,7 @@ import { useZoom } from "@/hooks/useZoom";
 const queryClient = new QueryClient();
 
 /**
- * Settings core (ADR 0006): the Rust side emits one `settings-changed` event
+ * Settings core: the Rust side emits one `settings-changed` event
  * (payload `{ keys }`) after any programmatic write; we listen once at the
  * app root and invalidate the settings cache so every consumer refetches.
  * When the changed keys include `sources` (D6), the scan overlay changed, so

@@ -1,4 +1,4 @@
-# ui/ — Reusable UI primitives (workunit 20260909-1258)
+# ui/ — Reusable UI primitives
 
 ## Contract
 
@@ -14,11 +14,11 @@ needs justification in review.
 - **Popovers**: `Popover` — anchored panel (`top: calc(100% + 0.4rem)`) with
   outside-click dismissal; wrap trigger + popover in one `position: relative`
   container. Panel skin is `.ui-panel`; do not hand-roll panel CSS.
-- **Settings form primitives** (workunit 20260910-1131): `SettingRow`
+- **Settings form primitives**: `SettingRow`
   (label + description + control slot + inline error; `variant="full"`
   stacks text on top for list-type controls), `ToggleRow`
   (`role="switch"` bool renderer), `SourcesEditor` (sourceList CRUD;
-  local rows are provider-less home-mirror roots per ADR 0011, removal
+  local rows are provider-less home-mirror roots, removal
   guarded by ConfirmDeleteDialog). Their
   `.setting-*` classes in `ui.css` are self-sufficient like the buttons.
 - **Tokens only**: colors/sizes come from `variables.css` tokens. Hardcoded

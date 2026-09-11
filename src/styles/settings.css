@@ -1,5 +1,5 @@
 /*
- * Settings overlay page (workunit 20260910-1131). Page-scope layout only —
+ * Settings overlay page. Page-scope layout only —
  * row/control primitives and their typography live in ui.css (.setting-*);
  * colors come exclusively from variables.css tokens.
  */

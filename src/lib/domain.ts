@@ -47,7 +47,7 @@ export interface SessionLifecycleOperationOptions {
 export const getLifecycleOperationOptions = (
   session: SessionMeta,
 ): SessionLifecycleOperationOptions | undefined => {
-  // Remote-backed sessions are read-only (ADR 0007): no archive/restore/
+  // Remote-backed sessions are read-only: no archive/restore/
   // delete, mirroring the database-locator rejection above.
   if (session.locator?.kind === "database" || session.locator?.kind === "remote") {
     return undefined;

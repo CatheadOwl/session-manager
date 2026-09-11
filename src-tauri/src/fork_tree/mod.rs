@@ -22,8 +22,8 @@ use crate::session_manager::settings::SourceEntry;
 /// Compute (or fetch from cache) the fork tree for a given scope.
 /// `project_dir_filter` — if set, only include sessions whose `project_dir` matches
 /// (case-insensitive comparison on Windows). Pass `None` to include all sessions.
-/// `extra_sources` is the settings sources overlay threaded into the scan
-/// (ADR 0006 D2); adapters read `SettingsManager::enabled_sources()`.
+/// `extra_sources` is the settings sources overlay threaded into the scan;
+/// adapters read `SettingsManager::enabled_sources()`.
 pub fn compute_fork_tree(
     registry: &ProviderRegistry,
     scope: &session_manager::SessionScope,

@@ -26,7 +26,7 @@ export const useAppMetadataQuery = () => {
 };
 
 /**
- * Settings core (ADR 0006). Consumers read individual keys off
+ * Settings core. Consumers read individual keys off
  * `data.values` (e.g. `update.autoCheck`). The cache is refreshed by the
  * app-level `settings-changed` listener, not per-consumer refetches.
  */

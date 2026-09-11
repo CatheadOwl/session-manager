@@ -12,7 +12,7 @@ export interface SettingRowProps {
   /** Display-only inline error surfaced on the row (failed write, invalid value). */
   error?: string | null;
   /**
-   * Layout variant (ADR 0011): `default` keeps the two-column rhythm
+   * Layout variant: `default` keeps the two-column rhythm
    * (label/description left, compact control right — built for toggles);
    * `full` stacks the text on top and gives the control the full row
    * width below it — for large list editors (the sources list) that must
@@ -24,7 +24,7 @@ export interface SettingRowProps {
 /**
  * UI primitive: the shared shell of every settings row — label, optional
  * description, control slot, and an inline error line. Self-sufficient
- * `.setting-*` classes live in styles/ui.css (ADR 0004 constraints:
+ * `.setting-*` classes live in styles/ui.css (design constraints:
  * typography baked in, tokens only). Renderers own the control, never the
  * row rhythm.
  */

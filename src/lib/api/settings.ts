@@ -1,21 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * Settings core IPC surface (ADR 0006). The Rust side is the SSOT for the
+ * Settings core IPC surface. The Rust side is the SSOT for the
  * schema; these wrappers are typed mirrors of `session_manager/settings.rs`.
  * There is no other reach into the settings file from TS — hand-edits are
  * picked up through the `settings-changed` event / query invalidation.
  */
 
 /**
- * One `sources[]` entry (ADR 0008): kind-discriminated union mirroring the
+ * One `sources[]` entry: kind-discriminated union mirroring the
  * Rust `SourceEntry` enum. `kind` defaults to `"local"` on the Rust side, so
  * local entries may omit it (and the Rust writer omits it for them).
  */
 export type SourceEntry = LocalSourceEntry | SshSourceEntry;
 
 /**
- * Local extra scan root (ADR 0006 overlay, reworked by ADR 0011): `path`
+ * Local extra scan root: `path`
  * points at an ALTERNATE HOME — every provider's standard root is
  * auto-discovered under it (home-mirror, same model as a remote machine),
  * so there is NO provider field. A legacy `provider` key from an old
@@ -28,14 +28,14 @@ export interface LocalSourceEntry {
   path: string;
   /** Disabled entries are kept in the file but not scanned. */
   enabled: boolean;
-  /** Optional stable id (ADR 0008; ssh Remote locators need it, local may omit). */
+  /** Optional stable id (ssh Remote locators need it, local may omit). */
   id?: string;
   /** Forward-compat: unknown fields (e.g. a legacy `provider`) round-trip through the Rust loader. */
   [extra: string]: unknown;
 }
 
 /**
- * SSH auth block (ADR 0008, extended by ADR 0010): tagged by `mode`,
+ * SSH auth block: tagged by `mode`,
  * camelCase `keyPath`. `sshConfig` is a live reference to a Host alias
  * in `~/.ssh/config` — host/user/port/IdentityFile are resolved from
  * that block at connect time; the entry's own host/user/port fields
@@ -47,7 +47,7 @@ export type SshSourceAuth =
   | { mode: "sshConfig"; alias: string };
 
 /**
- * SSH remote source (ADR 0008 / ADR 0007 remote v1). Not yet editable in the
+ * SSH remote source. Not yet editable in the
  * UI — rendered read-only by SourcesEditor and passed through verbatim on
  * every commit. Unknown fields are preserved by the Rust loader
  * (forward compatibility), hence the index signature.
@@ -104,16 +104,16 @@ export async function setSettingValue(key: string, value: SettingValue): Promise
 
 /**
  * Read-only provider id listing (same registry that backs the `agents` CLI
- * subcommand). No settings-UI consumer since ADR 0011 removed the source
- * provider picker; kept as the registry SSOT accessor.
+ * subcommand). No settings-UI consumer since the local provider picker was
+ * removed; kept as the registry SSOT accessor.
  */
 export async function fetchProviders(): Promise<string[]> {
   return await invoke("list_providers");
 }
 
 /**
- * One selectable Host alias from `~/.ssh/config` (ADR 0010 Decision 5 — the
- * add-source picker). `host`/`user` are display previews resolved with the
+ * One selectable Host alias from `~/.ssh/config` (feeds
+ * the add-source picker). `host`/`user` are display previews resolved with the
  * same first-match-wins semantics the connect path uses; `supported: false`
  * marks a ProxyJump block (greyed out with a "not supported yet" note).
  */

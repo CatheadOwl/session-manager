@@ -35,7 +35,7 @@ const EMPTY_MANUAL: ManualDraft = {
 };
 
 /**
- * UI primitive: the "Add SSH source" flow panel (ADR 0010 / ADR 0008 修订 1),
+ * UI primitive: the "Add SSH source" flow panel,
  * embedded inline under the sources list. Three states driven by
  * `list_ssh_aliases`:
  *
@@ -45,7 +45,7 @@ const EMPTY_MANUAL: ManualDraft = {
  *    or the actionable error) → [Add] commits a
  *    `{ kind: "ssh", auth: { mode: "sshConfig", alias } }` entry. The
  *    preview is display-only: nothing but the alias is persisted (live
- *    reference, ADR 0010 Option A).
+ *    sshConfig reference, not a snapshot).
  * 2. **Empty (double exit)** — a) a guide card with the full `~/.ssh/config`
  *    path (CopyButton) + a three-line example block + [Refresh]; b) a
  *    collapsed "Advanced: manual configuration" form (host/port/user/auth
@@ -55,7 +55,7 @@ const EMPTY_MANUAL: ManualDraft = {
  *
  * All controls come from the shared primitives (`Menu`, `CopyButton`,
  * `.secondary-button`/`.primary-button`, `.setting-source-input`); no
- * hardcoded colors (ADR 0004).
+ * hardcoded colors (design-token constraint).
  */
 export function AddSshSourcePanel({ onAdd, onClose }: AddSshSourcePanelProps) {
   // null aliases = still loading (distinct from [] = empty config).
@@ -121,7 +121,7 @@ export function AddSshSourcePanel({ onAdd, onClose }: AddSshSourcePanelProps) {
       kind: "ssh",
       id: idDraft.trim() || selectedAlias.alias,
       // sshConfig placeholders — the connect layer overrides them from
-      // the resolved Host block (ADR 0010 Decision 1).
+      // the resolved Host block.
       host: "",
       port: 22,
       user: "",

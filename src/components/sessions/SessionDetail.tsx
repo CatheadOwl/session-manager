@@ -290,7 +290,7 @@ export const SessionDetail = memo(function SessionDetail({
   const sessionTitle = formatSessionTitle(session);
   const isRemoteSession = session.locator?.kind === "remote";
   const lifecycleSupported = supportsLifecycleOperations(session);
-  // Read-only tooltip: remote (SSH) sessions are read-only per ADR 0007;
+  // Read-only tooltip: remote (SSH) sessions are read-only;
   // the OpenCode message covers the other lifecycle-unsupported case.
   const lifecycleTitle = lifecycleSupported
     ? undefined
@@ -310,7 +310,7 @@ export const SessionDetail = memo(function SessionDetail({
             <div className="detail-provider-row">
               <span className="provider-pill">{getProviderDisplay(session.providerId).label}</span>
               {isRemoteSession && (
-                <span className="provider-pill" title="SSH remote source — read-only (ADR 0007)">
+                <span className="provider-pill" title="SSH remote source — read-only">
                   Remote (read-only)
                 </span>
               )}

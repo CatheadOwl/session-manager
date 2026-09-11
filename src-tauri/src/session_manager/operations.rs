@@ -521,7 +521,7 @@ mod tests {
     }
 
     // ── Remote locator rejection (mirror of the Database tests in
-    // session_manager/mod.rs; ADR 0007 read-only boundary, phase 4) ──────
+    // session_manager/mod.rs; read-only remote boundary, phase 4) ──────
 
     fn remote_handle() -> SessionHandle {
         SessionHandle {

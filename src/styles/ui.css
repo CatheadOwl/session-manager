@@ -1,5 +1,5 @@
 /*
- * UI primitive layer (workunit 20260909-1258-ui-primitive-layer).
+ * UI primitive layer.
  *
  * Base button classes are SELF-SUFFICIENT: typography, height, and radius are
  * baked in so any consumer outside .detail-actions renders styled, never raw.
@@ -130,9 +130,9 @@
   color: var(--accent);
 }
 
-/* ─── Settings form primitives (workunit 20260910-1131) ────────────────── */
+/* ─── Settings form primitives ─────────────────────────────────────────── */
 /*
- * Self-sufficient rows for the settings surface (ADR 0004 deferred trigger):
+ * Self-sufficient rows for the settings surface:
  * typography/height/radius baked in, tokens only. Consumers may tweak
  * size/shape in scope CSS, never re-add basics.
  */
@@ -179,7 +179,7 @@
 }
 
 /*
- * Full-width variant (ADR 0011): for list-type settings whose control is
+ * Full-width variant: for list-type settings whose control is
  * an editor that needs the whole row — text stacks on top, control spans
  * the full width below. Bool rows keep the two-column rhythm above.
  */
@@ -275,7 +275,7 @@
 
 .setting-source-row {
   display: grid;
-  /* Local row (ADR 0011): path input + enabled toggle + remove — no
+  /* Local row: path input + enabled toggle + remove — no
    * provider column anymore. */
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
@@ -288,7 +288,7 @@
 }
 
 /*
- * ADR 0008: SSH row — same one-line rhythm as a local row (badge +
+ * SSH row — same one-line rhythm as a local row (badge +
  * single-line identity + toggle + Remove); the identity itself stays
  * read-only (Add flow / hand editing owns it).
  */
@@ -391,7 +391,7 @@
   align-self: flex-start;
 }
 
-/* ─── Add SSH source flow (ui/AddSshSourcePanel, ADR 0010) ─────────────── */
+/* ─── Add SSH source flow (ui/AddSshSourcePanel) ───────────────────────── */
 
 .setting-ssh-add-panel {
   display: flex;

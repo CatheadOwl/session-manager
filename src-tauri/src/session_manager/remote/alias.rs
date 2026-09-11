@@ -1,4 +1,4 @@
-//! ssh-config alias resolution (ADR 0010): expand the `sshConfig` auth
+//! ssh-config alias resolution: expand the `sshConfig` auth
 //! mode's `alias` against the user's `~/.ssh/config` into concrete
 //! connection parameters.
 //!
@@ -9,9 +9,9 @@
 //! negation), first-obtained-value-wins parameter resolution, and
 //! `Include` directives (resolved relative to `~/.ssh`, `~`-aware,
 //! glob-supported) — is delegated to the `ssh2-config` crate; hand-
-//! rolling those rules is a known trap (ADR 0010 Evidence 3).
+//! rolling those rules is a known trap.
 //!
-//! v1 boundary (ADR 0010 Decision 4): an alias that resolves to a
+//! v1 boundary: an alias that resolves to a
 //! `ProxyJump` fails loudly with "not supported yet" — the russh stack
 //! has no jump-host dialing, and silently connecting to the jump target
 //! directly would be wrong. Unknown aliases fail with an actionable
@@ -116,13 +116,12 @@ pub fn resolve_alias_in(config_path: &Path, alias: &str) -> Result<ResolvedAlias
 }
 
 /// One selectable alias for the settings UI's "Add SSH source" picker
-/// (ADR 0010 Decision 5 — the alias dropdown this type feeds). The
+/// (the alias dropdown this type feeds). The
 /// `host`/`user` pair is a PREVIEW rendered as `user@host`; it is
 /// derived at listing time and never persisted into the settings entry
-/// (the entry keeps a live `sshConfig` reference instead, ADR 0010
-/// Option A). `supported: false` marks a ProxyJump block — greyed out
-/// in the picker with a "not supported yet" note (v1 boundary,
-/// Decision 4).
+/// (the entry keeps a live `sshConfig` reference instead).
+/// `supported: false` marks a ProxyJump block — greyed out
+/// in the picker with a "not supported yet" note (v1 boundary).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshAliasInfo {
@@ -228,8 +227,8 @@ pub fn list_aliases_in(config_path: &Path) -> Result<Vec<SshAliasInfo>, RemoteEr
         .collect())
 }
 
-/// Expand a leading `~` to the user's home directory (ADR 0010
-/// Decision 3). Applied to EVERY key path before it reaches the key
+/// Expand a leading `~` to the user's home directory. Applied
+/// to EVERY key path before it reaches the key
 /// loader — both IdentityFiles expanded out of ssh config and the
 /// hand-typed `Key.keyPath` (fixing the v1 gap where a manual
 /// `~/...` path was passed to the loader verbatim and failed).
@@ -335,11 +334,11 @@ mod tests {
             RemoteError::SshConfigAlias(
                 "ssh config alias `ali` uses ProxyJump, not supported yet".to_string()
             ),
-            "exact ADR 0010 message"
+            "exact v1 boundary message"
         );
     }
 
-    // ── alias listing (ADR 0010 Decision 5 picker) ────────────────────
+    // ── alias listing (the alias dropdown picker) ────────────────────
 
     #[test]
     fn listing_reports_alias_host_user_previews() {
@@ -425,7 +424,7 @@ mod tests {
         assert_eq!(list.len(), 1);
     }
 
-    // ── ~ expansion (ADR 0010 Decision 3) ─────────────────────────────
+    // ── ~ expansion ──────────────────────────────────────────────────
 
     #[test]
     fn tilde_home_form_expands() {

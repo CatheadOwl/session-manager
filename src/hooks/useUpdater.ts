@@ -11,7 +11,7 @@ export function useUpdater() {
   const [error, setError] = useState<string | null>(null);
   const cancelledRef = useRef(false);
 
-  // Settings gate (ADR 0006): `update.autoCheck === false` opts out of the
+  // Settings gate: `update.autoCheck === false` opts out of the
   // startup check. The gate is a read through IPC, not a local flag —
   // hand-editing settings.json + restart changes behavior. While the settings
   // query is still loading (`data === undefined`) the auto-check is HELD: an

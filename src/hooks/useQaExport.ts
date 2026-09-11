@@ -23,8 +23,7 @@ const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
 const LARGE_EXPORT_THRESHOLD = 50;
 
 /**
- * Remote-backed sessions (SSH sources) export like local ones since the
- * 20260911 bridge (workunit 20260911-1031-remote-qa-export): the backend
+ * Remote-backed sessions (SSH sources) export like local ones: the backend
  * fetches their content into the transient cache (first fetch ~0.2s/file,
  * P3 bench; re-exports free) and keeps the remote locator in provenance.
  * A per-item fetch failure surfaces as that session being `skipped`, never

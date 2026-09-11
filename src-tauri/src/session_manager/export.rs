@@ -1,5 +1,5 @@
 //! Time-ranged Q&A session export — the single logic site for the export
-//! capability (workunit 20260909-1110-qa-session-export-service).
+//! capability.
 //!
 //! Adapters (Tauri command, future CLI/MCP) must only translate parameters
 //! and write/return the rendered output; filtering, distilling, and
@@ -25,7 +25,7 @@ use std::time::Instant;
 /// - Individual load failures are recorded in `skipped`; the batch continues.
 ///
 /// `extra_sources` is the settings sources overlay threaded straight into
-/// the scan (ADR 0006 D2); adapters read `SettingsManager::enabled_sources()`.
+/// the scan; adapters read `SettingsManager::enabled_sources()`.
 pub fn export_qa_sessions(
     registry: &ProviderRegistry,
     scope: &SessionScope,
@@ -76,9 +76,8 @@ pub fn export_qa_sessions(
 ///
 /// `overrides` maps a meta's INDEX to a local file path holding its content —
 /// the command layer's bridge (`resolve_remote_to_local` → transient cache
-/// copy) for Remote-locator metas (ADR 0007 cache exit; workunit
-/// 20260911-1031-remote-qa-export). Pass an empty map for local-only
-/// selections; a Remote meta WITHOUT an override keeps the backstop
+/// copy) for Remote-locator metas (the remote line's cache exit). Pass an
+/// empty map for local-only selections; a Remote meta WITHOUT an override keeps the backstop
 /// behavior: rejected into `skipped`, batch continues.
 ///
 /// Load path only: an overridden meta loads from the local copy while
@@ -830,8 +829,8 @@ mod tests {
         write_claude_session_with_ts(&projects.join("local.jsonl"), "local", ts);
 
         // Remote-backed sessions reach the content only through the
-        // command-layer bridge (resolve_remote_to_local → override path,
-        // workunit 20260911-1031). This pins the CORE backstop for a
+        // command-layer bridge (resolve_remote_to_local → override path).
+        // This pins the CORE backstop for a
         // Remote meta arriving WITHOUT an override (bridge failure mid-batch,
         // or a future adapter skipping the bridge): route it to `skipped`
         // (the default load_messages_for_handle rejects the Remote locator)

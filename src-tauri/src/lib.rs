@@ -53,7 +53,7 @@ fn clamp_window_position<R: Runtime>(
 }
 
 pub fn run() {
-    // CLI mode (ADR 0005): a known subcommand as the first argument runs the
+    // CLI mode: a known subcommand as the first argument runs the
     // CLI path and exits before any Tauri init — no window flash. Anything
     // else launches the GUI unchanged.
     if cli::is_cli_invocation() {
@@ -72,7 +72,7 @@ pub fn run() {
             let manager = MetadataManager::new(metadata_path);
             app.manage(manager);
 
-            // Settings core (ADR 0006): hand-editable ~/.session-manager/settings.json
+            // Settings core: hand-editable ~/.session-manager/settings.json
             let settings_path =
                 crate::config::get_app_settings_path().expect("Failed to resolve settings path");
             let settings = SettingsManager::new(settings_path);
@@ -82,7 +82,7 @@ pub fn run() {
             let registry = session_manager::build_provider_registry();
             app.manage(registry);
 
-            // Remote scan line (ADR 0007/0008, phase 3): per-source SSH
+            // Remote scan line (phase 3): per-source SSH
             // session pool + last-scan disconnect fallback, consumed by
             // the list_sessions command.
             app.manage(session_manager::remote::RemoteScanState::new());

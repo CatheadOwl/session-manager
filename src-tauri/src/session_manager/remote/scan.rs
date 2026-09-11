@@ -1,13 +1,13 @@
-//! Remote batch scan (phase 3, ADR 0008 修订 1): build a source's
+//! Remote batch scan (phase 3): build a source's
 //! session list from ONE discovery exec + ONE batch-metadata exec,
 //! reusing the LOCAL provider parsers through a temp-file bridge
-//! (ADR 0007 "batch" exit; the P1 real-alias benchmark: ~14 ms/file vs
+//! (the "batch" exit; the P1 real-alias benchmark: ~14 ms/file vs
 //! ~710 ms per-file).
 //!
 //! ## Root derivation — "remote source = another machine"
 //!
 //! There is NO root field in the ssh settings entry and NO provider
-//! probing (both removed by ADR 0008 修订 1). The remote machine is
+//! probing (both were removed from the contract). The remote machine is
 //! assumed to be isomorphic to the local one: every provider scans its
 //! own standard roots there, exactly like the local scan core
 //! (`scan.rs`):
@@ -30,7 +30,7 @@
 //!
 //! ## Discovery shape (one exec for ALL roots of the scope)
 //!
-//! ADR 0007 batch discipline forbids per-root round-trips, so one exec
+//! The batch discipline forbids per-root round-trips, so one exec
 //! walks every derived root. Before each root's `find` output, the
 //! script prints an attribution header:
 //!
@@ -90,7 +90,7 @@
 //! sidecar for titles. On the scanning machine that is the LOCAL index,
 //! which never contains remote session ids — the lookup misses and the
 //! title fallback chain applies. v1 does not transfer the remote index
-//! (no N× read shape is allowed for it in the scan path; see ADR 0007).
+//! (no N× read shape is allowed for it in the scan path).
 //!
 //! ## Provider support matrix (enforced by discovery shape)
 //!
@@ -121,10 +121,10 @@ use crate::session_manager::settings::SshSource;
 use crate::session_manager::types::{SessionLocator, SessionMeta, SessionScope};
 
 // ---------------------------------------------------------------------------
-// Root derivation (ADR 0008 修订 1): remote roots from provider roots()
+// Root derivation: remote roots from provider roots()
 // ---------------------------------------------------------------------------
-// The derivation itself now lives in the shared `scan_roots` module
-// (ADR 0011): the remote line and the local extra-source overlay consume
+// The derivation itself now lives in the shared `scan_roots` module:
+// the remote line and the local extra-source overlay consume
 // ONE function — strip the local home prefix from each provider's
 // `roots()`, normalize to posix — instead of duplicating the map. The
 // re-exports below keep this module's historical names (and its tests)
@@ -145,7 +145,7 @@ pub use crate::session_manager::scan_roots::derive_scan_roots_with_home as deriv
 
 /// One discovered file: its remote path plus the provider that OWNS
 /// the root it was found under (directory ownership — no content
-/// probing, ADR 0008 修订 1).
+/// probing).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredFile {
     pub provider_id: String,
@@ -225,8 +225,8 @@ fn root_label(rel: &str) -> String {
     }
 }
 
-/// Build the ONE discovery exec covering every root of the scope (ADR
-/// 0007 batch discipline: no per-root round-trips). Per root, in
+/// Build the ONE discovery exec covering every root of the scope
+/// (batch discipline: no per-root round-trips). Per root, in
 /// order:
 ///
 /// ```sh
@@ -366,7 +366,7 @@ pub fn scan_remote_source_with_home(
     let paths: Vec<RemotePath> = files.iter().map(|f| f.path.clone()).collect();
     let blobs = fetch.batch_metadata(&paths)?;
 
-    // Path-keyed join, NOT a positional zip (ADR 0013): the batch
+    // Path-keyed join, NOT a positional zip: the batch
     // stream drops MISS lines (files deleted between discovery and
     // batch), so a zip would shift every post-miss blob onto the wrong
     // file (wrong provider parse) and truncate the tail. Blobs carry
@@ -677,7 +677,7 @@ mod tests {
         registry
     }
 
-    // ── root derivation (ADR 0008 修订 1) ───────────────────────────────
+    // ── root derivation ───────────────────────────────────────────────
 
     #[test]
     fn derive_roots_strips_home_and_normalizes_separators() {
@@ -1104,7 +1104,7 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
-    // ── ADR 0013: path-keyed blob pairing (no positional zip) ─────────
+    // ── path-keyed blob pairing (no positional zip) ─────────────────
 
     /// A blob set missing one file (the MISS shape: the remote deleted
     /// it between discovery and batch) must skip exactly that file —

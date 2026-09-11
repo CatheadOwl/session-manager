@@ -1,5 +1,5 @@
-//! CLI adapter for the Q&A export capability (ADR 0005, workunit
-//! 20260909-2109). Dual-mode binary: this module runs only when the first
+//! CLI adapter for the Q&A export capability. Dual-mode binary: this
+//! module runs only when the first
 //! CLI argument is a known subcommand — otherwise `run()` launches the GUI
 //! unchanged. The CLI is a THIN adapter: it parses flags, resolves the time
 //! window, and delegates all filtering/distilling/rendering to
@@ -131,7 +131,7 @@ fn is_cli_arg(arg: Option<&str>) -> bool {
     )
 }
 
-/// Windows console attach (workunit 20260910-1408). Release builds link as a
+/// Windows console attach. Release builds link as a
 /// GUI-subsystem exe (`#![cfg_attr(not(debug_assertions), windows_subsystem =
 /// "windows")]` in main.rs), so Windows attaches no console and std handles
 /// are NULL when launched interactively from cmd/pwsh: clap's `--help` output
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn console_attach_never_panics() {
-        // Workunit 20260910-1408: attach must be safe in any host state —
+        // Console attach must be safe in any host state —
         // test harness (already holds a console → attach fails → early
         // return), headless CI (no parent console → early return). It must
         // never panic or disturb already-valid std handles.
@@ -481,8 +481,8 @@ mod tests {
         // The dispatch entry, not just clap: `--help` output advertises the
         // built-in `help` subcommand under Commands, so a bare `help` must
         // route into run_cli() — falling through to the GUI here would
-        // break the advertised contract (regression guard, workunit
-        // 20260910-1421: this was exactly the missed leg — clap-level
+        // break the advertised contract (regression guard: this was
+        // exactly the missed leg — clap-level
         // tests passed while the whitelist dropped the arg).
         assert!(is_cli_arg(Some("help")));
         assert!(is_cli_arg(Some("export")));

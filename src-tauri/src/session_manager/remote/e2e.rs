@@ -1,6 +1,6 @@
 //! G2 real-host E2E acceptance for the remote v1 source (reusable).
 //!
-//! Runs the planner workunit's G2 gate end-to-end against a real SSH host.
+//! Runs the G2 acceptance gate end-to-end against a real SSH host.
 //! Skipped unless `REMOTE_E2E_HOST` is set:
 //!
 //! ```text
@@ -13,7 +13,7 @@
 //! ```
 //!
 //! The scan roots are DERIVED from each provider's `roots()`
-//! (home-prefix strip, ADR 0008 修订 1) — there is no root/provider
+//! (home-prefix strip) — there is no root/provider
 //! env knob anymore; the host simply must have at least one populated
 //! standard provider root.
 //!
@@ -22,7 +22,7 @@
 //! it (known_hosts must cover that entry):
 //! `ssh -L 2222:127.0.0.1:22 -N <alias>` + HOST=127.0.0.1 PORT=2222.
 //!
-//! G2 checklist (workunit 20260910-1145):
+//! G2 checklist:
 //! 1. list: remote scan produces Remote-locator SessionMeta
 //! 2. open: message load via the cache bridge; second open is a cache hit
 //!    (asserted structurally: same local path, freshness sidecar untouched)
@@ -240,7 +240,7 @@ fn load_messages(
         .expect("message load via resolved local copy")
 }
 
-/// QA-export bridge E2E (workunit 20260911-1031): runs the REAL backend
+/// QA-export bridge E2E: runs the REAL backend
 /// export path against a real ssh-config alias — scan →
 /// `bridge_remote_export_metas` (the command layer's bridge, verbatim) →
 /// `export_qa_sessions_for_metas_with_overrides` → `render_export` →
@@ -376,7 +376,7 @@ async fn remote_e2e_qa_export_ssh_alias() {
     assert!(s2.is_empty());
 }
 
-/// ADR 0010 sshConfig-mode E2E (G2.1 scope): when `REMOTE_E2E_ALIAS` is
+/// sshConfig-mode E2E (G2.1 scope): when `REMOTE_E2E_ALIAS` is
 /// set, build the source with `auth: { mode: "sshConfig", alias }` —
 /// host/user/port/key all come from the real `~/.ssh/config` Host
 /// block at connect time — and run the list gate (connect + scan

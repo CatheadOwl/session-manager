@@ -1,7 +1,7 @@
-//! Thin IPC adapter for the settings core (ADR 0006). All logic lives in
+//! Thin IPC adapter for the settings core. All logic lives in
 //! `session_manager::settings`; these handlers only delegate and translate.
 //! The `settings-changed` event is emitted HERE, not inside the manager,
-//! which stays Tauri-free for the CLI adapter (ADR 0005).
+//! which stays Tauri-free for the CLI adapter.
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::session_manager::settings::{SettingsManager, SettingValue, SettingsSn
 
 /// Read-only provider id listing for the settings UI's source editor. Reuses
 /// the same registry that backs the `agents` CLI subcommand — one source of
-/// truth for "which providers exist" (ADR 0006 D5 explicit-provider).
+/// truth for "which providers exist" (explicit-provider model).
 #[tauri::command]
 pub fn list_providers(registry: tauri::State<'_, Arc<ProviderRegistry>>) -> Vec<String> {
     registry.ids().cloned().collect()

@@ -1,4 +1,4 @@
-//! Transient local cache for fully-fetched remote files (ADR 0007
+//! Transient local cache for fully-fetched remote files (the
 //! "cache" exit: opening a session pays the full transfer once, then
 //! mtime+size-gated reuse makes re-opens free).
 //!

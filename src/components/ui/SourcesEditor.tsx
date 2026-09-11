@@ -28,24 +28,24 @@ const toDraft = (value: SourceEntry[]): DraftRow[] =>
   }));
 
 /**
- * UI primitive: `sourceList` renderer (ADR 0006 sources overlay; local
- * rows reworked by ADR 0011). Rendered through SettingRow's FULL variant
+ * UI primitive: `sourceList` renderer (the settings sources overlay).
+ * Rendered through SettingRow's FULL variant
  * — description on top, the list spanning the content width (list editors
  * do not fit the two-column toggle rhythm). One row per entry:
  *
- * - LOCAL (ADR 0011 home-mirror): path text input + enabled toggle +
+ * - LOCAL (home-mirror model): path text input + enabled toggle +
  *   remove (danger, guarded by ConfirmDeleteDialog). There is NO provider
  *   picker — the path names an ALTERNATE HOME whose layout mirrors the
  *   real home, and every provider's sessions are auto-discovered under
  *   it. "Add source…" appends an empty draft row.
- * - SSH (ADR 0008): the SAME structural controls as local rows — enabled
+ * - SSH: the SAME structural controls as local rows — enabled
  *   toggle and guarded remove (unified expression; the read-only part is
  *   only the connection identity, which comes from the Add flow) — and
  *   MUST be included verbatim in every `onChange` commit: a local edit
  *   must never drop them from the file. The commit shape is therefore
  *   the FULL list. Adding NEW ssh entries goes through the "Add SSH
  *   source…" flow (`AddSshSourcePanel`: ssh-config alias picker or
- *   manual form, with a test connection step — ADR 0010).
+ *   manual form, with a test connection step).
  *
  * Structural changes (enabled/add/remove) commit immediately via
  * `onChange`; path edits commit on blur/Enter so typing does not spam the
@@ -92,9 +92,9 @@ export function SourcesEditor({ label, description, value, onChange, error }: So
     );
   };
 
-  // SSH rows share the local rows' structural controls (ADR 0008 r1 +
-  // review feedback): same enabled toggle and remove semantics, expressed
-  // on the summary identity instead of a path input.
+  // SSH rows share the local rows' structural controls: same enabled
+  // toggle and remove semantics, expressed on the summary identity
+  // instead of a path input.
   const toggleSshEnabled = (index: number) => {
     commit(
       rows.map((row, i) =>
@@ -105,7 +105,7 @@ export function SourcesEditor({ label, description, value, onChange, error }: So
     );
   };
 
-  // ADR 0011: a new local row is just `{ path, enabled }` — no provider.
+  // A new local row is just `{ path, enabled }` — no provider.
   const addSource = () => {
     commit([...rows, { entry: { path: "", enabled: true }, pathDraft: "" }]);
   };
@@ -149,12 +149,11 @@ export function SourcesEditor({ label, description, value, onChange, error }: So
           // controls as local rows (enabled toggle, guarded remove) — the
           // same visual rhythm as a local row: one line of identity +
           // toggle + Remove. The identity fields themselves stay read-only —
-          // connection config comes from the Add flow or hand editing
-          // (ADR 0010).
+              // connection config comes from the Add flow or hand editing.
           if (row.entry.kind === "ssh") {
             const ssh = row.entry;
-            // sshConfig entries keep placeholder host/user fields (ADR
-            // 0010): the identity line shows the LIVE alias reference
+              // sshConfig entries keep placeholder host/user fields: the
+              // identity line shows the LIVE alias reference
             // instead — no resolution request here, by design (a config
             // edit must not need a settings round-trip to render).
             const viaAlias =

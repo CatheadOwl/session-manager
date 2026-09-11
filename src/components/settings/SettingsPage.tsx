@@ -15,8 +15,8 @@ import { SourcesEditor } from "@/components/ui/SourcesEditor";
 import { ToggleRow } from "@/components/ui/ToggleRow";
 
 /**
- * Settings overlay page (workunit 20260910-1131): a pure renderer over the
- * settings core (ADR 0006). Descriptors/groups arrive via `get_settings`;
+ * Settings overlay page: a pure renderer over the
+ * settings core. Descriptors/groups arrive via `get_settings`;
  * labels/order live here in TS. Every control change writes through
  * `setSettingValue` per key (auto-apply, no Save/Cancel) with an optimistic
  * React Query cache update; the app-level `settings-changed` listener handles

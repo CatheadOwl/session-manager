@@ -12,21 +12,28 @@
 //! connection layer must honor known_hosts (see phase 2 spec).
 //!
 //! Windows-only: the agent probe targets the Windows OpenSSH named pipe
-//! (`connect_named_pipe` is cfg(windows) in russh), so this example does not
-//! compile on other platforms and is excluded there.
+//! (`connect_named_pipe` is cfg(windows) in russh). On other platforms the
+//! example builds to a notice-and-exit stub — cargo always requires a `main`
+//! for example targets, so the file cannot be gated with `#![cfg]` as a whole.
 
-#![cfg(windows)]
-
+#[cfg(windows)]
 use std::sync::Arc;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 use russh::keys::agent::client::AgentClient;
+#[cfg(windows)]
 use russh::keys::agent::AgentIdentity;
+#[cfg(windows)]
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
+#[cfg(windows)]
 use russh::{ChannelMsg, client};
 
+#[cfg(windows)]
 struct SpikeHandler;
 
+#[cfg(windows)]
 impl client::Handler for SpikeHandler {
     type Error = russh::Error;
 
@@ -39,6 +46,7 @@ impl client::Handler for SpikeHandler {
     }
 }
 
+#[cfg(windows)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -161,6 +169,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("remote_spike is a Windows-only spike (named-pipe ssh-agent probe).");
+}
+
+#[cfg(windows)]
 async fn exec_collect(
     handle: &client::Handle<SpikeHandler>,
     cmd: &str,

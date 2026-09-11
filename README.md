@@ -4,14 +4,14 @@
 
 # Session Manager
 
-**Browse, search, inspect, archive, and clean up local AI coding-agent sessions.**
+**Browse, search, inspect, archive, and clean up local and remote (SSH) AI coding-agent sessions.**
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](#)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](https://github.com/CatheadOwl/session-manager/releases/latest)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-ffc131?style=flat-square&logo=tauri&logoColor=black)](https://tauri.app)
 [![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![Rust](https://img.shields.io/badge/Rust-1.85+-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 
-[Overview](#overview) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Getting Started](#getting-started) | [Manual Settings](#manual-settings) | [Architecture](#architecture)
+[Overview](#overview) | [Install](#install) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Remote Sources](#remote-sources-ssh) | [Development](#development) | [Manual Settings](#manual-settings) | [Architecture](#architecture)
 
 </div>
 
@@ -19,24 +19,36 @@
 
 ## Overview
 
-Session Manager is a Tauri desktop app for working with local AI coding-agent conversation logs. It scans known session directories, groups sessions by project folder, and gives you a three-column workspace for moving between folders, session lists, fork trees, and message detail.
+Session Manager is a Tauri desktop app for working with AI coding-agent conversation logs. It scans known session directories — local ones by default, and remote (SSH) hosts registered as additional read-only sources — and gives you a three-column workspace for moving between folders, session lists, fork trees (branching views of sessions that share prompt history), and message detail.
 
 The project was inspired by [CC Switch's Session Manager](https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/3-extensions/3.4-sessions.md), with a narrower focus on session browsing and file-level management.
 
+## Install
+
+Download the latest installer from [GitHub Releases](https://github.com/CatheadOwl/session-manager/releases/latest):
+
+| Platform | Artifacts |
+|----------|-----------|
+| Windows | `*-x64-setup.exe` (NSIS) or `*-x64_en-US.msi` |
+| macOS | `*universal.dmg` — Apple Silicon and Intel |
+| Linux | `.deb`, `.rpm`, or `.AppImage` |
+
+- Updates are delivered by the built-in auto-updater (checks on startup; can be turned off in Settings).
+- The Windows installer is not code-signed, so SmartScreen will show an "unknown publisher" warning — choose "More info → Run anyway" to proceed.
+- [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
+
 ## Features
 
-- **Project-folder navigation** - sessions are grouped by working directory, with pinned folders and active/archived scope switching.
-- **List and fork-tree views** - switch between a flat session list and a computed fork tree for sessions that share prompt history. Clicking a fork node jumps straight to the divergence point in the detail pane.
-- **Local full-text search** - FlexSearch indexes session title, summary, project path, provider, and session id, with highlighted matches in the list/tree.
-- **In-message search** - find text within the currently open session's messages, with match count, prev/next navigation, and inline highlighting.
-- **Session detail inspection** - view full messages, compact Q&A pairs, metadata, source path, tool calls/results, and token usage.
-- **Markdown rendering** - toggle between rendered Markdown (GFM + line breaks) and raw text for message content.
-- **Starred sessions** - mark important sessions and filter the list to starred items.
-- **Archive and restore** - move supported sessions between active and archived directories, including folder-level batch archive/restore.
-- **Batch delete** - select multiple sessions in list view and send them to the system trash.
-- **Time-ranged Q&A export** - filter the list by time presets or a custom range and export the visible sessions as Q&A-distilled JSON or Markdown with full provenance (ADR 0002/0003).
-- **Safer destructive actions** - delete validates the provider root and session id before trashing the session file and any sidecar directory.
-- **Auto updates** - the desktop app checks, downloads, and installs updates through Tauri's updater flow.
+- **Project-folder navigation** - sessions grouped by working directory, with pinned folders and active/archived scopes.
+- **List and fork-tree views** - flat list or a fork tree of sessions that share prompt history.
+- **Session search** - filter the session list by title, summary, project path, or session id.
+- **In-session search** - find text within the currently open session's messages, with match count and prev/next navigation.
+- **Session detail** - full messages or compact Q&A pairs, with metadata, tool calls, and a Markdown rendering toggle.
+- **Starred sessions** - mark important sessions and filter to them.
+- **Archive and restore** - single or folder-level batch, between active and archived directories.
+- **Batch delete** - checkbox selection (tri-state select-all) scoped to the visible list; the provider root and session id are validated before anything is trashed.
+- **Time-ranged Q&A export** - export the visible sessions as Q&A-distilled JSON or Markdown with full provenance; also scriptable headlessly (`session-manager export --help`).
+- **SSH remote sources** - register remote hosts as read-only sources and browse their sessions alongside local ones ([details](#remote-sources-ssh)).
 
 ## Screenshots
 
@@ -76,7 +88,23 @@ The project was inspired by [CC Switch's Session Manager](https://github.com/far
 >
 > **Experimental** = adapters written for tools the author doesn't personally run — theoretically they work, practically… who knows? PRs & issue reports welcome.
 
-## Getting Started
+## Remote Sources (SSH)
+
+Remote sources let you browse sessions that live on another machine — for example a Linux dev server where Codex or Claude Code runs over VS Code Remote SSH.
+
+Open **Settings** (the gear at the bottom of the folder strip) → **Sources** → **Add SSH source**. Two entry paths, both with a connection test before saving:
+
+- **Alias picker** - lists `Host` aliases from your `~/.ssh/config`; connection settings and keys are read live from the config block (ssh-agent identities first, then the block's `IdentityFile`). `ProxyJump` hosts are not supported yet and are greyed out.
+- **Manual form** ("Advanced") - enter host / port / user yourself and pick an auth mode: ssh-agent, or an explicit key file (`~` expanded).
+
+Behavior:
+
+- Provider session directories are discovered automatically under the remote home (`~/.codex/sessions/`, `~/.claude/projects/`, …) — same providers as local, no remote path configuration.
+- Remote sessions appear in the same list and detail views; message content is fetched over SSH when you open a session and cached locally for re-opens and exports.
+- Remote sources are **read-only** in this release: delete / archive / restore remain local-only.
+- The remote cache lives in the OS cache directory (`%LOCALAPPDATA%\session-manager\remote-cache` on Windows) and is safe to delete at any time — deleted entries are simply refetched on the next open.
+
+## Development
 
 ### Prerequisites
 
@@ -109,32 +137,42 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Manual Settings
 
-Settings live in a hand-editable file — you can change them before any settings UI exists (VS Code-style):
+Settings are editable from the app's Settings panel, and also live in a hand-editable file (VS Code-style) — both edit the same data:
 
 ```
 ~/.session-manager/settings.json
 ```
 
-The file is JSONC (comments allowed) and stores only overridden keys: values equal to the built-in defaults are omitted, and `version` is always written. Change a setting, restart the app, and it takes effect.
+The file is JSONC (comments allowed) and stores only overridden keys: values equal to the built-in defaults are omitted, and `version` is always written. Restart the app after hand-editing.
 
 | Key | Type | Default | Semantics |
 |-----|------|---------|-----------|
 | `version` | number | *(always written)* | Migration anchor; current = `1` |
 | `update.autoCheck` | bool | `true` | `false` skips the automatic update check on startup (manual retry still works) |
-| `sources[]` | array | `[]` | Extra session directories scanned **in addition to** the built-in provider locations (additive overlay) |
-| `sources[].path` | string | — | Directory containing session files |
-| `sources[].provider` | string | — (required) | Provider id owning the parser for this root (`claude`, `codex`, …) |
-| `sources[].enabled` | bool | `true` | Disabled entries are kept in the file but not scanned |
+| `sources[]` | array | `[]` | Extra session sources, scanned in addition to the built-in provider locations. Entries carry a `kind` tag: local entries have no `kind` key, SSH entries carry `"kind": "ssh"` |
 
-Example:
+**Local source** — `path` points at an **alternate home root**: every provider's standard directory is discovered under it, same model as a remote machine. There is no per-entry `provider` field anymore; a legacy `provider` key from an older file is preserved but ignored.
+
+**SSH source** — `host`/`port`/`user` plus an `auth` block with three modes — `sshConfig` (alias from `~/.ssh/config`), `agent` (ssh-agent), or `key` (explicit key file):
 
 ```jsonc
 {
   "version": 1,
   "update": { "autoCheck": false },
-  "sources": [ { "path": "D:\\jsonl\\dump", "provider": "codex", "enabled": true } ]
+  "sources": [
+    // local: alternate home root, providers discovered under it
+    { "path": "D:\\home-mirror", "enabled": true },
+    // ssh: alias mode — settings read live from ~/.ssh/config
+    { "kind": "ssh", "id": "devbox", "host": "", "user": "", "port": 22,
+      "auth": { "mode": "sshConfig", "alias": "dev" } },
+    // ssh: agent / explicit key modes
+    { "kind": "ssh", "id": "build", "host": "192.0.2.10", "user": "admin", "port": 2222,
+      "auth": { "mode": "key", "keyPath": "~/.ssh/id_ed25519" } }
+  ]
 }
 ```
+
+Common entry fields: `enabled` (default `true`; disabled entries are kept but not scanned), `id` (required for SSH, optional for local), `label` (optional, SSH).
 
 Loading is lenient — a broken file never blocks startup (defaults are used), unknown keys are preserved on programmatic saves, and wrong-typed known keys fall back to defaults with a logged warning.
 
@@ -154,8 +192,11 @@ src/                     # Frontend: React + TypeScript + Vite
 src-tauri/src/           # Backend: Rust + Tauri v2
 ├── commands/            # Tauri command handlers
 ├── session_manager/     # Scan, parse, read, metadata, archive, delete
-│   └── providers/       # Per-provider adapters
+│   ├── providers/       # Per-provider adapters
+│   └── remote/          # SSH remote sources: russh connection, alias resolution, batch scan, transient cache
 ├── fork_tree/           # Hash-chain/UUID-chain fork detection and cache
+├── cli.rs               # Dual-mode dispatch: CLI subcommands (export) run before the GUI launches
+├── settings.rs          # Hand-editable settings core + IPC (sources, update checks)
 ├── config.rs            # Provider path discovery and env overrides
 └── fs_utils.rs          # Filesystem traversal helpers
 ```
@@ -171,9 +212,13 @@ Key implementation points:
 | Layer | Technologies |
 |-------|--------------|
 | Frontend | React 18, TypeScript, Vite, TanStack Query, FlexSearch, lucide-react, react-markdown, remark-gfm |
-| Backend | Rust, Tauri v2, serde, chrono, sha2, dirs, trash |
+| Backend | Rust, Tauri v2, serde, chrono, sha2, dirs, trash, russh, russh-sftp |
 | Styling | Plain CSS (area-scoped) |
 | Build | pnpm, cargo, Tauri CLI |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit and workflow conventions; bug reports and feature requests go to the [issue tracker](https://github.com/CatheadOwl/session-manager/issues).
 
 ## License
 

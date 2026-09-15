@@ -6,16 +6,18 @@ export interface SystemBlock {
 /**
  * Matches XML-like system metadata blocks embedded in user prompts,
  * e.g. `<system-reminder>...</system-reminder>` or `<permissions instructions>...</permissions instructions>`.
- * Only matches blocks whose opening tag starts at the beginning of a line.
  *
- * Codex harness blocks (`collaboration_mode` / `multi_agent_role` / `multi_agent_mode`)
- * glue the closing tag to the last content line instead of putting it on its own
- * line, so they match greedily to the LAST closing tag — the body may cite the
- * tag itself (`...a different `<collaboration_mode>...</collaboration_mode>`...`),
- * and a non-greedy match would stop at that mention.
+ * Invariant: a harness-injected block opens with its tag at the beginning of a
+ * line and closes at a line boundary — either on its own line, or at the very
+ * end of the message (Codex glues some closers to the last content line, e.g.
+ * a whole `<multi_agent_mode>...</multi_agent_mode>` instruction on one line).
+ * A closing tag hanging mid-line is prose, not a block boundary: this both
+ * skips inline pairs like `<cwd>/tmp</cwd>` and survives blocks that cite
+ * themselves in their body (`...a different `<collaboration_mode>...
+ * </collaboration_mode>`...`), because that citation never sits at a line
+ * boundary.
  */
-const SYSTEM_BLOCK_RE =
-  /^<([\w][\w -]*)>([\s\S]*?)^<\/\1>|^<(collaboration_mode|multi_agent_role|multi_agent_mode)>([\s\S]*)<\/\3>/gm;
+const SYSTEM_BLOCK_RE = /^<([\w][\w -]*)>([\s\S]*?)(?:^<\/\1>|<\/\1>\s*(?![\s\S]))/gm;
 
 /**
  * Extracts system metadata blocks from raw message text.
@@ -23,21 +25,9 @@ const SYSTEM_BLOCK_RE =
  */
 export function extractSystemBlocks(text: string): { text: string; blocks: SystemBlock[] } {
   const blocks: SystemBlock[] = [];
-  const cleaned = text.replace(
-    SYSTEM_BLOCK_RE,
-    (
-      _match,
-      genericTag: string | undefined,
-      genericContent: string | undefined,
-      inlineTag: string | undefined,
-      inlineContent: string | undefined,
-    ) => {
-      blocks.push({
-        tag: (genericTag ?? inlineTag ?? "").trim(),
-        content: (genericContent ?? inlineContent ?? "").trim(),
-      });
-      return "";
-    },
-  );
+  const cleaned = text.replace(SYSTEM_BLOCK_RE, (_match, tag: string, content: string) => {
+    blocks.push({ tag: tag.trim(), content: content.trim() });
+    return "";
+  });
   return { text: cleaned.trim(), blocks };
 }

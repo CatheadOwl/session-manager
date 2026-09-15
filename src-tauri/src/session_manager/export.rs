@@ -243,8 +243,12 @@ fn is_tool_placeholder_message(content: &str) -> bool {
 /// `<system-reminder>...</system-reminder>`), mirroring the client-side
 /// `extractSystemBlocks` (`src/utils/system-blocks.ts`): a block opens with
 /// `<tag>` at the start of a line (tag = word chars, spaces, hyphens) and
-/// closes with `</tag>` at the start of a later line. Returns the remaining
-/// text, trimmed.
+/// closes at a line boundary — `</tag>` starting a later line, or ending the
+/// message (codex glues some closers to the last content line, e.g. a whole
+/// single-line `<multi_agent_mode>...</multi_agent_mode>` instruction). A
+/// closing tag hanging mid-line is prose, not a boundary: this skips inline
+/// pairs like `<cwd>/tmp</cwd>` and survives blocks citing themselves in
+/// their own body. Returns the remaining text, trimmed.
 fn strip_system_blocks(text: &str) -> String {
     fn valid_tag(tag: &str) -> bool {
         let mut chars = tag.chars();
@@ -257,8 +261,8 @@ fn strip_system_blocks(text: &str) -> String {
 
     // Open tag at line start: `<tag ...>` where the name is word chars /
     // spaces / hyphens. The remainder of the opening line after `>` belongs
-    // to the block content (the TS regex captures it); the remainder of the
-    // closing line after `</tag>` is kept.
+    // to the block content (the TS regex captures it); the remainder of a
+    // line-start closing line after `</tag>` is kept.
     fn parse_open_tag(line: &str) -> Option<&str> {
         let rest = line.strip_prefix('<')?;
         let gt = rest.find('>')?;
@@ -276,16 +280,28 @@ fn strip_system_blocks(text: &str) -> String {
     while i < lines.len() {
         if let Some(tag) = parse_open_tag(lines[i]) {
             let close = format!("</{tag}>");
-            // Find the closing tag at a later line start.
-            if let Some((j, _)) = lines
-                .iter()
-                .enumerate()
-                .skip(i + 1)
-                .find(|(_, l)| l.starts_with(close.as_str()))
-            {
-                if let Some(tail) = lines[j].strip_prefix(close.as_str()) {
-                    if !tail.is_empty() {
-                        kept.push(tail.to_string());
+            // Earliest close wins: a line starting with `</tag>`, or a line
+            // ending with it when only whitespace remains below (the trailing
+            // form may share the opening line — single-line block).
+            let mut close_at: Option<(usize, bool)> = None; // (line, starts line?)
+            for (idx, line) in lines.iter().enumerate().skip(i) {
+                if idx > i && line.starts_with(close.as_str()) {
+                    close_at = Some((idx, true));
+                    break;
+                }
+                if line.ends_with(close.as_str())
+                    && lines[idx + 1..].iter().all(|l| l.trim().is_empty())
+                {
+                    close_at = Some((idx, false));
+                    break;
+                }
+            }
+            if let Some((j, own_line)) = close_at {
+                if own_line {
+                    if let Some(tail) = lines[j].strip_prefix(close.as_str()) {
+                        if !tail.is_empty() {
+                            kept.push(tail.to_string());
+                        }
                     }
                 }
                 i = j + 1;
@@ -668,6 +684,24 @@ mod tests {
     #[test]
     fn strip_system_blocks_unclosed_block_is_kept_verbatim() {
         let text = "<system-reminder>\nnever closed";
+        assert_eq!(strip_system_blocks(text), text);
+    }
+
+    #[test]
+    fn strip_system_blocks_single_line_block_and_trailing_close() {
+        let text = "<app-context>\nctx\n</app-context>\n<multi_agent_mode>Do not delegate.</multi_agent_mode>";
+        assert_eq!(strip_system_blocks(text), "");
+    }
+
+    #[test]
+    fn strip_system_blocks_trailing_close_skips_in_body_citation() {
+        let text = "<collaboration_mode># Mode\nUse a new `<collaboration_mode>...</collaboration_mode>` block.\nRules.</collaboration_mode>";
+        assert_eq!(strip_system_blocks(text), "");
+    }
+
+    #[test]
+    fn strip_system_blocks_inline_close_before_more_text_is_kept() {
+        let text = "<b>bold</b>\nmore prose follows";
         assert_eq!(strip_system_blocks(text), text);
     }
 

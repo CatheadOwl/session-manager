@@ -101,4 +101,12 @@ describe("extractSystemBlocks", () => {
     expect(blocks).toEqual([]);
     expect(text).toBe(input);
   });
+
+  it("does not extract an inline-close block unless the closing ends the message", () => {
+    const input = "<b>bold</b>\nmore prose follows";
+    const { text, blocks } = extractSystemBlocks(input);
+
+    expect(blocks).toEqual([]);
+    expect(text).toBe(input);
+  });
 });

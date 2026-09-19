@@ -85,9 +85,26 @@ impl SessionProvider for CodexProvider {
 /// Extract user input text events from a Codex session file.
 /// Returns all user message texts in chronological order.
 fn user_events_from_path(path: &Path) -> Result<Vec<String>, String> {
+    let (events, mode, saw_item_user, saw_response_user) = collect_user_events(path, false)?;
+    // A file labelled paginated that carries no item_completed user messages
+    // would read as an empty conversation — fall back to the legacy channel.
+    if mode == HistoryMode::Paginated && !saw_item_user && saw_response_user {
+        return Ok(collect_user_events(path, true)?.0);
+    }
+    Ok(events)
+}
+
+fn collect_user_events(
+    path: &Path,
+    force_legacy: bool,
+) -> Result<(Vec<String>, HistoryMode, bool, bool), String> {
     let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
     let reader = BufReader::new(file);
     let mut events: Vec<String> = Vec::new();
+    let mut mode = HistoryMode::Legacy;
+    let mut mode_resolved = false;
+    let mut saw_item_user = false;
+    let mut saw_response_user = false;
 
     for line in reader.lines() {
         let line = match line {
@@ -102,6 +119,27 @@ fn user_events_from_path(path: &Path) -> Result<Vec<String>, String> {
             Ok(v) => v,
             Err(_) => continue,
         };
+
+        if !mode_resolved {
+            mode = if force_legacy {
+                HistoryMode::Legacy
+            } else {
+                history_mode_from_record(&value)
+            };
+            mode_resolved = true;
+        }
+
+        if mode == HistoryMode::Paginated {
+            if let Some((role, text)) = item_completed_message(&value) {
+                if role == "user" {
+                    saw_item_user = true;
+                    if !text.trim().is_empty() {
+                        events.push(text.trim().to_string());
+                    }
+                }
+                continue;
+            }
+        }
 
         // Only process response_item events
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
@@ -121,13 +159,21 @@ fn user_events_from_path(path: &Path) -> Result<Vec<String>, String> {
             continue;
         }
 
+        if mode == HistoryMode::Paginated {
+            // The response_item twin duplicates every item_completed message
+            // (and adds injected context under the user role); skipping it
+            // keeps the event list double-count free.
+            saw_response_user = true;
+            continue;
+        }
+
         let text = payload.get("content").map(extract_text).unwrap_or_default();
         if !text.trim().is_empty() {
             events.push(text.trim().to_string());
         }
     }
 
-    Ok(events)
+    Ok((events, mode, saw_item_user, saw_response_user))
 }
 
 // ─── Thread titles from session_index.jsonl ─────────────────────────────────
@@ -174,7 +220,9 @@ fn parse_session_with_titles(
     let mut project_dir: Option<String> = None;
     let mut created_at: Option<i64> = None;
     let mut first_user_message: Option<String> = None;
+    let mut item_user_message: Option<String> = None;
     let mut forked_from_id: Option<String> = None;
+    let mut mode = HistoryMode::Legacy;
 
     // Extract metadata and first user message from head lines
     for line in &head {
@@ -186,6 +234,7 @@ fn parse_session_with_titles(
             created_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
         }
         if value.get("type").and_then(Value::as_str) == Some("session_meta") {
+            mode = history_mode_from_record(&value);
             if let Some(payload) = value.get("payload") {
                 if is_subagent_source(payload.get("source")) {
                     return None;
@@ -213,7 +262,21 @@ fn parse_session_with_titles(
                 }
             }
         }
-        // Extract first user message as title candidate
+        // First user message via the paginated item_completed channel — this
+        // channel carries only real user input, no injected context.
+        if mode == HistoryMode::Paginated && item_user_message.is_none() {
+            if let Some((role, text)) = item_completed_message(&value) {
+                if role == "user" {
+                    if let Some(title) = title_candidate_from_user_message(&text) {
+                        item_user_message = Some(title);
+                    }
+                }
+            }
+        }
+        // Extract first user message as title candidate from the legacy
+        // response_item channel (sole source for legacy files; fallback for
+        // paginated files whose head window holds no item_completed user
+        // message yet).
         if first_user_message.is_none()
             && value.get("type").and_then(Value::as_str) == Some("response_item")
         {
@@ -228,11 +291,12 @@ fn parse_session_with_titles(
                 }
             }
         }
-        if session_id.is_some()
-            && project_dir.is_some()
-            && created_at.is_some()
-            && first_user_message.is_some()
-        {
+        let title_found = if mode == HistoryMode::Paginated {
+            item_user_message.is_some()
+        } else {
+            first_user_message.is_some()
+        };
+        if session_id.is_some() && project_dir.is_some() && created_at.is_some() && title_found {
             break;
         }
     }
@@ -240,6 +304,7 @@ fn parse_session_with_titles(
     // Extract last_active_at and summary from tail lines (reverse order)
     let mut last_active_at: Option<i64> = None;
     let mut summary: Option<String> = None;
+    let mut item_summary: Option<String> = None;
 
     for line in tail.iter().rev() {
         let value: Value = match serde_json::from_str(line) {
@@ -248,6 +313,13 @@ fn parse_session_with_titles(
         };
         if last_active_at.is_none() {
             last_active_at = value.get("timestamp").and_then(parse_timestamp_to_ms);
+        }
+        if mode == HistoryMode::Paginated && item_summary.is_none() {
+            if let Some((_, text)) = item_completed_message(&value) {
+                if !text.trim().is_empty() {
+                    item_summary = Some(text);
+                }
+            }
         }
         if summary.is_none() && value.get("type").and_then(Value::as_str) == Some("response_item") {
             if let Some(payload) = value.get("payload") {
@@ -259,7 +331,12 @@ fn parse_session_with_titles(
                 }
             }
         }
-        if last_active_at.is_some() && summary.is_some() {
+        let summary_found = if mode == HistoryMode::Paginated {
+            item_summary.is_some()
+        } else {
+            summary.is_some()
+        };
+        if last_active_at.is_some() && summary_found {
             break;
         }
     }
@@ -267,16 +344,27 @@ fn parse_session_with_titles(
     let session_id = session_id.or_else(|| infer_session_id_from_filename(path));
     let session_id = session_id?;
 
+    let title_candidate = if mode == HistoryMode::Paginated {
+        item_user_message.or(first_user_message)
+    } else {
+        first_user_message
+    };
     let title = thread_titles
         .get(&session_id)
         .map(|t| truncate_summary(t, TITLE_MAX_CHARS))
-        .or_else(|| first_user_message.map(|t| truncate_summary(&t, TITLE_MAX_CHARS)))
+        .or_else(|| title_candidate.map(|t| truncate_summary(&t, TITLE_MAX_CHARS)))
         .or_else(|| {
             project_dir
                 .as_deref()
                 .and_then(path_basename)
                 .map(|v| v.to_string())
         });
+
+    let summary = if mode == HistoryMode::Paginated {
+        item_summary.or(summary)
+    } else {
+        summary
+    };
 
     let summary = summary.map(|text| truncate_summary(&text, 160));
 
@@ -295,6 +383,66 @@ fn parse_session_with_titles(
         resume_command: Some(format!("codex resume {session_id}")),
         forked_from_id,
     })
+}
+
+// ─── History mode (paginated rollout generation) ─────────────────────────────
+
+/// Message-channel generation of a Codex rollout file.
+///
+/// Codex 0.153+ writes threads in "paginated" mode: user/assistant messages
+/// surface through `event_msg`/`item_completed` records embedding a TurnItem,
+/// while `response_item` records keep carrying a model-facing duplicate of
+/// every message plus injected context (AGENTS.md instructions, app context)
+/// under user/developer roles. Parsing both channels per file would double
+/// every message, so the generation decides which channel to trust:
+///
+/// - The first `session_meta` record's `payload.history_mode` is authoritative
+///   (`"paginated"` ⇒ new generation). The field is absent in older files —
+///   the writer side defaults it to `"legacy"` — so absence means legacy.
+/// - The line-level `ordinal` field (present on every record of a paginated
+///   rollout, including the leading meta line) acts as a secondary
+///   confirmation: a file claiming paginated without it is parsed as legacy.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HistoryMode {
+    Legacy,
+    Paginated,
+}
+
+fn history_mode_from_record(value: &Value) -> HistoryMode {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return HistoryMode::Legacy;
+    }
+    let paginated = value
+        .pointer("/payload/history_mode")
+        .and_then(Value::as_str)
+        == Some("paginated");
+    if paginated && value.get("ordinal").is_some() {
+        HistoryMode::Paginated
+    } else {
+        HistoryMode::Legacy
+    }
+}
+
+/// Extract the user/assistant message carried by an `event_msg`/`item_completed`
+/// record (the paginated message channel). Returns `(role, text)`; tool /
+/// reasoning TurnItems return `None` — tool calls keep flowing through their
+/// `response_item` records in both generations.
+///
+/// Unlike `response_item` user-role records, this channel never contains
+/// injected context, so it needs no AGENTS.md / environment filtering.
+fn item_completed_message(value: &Value) -> Option<(&'static str, String)> {
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("item_completed") {
+        return None;
+    }
+    let item = payload.get("item")?;
+    let role = match item.get("type").and_then(Value::as_str) {
+        Some("UserMessage") => "user",
+        Some("AgentMessage") => "assistant",
+        _ => return None,
+    };
+    let text = item.get("content").map(extract_text).unwrap_or_default();
+    Some((role, text))
 }
 
 /// Check if a session_meta payload's `source` field contains a `subagent` key.
@@ -448,12 +596,29 @@ fn split_codex_output(output: &str) -> (String, String) {
 // ─── Load messages ──────────────────────────────────────────────────────────
 
 fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
+    let (messages, mode, saw_item_message, saw_response_message) = collect_messages(path, false)?;
+    // A file labelled paginated that carries no item_completed messages would
+    // read as an empty conversation — fall back to the legacy channel.
+    if mode == HistoryMode::Paginated && !saw_item_message && saw_response_message {
+        return Ok(collect_messages(path, true)?.0);
+    }
+    Ok(messages)
+}
+
+fn collect_messages(
+    path: &Path,
+    force_legacy: bool,
+) -> Result<(Vec<SessionMessage>, HistoryMode, bool, bool), String> {
     let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
     let reader = BufReader::new(file);
     let mut messages: Vec<SessionMessage> = Vec::new();
     // Track function_call message indices by call_id so parallel tool calls
     // each get their output merged into the correct message.
     let mut tool_call_map: HashMap<String, usize> = HashMap::new();
+    let mut mode = HistoryMode::Legacy;
+    let mut mode_resolved = false;
+    let mut saw_item_message = false;
+    let mut saw_response_message = false;
 
     for line in reader.lines() {
         let line = match line {
@@ -464,6 +629,35 @@ fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
             Ok(parsed) => parsed,
             Err(_) => continue,
         };
+
+        if !mode_resolved {
+            mode = if force_legacy {
+                HistoryMode::Legacy
+            } else {
+                history_mode_from_record(&value)
+            };
+            mode_resolved = true;
+        }
+
+        // Paginated generation: messages come from item_completed records.
+        if mode == HistoryMode::Paginated {
+            if let Some((role, text)) = item_completed_message(&value) {
+                if !text.trim().is_empty() {
+                    saw_item_message = true;
+                    let ts = value.get("timestamp").and_then(parse_timestamp_to_ms);
+                    messages.push(SessionMessage {
+                        role: role.to_string(),
+                        content: text,
+                        ts,
+                        usage: None,
+                        cumulative_usage: None,
+                        tool_calls: None,
+                        tool_result: None,
+                    });
+                }
+                continue;
+            }
+        }
 
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
             continue;
@@ -479,6 +673,14 @@ fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         // Codex uses separate payload types for tool interactions
         let (role, content, tool_calls) = match payload_type {
             "message" => {
+                if mode == HistoryMode::Paginated {
+                    // Every response_item message has an item_completed twin
+                    // on the paginated channel (plus injected context that the
+                    // item channel never carries) — skip to avoid double
+                    // counting.
+                    saw_response_message = true;
+                    continue;
+                }
                 let role = payload
                     .get("role")
                     .and_then(Value::as_str)
@@ -585,7 +787,7 @@ fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         });
     }
 
-    Ok(messages)
+    Ok((messages, mode, saw_item_message, saw_response_message))
 }
 
 // ─── Move session ───────────────────────────────────────────────────────────
@@ -1026,5 +1228,347 @@ mod tests {
         let provider = CodexProvider;
         let events = provider.user_events(&path).expect("user_events");
         assert_eq!(events.len(), 0);
+    }
+
+    // ─── Paginated history (item_completed channel) ──────────────────────────
+
+    const PAGINATED_META: &str = "{\"timestamp\":\"2026-09-19T06:06:49.051Z\",\"ordinal\":0,\"type\":\"session_meta\",\"payload\":{\"id\":\"pag-id\",\"cwd\":\"/tmp/project\",\"timestamp\":\"2026-09-19T06:06:45.843Z\",\"history_mode\":\"paginated\"}}";
+
+    const PAGINATED_META_WITHOUT_ORDINAL: &str = "{\"timestamp\":\"2026-09-19T06:06:49.051Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"pag-id\",\"cwd\":\"/tmp/project\",\"timestamp\":\"2026-09-19T06:06:45.843Z\",\"history_mode\":\"paginated\"}}";
+
+    const LEGACY_META: &str = "{\"timestamp\":\"2026-03-06T21:50:12Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"pag-id\",\"cwd\":\"/tmp/project\"}}";
+
+    // A paginated turn as the writer really lays it down: every message has a
+    // response_item twin (model-facing) and an item_completed twin (UI-facing),
+    // plus injected context that only exists on the response_item channel.
+    const PAGINATED_DUAL_CHANNEL_BODY: &str = concat!(
+        "{\"ordinal\":1,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<app-context> desktop context\"}]}}\n",
+        "{\"ordinal\":2,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp/project\"}]}}\n",
+        "{\"ordinal\":3,\"timestamp\":\"2026-09-19T06:06:50.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"How do I deploy?\"}]}}\n",
+        "{\"ordinal\":4,\"timestamp\":\"2026-09-19T06:06:50.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u1\",\"client_id\":\"c1\",\"content\":[{\"type\":\"text\",\"text\":\"How do I deploy?\",\"text_elements\":[]}]},\"started_at_ms\":1789798010000,\"completed_at_ms\":1789798010000}}\n",
+        "{\"ordinal\":5,\"timestamp\":\"2026-09-19T06:06:51.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\",\"call_id\":\"call_1\"}}\n",
+        "{\"ordinal\":6,\"timestamp\":\"2026-09-19T06:06:52.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Chunk ID: 1\\nOutput:\\nok\"}}\n",
+        "{\"ordinal\":7,\"timestamp\":\"2026-09-19T06:06:53.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Deployed.\"}]}}\n",
+        "{\"ordinal\":8,\"timestamp\":\"2026-09-19T06:06:54.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"AgentMessage\",\"id\":\"msg_1\",\"content\":[{\"type\":\"Text\",\"text\":\"Deployed.\"}],\"phase\":\"commentary\"},\"started_at_ms\":1789798013000,\"completed_at_ms\":1789798014000}}\n",
+    );
+
+    // The same turn without the item_completed twins and ordinals — a legacy
+    // rollout.
+    const LEGACY_RESPONSE_ITEM_BODY: &str = concat!(
+        "{\"timestamp\":\"2026-03-06T21:50:13Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<app-context> desktop context\"}]}}\n",
+        "{\"timestamp\":\"2026-03-06T21:50:14Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp/project\"}]}}\n",
+        "{\"timestamp\":\"2026-03-06T21:50:15Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"How do I deploy?\"}]}}\n",
+        "{\"timestamp\":\"2026-03-06T21:50:16Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\",\"call_id\":\"call_1\"}}\n",
+        "{\"timestamp\":\"2026-03-06T21:50:17Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Chunk ID: 1\\nOutput:\\nok\"}}\n",
+        "{\"timestamp\":\"2026-03-06T21:50:18Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Deployed.\"}]}}\n",
+    );
+
+    fn message_outline(messages: &[SessionMessage]) -> Vec<(&str, &str)> {
+        messages
+            .iter()
+            .map(|m| (m.role.as_str(), m.content.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn history_mode_detection_variants() {
+        let meta = |extras: &str| -> Value { serde_json::from_str(extras).expect("valid json") };
+
+        assert_eq!(
+            history_mode_from_record(&meta(PAGINATED_META)),
+            HistoryMode::Paginated
+        );
+        // Secondary confirmation: no ordinal on the meta line ⇒ legacy.
+        assert_eq!(
+            history_mode_from_record(&meta(PAGINATED_META_WITHOUT_ORDINAL)),
+            HistoryMode::Legacy
+        );
+        // Field absent ⇒ legacy (the writer's serde default).
+        assert_eq!(
+            history_mode_from_record(&meta(LEGACY_META)),
+            HistoryMode::Legacy
+        );
+        // Non-meta records never carry generation info.
+        assert_eq!(
+            history_mode_from_record(&meta(
+                "{\"ordinal\":1,\"type\":\"response_item\",\"payload\":{\"type\":\"message\"}}"
+            )),
+            HistoryMode::Legacy
+        );
+    }
+
+    #[test]
+    fn load_messages_paginated_uses_item_completed_channel() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META}\n{PAGINATED_DUAL_CHANNEL_BODY}"),
+        )
+        .expect("write");
+
+        let messages = load_messages(&path).expect("load_messages");
+        assert_eq!(
+            message_outline(&messages),
+            vec![
+                ("user", "How do I deploy?"),
+                ("assistant", "[Tool: shell]"),
+                ("assistant", "Deployed."),
+            ]
+        );
+        // Tool calls stay on the response_item channel and still merge output.
+        assert_eq!(
+            messages[1].tool_result.as_ref().map(|r| r.content.as_str()),
+            Some("Chunk ID: 1\n\nok")
+        );
+        // Double-count tripwire: every twin exists on both channels, but each
+        // text must surface exactly once.
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("How do I deploy?"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("Deployed."))
+                .count(),
+            1
+        );
+        // Injected context never reaches the paginated message stream.
+        assert!(messages
+            .iter()
+            .all(|m| !m.content.contains("AGENTS.md") && !m.content.contains("app-context")));
+    }
+
+    #[test]
+    fn load_messages_legacy_channel_unchanged() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(&path, format!("{LEGACY_META}\n{LEGACY_RESPONSE_ITEM_BODY}"))
+            .expect("write");
+
+        // Legacy files keep the exact response_item behavior, injected
+        // context included.
+        let messages = load_messages(&path).expect("load_messages");
+        assert_eq!(
+            message_outline(&messages),
+            vec![
+                ("developer", "<app-context> desktop context"),
+                ("user", "# AGENTS.md instructions for /tmp/project"),
+                ("user", "How do I deploy?"),
+                ("assistant", "[Tool: shell]"),
+                ("assistant", "Deployed."),
+            ]
+        );
+    }
+
+    #[test]
+    fn load_messages_paginated_label_without_ordinal_parses_as_legacy() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META_WITHOUT_ORDINAL}\n{PAGINATED_DUAL_CHANNEL_BODY}"),
+        )
+        .expect("write");
+
+        // history_mode claims paginated but the meta line carries no ordinal:
+        // the secondary confirmation fails, the legacy channel stays
+        // authoritative, and item_completed lines never leak in.
+        let messages = load_messages(&path).expect("load_messages");
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content == "How do I deploy?")
+                .count(),
+            1
+        );
+        assert!(messages.iter().any(|m| m.role == "developer"));
+    }
+
+    #[test]
+    fn load_messages_paginated_without_item_channel_falls_back() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META}\n{LEGACY_RESPONSE_ITEM_BODY}"),
+        )
+        .expect("write");
+
+        // Defensive fallback: a paginated-labelled file with no item_completed
+        // messages must not read as an empty conversation.
+        let messages = load_messages(&path).expect("load_messages");
+        assert_eq!(messages.len(), 5);
+        assert!(messages.iter().any(|m| m.content == "How do I deploy?"));
+    }
+
+    #[test]
+    fn user_events_paginated_uses_item_completed_channel() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META}\n{PAGINATED_DUAL_CHANNEL_BODY}"),
+        )
+        .expect("write");
+
+        // The fork tree gets clean user events: no AGENTS.md injection, no
+        // twin duplication.
+        let events = user_events_from_path(&path).expect("user_events");
+        assert_eq!(events, vec!["How do I deploy?"]);
+    }
+
+    #[test]
+    fn user_events_paginated_fallback_keeps_legacy_semantics() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META}\n{LEGACY_RESPONSE_ITEM_BODY}"),
+        )
+        .expect("write");
+
+        let events = user_events_from_path(&path).expect("user_events");
+        assert_eq!(
+            events,
+            vec![
+                "# AGENTS.md instructions for /tmp/project",
+                "How do I deploy?"
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_session_paginated_title_prefers_item_completed_user_message() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{PAGINATED_META}\n{}{}",
+                concat!(
+                    "{\"ordinal\":1,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp/project\"}]}}\n",
+                    "{\"ordinal\":2,\"timestamp\":\"2026-09-19T06:06:50.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u1\",\"client_id\":\"c1\",\"content\":[{\"type\":\"text\",\"text\":\"How do I deploy?\"}]},\"started_at_ms\":1,\"completed_at_ms\":1}}\n",
+                ),
+                ""
+            ),
+        )
+        .expect("write");
+
+        // The response_item channel only offers filtered-out injected context
+        // in the head window; the item_completed user message still yields a
+        // real title instead of falling through to the project basename.
+        let meta = parse_session_with_titles(&path, &HashMap::new()).expect("parse");
+        assert_eq!(meta.title.as_deref(), Some("How do I deploy?"));
+    }
+
+    #[test]
+    fn parse_session_paginated_title_falls_back_to_response_item() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{PAGINATED_META}\n{}",
+                "{\"ordinal\":1,\"timestamp\":\"2026-09-19T06:06:50.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"How do I deploy?\"}]}}\n"
+            ),
+        )
+        .expect("write");
+
+        let meta = parse_session_with_titles(&path, &HashMap::new()).expect("parse");
+        assert_eq!(meta.title.as_deref(), Some("How do I deploy?"));
+    }
+
+    #[test]
+    fn parse_session_paginated_summary_prefers_item_completed() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{PAGINATED_META}\n{}",
+                concat!(
+                    "{\"ordinal\":1,\"timestamp\":\"2026-09-19T06:06:53.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"RI final\"}]}}\n",
+                    "{\"ordinal\":2,\"timestamp\":\"2026-09-19T06:06:54.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"AgentMessage\",\"id\":\"msg_1\",\"content\":[{\"type\":\"Text\",\"text\":\"IC final\"}],\"phase\":\"final\"},\"started_at_ms\":1,\"completed_at_ms\":1}}\n",
+                )
+            ),
+        )
+        .expect("write");
+
+        let meta = parse_session_with_titles(&path, &HashMap::new()).expect("parse");
+        assert_eq!(meta.summary.as_deref(), Some("IC final"));
+    }
+
+    #[test]
+    #[ignore = "manual regression: set CODEX_REAL_SAMPLE=<rollout.jsonl> and run with --ignored --nocapture"]
+    fn real_sample_dual_channel_regression() {
+        let Some(sample) = std::env::var_os("CODEX_REAL_SAMPLE") else {
+            return;
+        };
+        let path = PathBuf::from(sample);
+        let messages = load_messages(&path).expect("load_messages");
+        let events = user_events_from_path(&path).expect("user_events");
+        let meta = parse_session_with_titles(&path, &HashMap::new());
+
+        // Channel-selection tripwires apply to paginated files only — legacy
+        // rollouts carry a single message channel, and repeated text (e.g.
+        // approval notices) is legitimate data there.
+        let mut first_line = String::new();
+        {
+            use std::io::BufRead;
+            let file = File::open(&path).expect("open sample");
+            let mut reader = BufReader::new(file);
+            reader.read_line(&mut first_line).expect("read sample");
+        }
+        let first_record: Value = serde_json::from_str(first_line.trim()).unwrap_or(Value::Null);
+        let paginated = history_mode_from_record(&first_record) == HistoryMode::Paginated;
+
+        if paginated {
+            // Text twins land adjacently when both channels are mistakenly
+            // merged. Identical "[Tool: name]" placeholders are exempt —
+            // sequential calls to the same tool are legitimate repetition.
+            for pair in messages.windows(2) {
+                let duplicate = pair[0].role == pair[1].role && pair[0].content == pair[1].content;
+                assert!(
+                    !duplicate || pair[0].content.starts_with("[Tool: "),
+                    "adjacent duplicate text message — channel selection leaked both twins: {:?}",
+                    &pair[0].content.chars().take(60).collect::<String>()
+                );
+            }
+            // On the paginated channel the first user message must be real
+            // input, never injected context.
+            if let Some(first_user) = messages.iter().find(|m| m.role == "user") {
+                let trimmed = first_user.content.trim_start();
+                assert!(
+                    !trimmed.starts_with("# AGENTS.md")
+                        && !trimmed.starts_with("<environment_context>"),
+                    "first user message is injected context: {:?}",
+                    trimmed.chars().take(60).collect::<String>()
+                );
+            }
+        }
+        // Derived tail-only files legitimately hold no user message at all;
+        // only flag the case where user messages exist but events miss them.
+        assert!(
+            messages.iter().all(|m| m.role != "user") || !events.is_empty(),
+            "user messages present but user events empty"
+        );
+        // Subagent rollouts are filtered from the session list by design.
+        let title = meta.as_ref().and_then(|m| m.title.clone());
+        println!(
+            "messages={} user_events={} paginated={paginated} title={:?} meta={}",
+            messages.len(),
+            events.len(),
+            title,
+            if meta.is_some() {
+                "parsed"
+            } else {
+                "filtered (subagent)"
+            }
+        );
     }
 }

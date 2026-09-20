@@ -445,6 +445,62 @@ fn item_completed_message(value: &Value) -> Option<(&'static str, String)> {
     Some((role, text))
 }
 
+/// Whether a `response_item` message is injected context scaffolding rather
+/// than conversation content, i.e. whether it has no item_completed twin and
+/// must be surfaced from the `response_item` ledger (the record of what the
+/// model actually received) to stay visible.
+///
+/// Classification order:
+/// 1. developer/system roles are always scaffolding.
+/// 2. `content_item_kinds` (machine-readable, stamped by the codex writer)
+///    decides for user messages when present: real user input is kind
+///    `user.text`, everything else (agents_md.instructions,
+///    environment_context, turn_aborted, …) is injected context. Unknown
+///    future kinds classify as injected — the failure direction is one extra
+///    displayed message, never a dropped one.
+/// 3. Records without kinds (older writers) fall back to codex's contextual
+///    fragment markers; start AND end marker must both match, mirroring codex
+///    `matches_marked_text`, so a real user message that merely opens with a
+///    marker is never mistaken for scaffolding (that would double-count it
+///    against its item_completed twin).
+fn is_contextual_scaffolding(role: &str, text: &str, kinds: Option<&[String]>) -> bool {
+    match role {
+        "developer" | "system" => true,
+        "user" => match kinds {
+            Some(kinds) if !kinds.is_empty() => !kinds.iter().any(|kind| kind == "user.text"),
+            _ => CONTEXTUAL_USER_MARKERS.iter().any(|(start, end)| {
+                let opened = text
+                    .trim_start()
+                    .get(..start.len())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start));
+                let closed = text
+                    .trim_end()
+                    .len()
+                    .checked_sub(end.len())
+                    .and_then(|at| text.trim_end().get(at..))
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end));
+                opened && closed
+            }),
+        },
+        _ => false,
+    }
+}
+
+/// Contextual user fragment (start, end) markers, mirroring codex
+/// `contextual_user_message.rs` and its fragment types. Only consulted for
+/// records written before the writer stamped `content_item_kinds`; keep it a
+/// subset of codex's contextual filter.
+const CONTEXTUAL_USER_MARKERS: &[(&str, &str)] = &[
+    ("# AGENTS.md instructions", "</INSTRUCTIONS>"),
+    ("<environment_context>", "</environment_context>"),
+    ("<user_shell_command>", "</user_shell_command>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+    ("<subagent_notification>", "</subagent_notification>"),
+    ("<codex_internal_context", "</codex_internal_context>"),
+    ("<goal_context>", "</goal_context>"),
+    ("<skill>", "</skill>"),
+];
+
 /// Check if a session_meta payload's `source` field contains a `subagent` key.
 fn is_subagent_source(source: Option<&Value>) -> bool {
     source
@@ -459,6 +515,8 @@ fn title_candidate_from_user_message(text: &str) -> Option<String> {
     if trimmed.is_empty()
         || trimmed.starts_with("# AGENTS.md")
         || trimmed.starts_with("<environment_context>")
+        || trimmed.starts_with("<turn_aborted>")
+        || trimmed.starts_with("<subagent_notification>")
     {
         return None;
     }
@@ -673,20 +731,37 @@ fn collect_messages(
         // Codex uses separate payload types for tool interactions
         let (role, content, tool_calls) = match payload_type {
             "message" => {
-                if mode == HistoryMode::Paginated {
-                    // Every response_item message has an item_completed twin
-                    // on the paginated channel (plus injected context that the
-                    // item channel never carries) — skip to avoid double
-                    // counting.
-                    saw_response_message = true;
-                    continue;
-                }
                 let role = payload
                     .get("role")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown")
                     .to_string();
                 let content = payload.get("content").map(extract_text).unwrap_or_default();
+                if mode == HistoryMode::Paginated {
+                    saw_response_message = true;
+                    // response_item is the ledger of what the model actually
+                    // received; item_completed is codex's lossy UI projection
+                    // of it. Conversation user/assistant messages have
+                    // item_completed twins — skip them to avoid double
+                    // counting — but injected context never reaches the item
+                    // channel, so pass it through here (rendered as system
+                    // blocks by the frontend, same as legacy sessions).
+                    let kinds = payload
+                        .pointer("/internal_chat_message_metadata_passthrough/content_item_kinds")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<String>>()
+                        });
+                    if !is_contextual_scaffolding(&role, &content, kinds.as_deref())
+                        || content.trim().is_empty()
+                    {
+                        continue;
+                    }
+                }
                 (role, content, None)
             }
             "function_call" => {
@@ -1238,18 +1313,25 @@ mod tests {
 
     const LEGACY_META: &str = "{\"timestamp\":\"2026-03-06T21:50:12Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"pag-id\",\"cwd\":\"/tmp/project\"}}";
 
-    // A paginated turn as the writer really lays it down: every message has a
-    // response_item twin (model-facing) and an item_completed twin (UI-facing),
-    // plus injected context that only exists on the response_item channel.
+    // A paginated turn as the writer really lays it down: conversation
+    // messages carry an item_completed twin (UI channel) and stamped
+    // `content_item_kinds`; injected context exists only as response_item
+    // records with non-user kinds and never reaches the item channel. The
+    // last user message opens with the AGENTS.md marker but is real input
+    // (user.text kind + item twin) — a marker-prefix false positive would
+    // show it twice.
     const PAGINATED_DUAL_CHANNEL_BODY: &str = concat!(
-        "{\"ordinal\":1,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<app-context> desktop context\"}]}}\n",
-        "{\"ordinal\":2,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp/project\"}]}}\n",
-        "{\"ordinal\":3,\"timestamp\":\"2026-09-19T06:06:50.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"How do I deploy?\"}]}}\n",
-        "{\"ordinal\":4,\"timestamp\":\"2026-09-19T06:06:50.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u1\",\"client_id\":\"c1\",\"content\":[{\"type\":\"text\",\"text\":\"How do I deploy?\",\"text_elements\":[]}]},\"started_at_ms\":1789798010000,\"completed_at_ms\":1789798010000}}\n",
-        "{\"ordinal\":5,\"timestamp\":\"2026-09-19T06:06:51.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\",\"call_id\":\"call_1\"}}\n",
-        "{\"ordinal\":6,\"timestamp\":\"2026-09-19T06:06:52.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Chunk ID: 1\\nOutput:\\nok\"}}\n",
-        "{\"ordinal\":7,\"timestamp\":\"2026-09-19T06:06:53.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Deployed.\"}]}}\n",
-        "{\"ordinal\":8,\"timestamp\":\"2026-09-19T06:06:54.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"AgentMessage\",\"id\":\"msg_1\",\"content\":[{\"type\":\"Text\",\"text\":\"Deployed.\"}],\"phase\":\"commentary\"},\"started_at_ms\":1789798013000,\"completed_at_ms\":1789798014000}}\n",
+        "{\"ordinal\":1,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<app-context> desktop context\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"apps.instructions\",\"generic.developer_instructions\"]}}}\n",
+        "{\"ordinal\":2,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp/project\\n\\n<INSTRUCTIONS>\\nbe nice\\n</INSTRUCTIONS>\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"agents_md.instructions\"]}}}\n",
+        "{\"ordinal\":3,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"<turn_aborted>\\nThe user interrupted the previous turn on purpose.\\n</turn_aborted>\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"generic.turn_aborted\"]}}}\n",
+        "{\"ordinal\":4,\"timestamp\":\"2026-09-19T06:06:50.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"How do I deploy?\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"user.text\"]}}}\n",
+        "{\"ordinal\":5,\"timestamp\":\"2026-09-19T06:06:50.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u1\",\"client_id\":\"c1\",\"content\":[{\"type\":\"text\",\"text\":\"How do I deploy?\",\"text_elements\":[]}]},\"started_at_ms\":1789798010000,\"completed_at_ms\":1789798010000}}\n",
+        "{\"ordinal\":6,\"timestamp\":\"2026-09-19T06:06:51.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\",\"call_id\":\"call_1\"}}\n",
+        "{\"ordinal\":7,\"timestamp\":\"2026-09-19T06:06:52.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Chunk ID: 1\\nOutput:\\nok\"}}\n",
+        "{\"ordinal\":8,\"timestamp\":\"2026-09-19T06:06:53.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Deployed.\"}]}}\n",
+        "{\"ordinal\":9,\"timestamp\":\"2026-09-19T06:06:54.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"AgentMessage\",\"id\":\"msg_1\",\"content\":[{\"type\":\"Text\",\"text\":\"Deployed.\"}],\"phase\":\"commentary\"},\"started_at_ms\":1789798013000,\"completed_at_ms\":1789798014000}}\n",
+        "{\"ordinal\":10,\"timestamp\":\"2026-09-19T06:06:55.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions say be nice\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"user.text\"]}}}\n",
+        "{\"ordinal\":11,\"timestamp\":\"2026-09-19T06:06:55.100Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"pag-id\",\"turn_id\":\"turn-1\",\"item\":{\"type\":\"UserMessage\",\"id\":\"u2\",\"client_id\":\"c2\",\"content\":[{\"type\":\"text\",\"text\":\"# AGENTS.md instructions say be nice\",\"text_elements\":[]}]},\"started_at_ms\":1789798015000,\"completed_at_ms\":1789798015000}}\n",
     );
 
     // The same turn without the item_completed twins and ordinals — a legacy
@@ -1311,18 +1393,28 @@ mod tests {
         assert_eq!(
             message_outline(&messages),
             vec![
+                ("developer", "<app-context> desktop context"),
+                (
+                    "user",
+                    "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nbe nice\n</INSTRUCTIONS>"
+                ),
+                (
+                    "user",
+                    "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"
+                ),
                 ("user", "How do I deploy?"),
                 ("assistant", "[Tool: shell]"),
                 ("assistant", "Deployed."),
+                ("user", "# AGENTS.md instructions say be nice"),
             ]
         );
         // Tool calls stay on the response_item channel and still merge output.
         assert_eq!(
-            messages[1].tool_result.as_ref().map(|r| r.content.as_str()),
+            messages[4].tool_result.as_ref().map(|r| r.content.as_str()),
             Some("Chunk ID: 1\n\nok")
         );
-        // Double-count tripwire: every twin exists on both channels, but each
-        // text must surface exactly once.
+        // Double-count tripwire: every conversation twin exists on both
+        // channels, but each text must surface exactly once.
         assert_eq!(
             messages
                 .iter()
@@ -1337,10 +1429,111 @@ mod tests {
                 .count(),
             1
         );
-        // Injected context never reaches the paginated message stream.
-        assert!(messages
-            .iter()
-            .all(|m| !m.content.contains("AGENTS.md") && !m.content.contains("app-context")));
+        // A real user message that merely opens with a scaffolding marker must
+        // come from its item_completed twin exactly once, not twice.
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("say be nice"))
+                .count(),
+            1
+        );
+        // Injected context is scaffolding the model actually received: it
+        // never reaches the item_completed channel, so it must surface exactly
+        // once from the response_item ledger, in place.
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("app-context"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("AGENTS.md instructions for"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m.content.contains("turn_aborted"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn load_messages_paginated_only_injections_falls_back_to_legacy() {
+        // A paginated-labelled file whose only response_item messages are
+        // injected context carries no item channel at all: the legacy
+        // fallback must take over (it renders everything, including the
+        // injections).
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            format!("{PAGINATED_META}\n{LEGACY_RESPONSE_ITEM_BODY}"),
+        )
+        .expect("write");
+
+        let messages = load_messages(&path).expect("load_messages");
+        assert_eq!(
+            message_outline(&messages),
+            vec![
+                ("developer", "<app-context> desktop context"),
+                ("user", "# AGENTS.md instructions for /tmp/project"),
+                ("user", "How do I deploy?"),
+                ("assistant", "[Tool: shell]"),
+                ("assistant", "Deployed."),
+            ]
+        );
+    }
+
+    #[test]
+    fn contextual_scaffolding_detection() {
+        // Roles without an item_completed twin are always scaffolding.
+        assert!(is_contextual_scaffolding("developer", "<app-context> x", None));
+        assert!(is_contextual_scaffolding("system", "anything", None));
+        // Kind metadata decides for user messages: real input is user.text.
+        assert!(!is_contextual_scaffolding(
+            "user",
+            "How do I deploy?",
+            Some(&["user.text".to_string()])
+        ));
+        assert!(is_contextual_scaffolding(
+            "user",
+            "# AGENTS.md instructions for /tmp",
+            Some(&["agents_md.instructions".to_string()])
+        ));
+        // Unknown future kinds fail toward showing, never dropping.
+        assert!(is_contextual_scaffolding(
+            "user",
+            "whatever",
+            Some(&["gizmo.instructions".to_string()])
+        ));
+        // Marker fallback for kinds-less records: start AND end marker must
+        // both match, mirroring codex matches_marked_text.
+        assert!(is_contextual_scaffolding(
+            "user",
+            "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbe nice\n</INSTRUCTIONS>",
+            None
+        ));
+        assert!(is_contextual_scaffolding(
+            "user",
+            "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+            None
+        ));
+        // A real user message that merely opens with a scaffolding marker is
+        // conversation content (it has an item twin) — classifying it as
+        // scaffolding would double-count it.
+        assert!(!is_contextual_scaffolding(
+            "user",
+            "# AGENTS.md instructions say be nice",
+            None
+        ));
+        assert!(!is_contextual_scaffolding("assistant", "Deployed.", None));
     }
 
     #[test]
@@ -1416,10 +1609,15 @@ mod tests {
         )
         .expect("write");
 
-        // The fork tree gets clean user events: no AGENTS.md injection, no
-        // twin duplication.
+        // The fork tree gets clean user events: no injected scaffolding
+        // (app-context, AGENTS.md instructions wrapper, turn_aborted), no
+        // twin duplication — but every real user turn shows up, including
+        // one that merely opens with a scaffolding marker.
         let events = user_events_from_path(&path).expect("user_events");
-        assert_eq!(events, vec!["How do I deploy?"]);
+        assert_eq!(
+            events,
+            vec!["How do I deploy?", "# AGENTS.md instructions say be nice"]
+        );
     }
 
     #[test]

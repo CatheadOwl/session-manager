@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-20
+
+### Fixed
+
+- Fix Codex 0.153+ sessions dropping model-received context: injected inputs (app context, user instructions) now appear as marked system blocks in new-format sessions, same as legacy sessions.
+
 ## [0.4.0] - 2026-09-20
 
 ### Added

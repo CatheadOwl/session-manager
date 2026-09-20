@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-20
+
+### Added
+
+- Add support for Codex 0.153+ sessions (paginated history format): new-format sessions now load their complete message stream — user questions, assistant answers, and tool cards.
+
+### Fixed
+
+- Fix Codex system blocks (app context, skills instructions, collaboration mode, multi-agent role hints) rendering as plain message text; they now show as collapsible system cards.
+- Fix Codex message boundaries when a system block's closing marker is glued to adjacent content, which could split or swallow surrounding messages.
+
 ## [0.3.0] - 2026-09-11
 
 ### Added

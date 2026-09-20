@@ -87,6 +87,8 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 > **Stable** = the author dogfoods these two daily, so they get first-class treatment.
 >
 > **Experimental** = adapters written for tools the author doesn't personally run — theoretically they work, practically… who knows? PRs & issue reports welcome.
+>
+> **Codex formats** - sessions are read in both the classic single-file rollout format and the paginated history format (Codex 0.153+).
 
 ## Remote Sources (SSH)
 

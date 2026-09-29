@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-29
+
+### Fixed
+
+- Fix Linux AppImage failing to start for users other than the owner, e.g. in firejail-sandboxed launchers (tauri-apps/tauri#16155).
+
 ## [0.4.1] - 2026-09-20
 
 ### Fixed

@@ -96,3 +96,24 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app_path"
           lipo "$binary_path" -verify_arch arm64 x86_64
           test -f "$app_path.tar.gz.sig"
+
+      # tauri-bundler <= 2.11 shipped AppRun/AppRun.wrapped with mode 0770,
+      # so sandboxed launchers running the AppImage as another user
+      # (firejail, the AppImage catalog) got "Permission denied".
+      # Upstream fix: tauri-apps/tauri#16155 (CLI 2.12). Guard against
+      # regressions: every bundled file executable by its owner must be
+      # executable by others too.
+      - name: Verify AppImage launcher permissions
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          "$appimage" --appimage-extract >/dev/null
+          bad="$(find squashfs-root -type f -perm /u+x ! -perm /o+x -print)"
+          if [ -n "$bad" ]; then
+            echo "FAIL: executables missing the others-execute bit:"
+            ls -la $bad
+            exit 1
+          fi
+          echo "OK: all bundled executables are executable by other users"

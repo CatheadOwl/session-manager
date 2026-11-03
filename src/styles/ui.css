@@ -363,6 +363,62 @@
   border-color: var(--danger);
 }
 
+/*
+ * Multi-line string setting editor (resume template): same border/radius
+ * rhythm as the source inputs, but a resizable textarea with the mono
+ * stack (template text is code-ish) and a taller box.
+ */
+.setting-string-input {
+  width: 100%;
+  min-height: 3.1rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--panel);
+  color: inherit;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  font-weight: 550;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.setting-string-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.setting-string-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* Insertable-variable chips under a string setting's textarea. */
+.setting-variable-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.setting-variable-chip {
+  padding: 0.08rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.setting-variable-chip:hover,
+.setting-variable-chip:focus-visible {
+  border-color: var(--accent);
+}
+
 .setting-provider-trigger {
   min-width: 6rem;
   justify-content: space-between;

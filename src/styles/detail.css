@@ -304,7 +304,9 @@
 /* Copyable metadata rows: value + inline copy button, both hidden when the card collapses */
 .metadata-card .metadata-copyable {
   display: flex;
-  align-items: center;
+  /* Top-aligned: multi-line values (resume templates may span lines) keep
+   * the copy button anchored to the first line. */
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.5rem;
 }
@@ -312,6 +314,9 @@
 .metadata-card .metadata-copyable .metadata-value {
   min-width: 0;
   overflow-wrap: anywhere;
+  /* Multi-line rendered values keep their line breaks (what you see is
+   * what you copy); default `normal` would collapse them to spaces. */
+  white-space: pre-wrap;
 }
 
 .metadata-card .copy-feedback-button {

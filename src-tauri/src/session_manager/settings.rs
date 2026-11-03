@@ -269,9 +269,11 @@ pub const SETTINGS: &[SettingDefinition] = &[
     // The default is EMPTY (const-context String): an empty/missing
     // template renders as the raw resume command (see the TS-side
     // fallback in `renderResumeTemplate`), so users opt into combined
-    // lines like `cd "{WorkDir}" && {ResumeCommand}`. Unknown placeholder
-    // names render literally, and quoting/shell syntax stays the user's
-    // responsibility — the app never guesses the target shell.
+    // lines like `cd "{WorkDir}" && {ResumeCommand}`. Multi-line templates
+    // are allowed (newlines pass through — each line runs on paste).
+    // Unknown placeholder names render literally, and quoting/shell syntax
+    // stays the user's responsibility — the app never guesses the target
+    // shell.
     SettingDefinition {
         key: "sessions.resumeTemplate",
         setting_type: SettingType::Str,

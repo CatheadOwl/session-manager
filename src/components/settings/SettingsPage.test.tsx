@@ -136,19 +136,44 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("Unsupported setting type: fancy")).toBeInTheDocument();
   });
 
-  it("edits a string setting through the Sessions category and commits on Enter", async () => {
+  it("edits a string setting: Enter inserts a newline, Ctrl+Enter commits, Esc reverts", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const input = await screen.findByLabelText("Resume copy template");
-    expect(input).toHaveValue("");
-    fireEvent.change(input, { target: { value: 'cd "{WorkDir}" && {ResumeCommand}' } });
-    fireEvent.keyDown(input, { key: "Enter" });
+    const editor = await screen.findByLabelText("Resume copy template");
+    expect(editor).toHaveValue("");
+
+    // Enter is a newline (multi-line template), NOT a commit.
+    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}"' } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+    expect(mocks.invoke).not.toHaveBeenCalledWith("set_setting_value", expect.anything());
+    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}"\n{ResumeCommand}' } });
+
+    // Ctrl+Enter commits the draft.
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
     await waitFor(() => {
       expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
         key: "sessions.resumeTemplate",
-        value: { string: 'cd "{WorkDir}" && {ResumeCommand}' },
+        value: { string: 'cd "{WorkDir}"\n{ResumeCommand}' },
       });
     });
+
+    // Esc reverts the draft to the served value without a write.
+    mocks.invoke.mockClear();
+    fireEvent.change(editor, { target: { value: "junk" } });
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(editor).toHaveValue('cd "{WorkDir}"\n{ResumeCommand}');
+    expect(mocks.invoke).not.toHaveBeenCalledWith("set_setting_value", expect.anything());
+  });
+
+  it("inserts a variable at the caret when its chip is clicked", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
+    const editor = await screen.findByLabelText("Resume copy template");
+    fireEvent.change(editor, { target: { value: "cd " } });
+    // Caret after "cd " — the chip token must land exactly there.
+    (editor as HTMLTextAreaElement).setSelectionRange(3, 3);
+    fireEvent.click(screen.getByRole("button", { name: "Insert {WorkDir}" }));
+    expect(editor).toHaveValue("cd {WorkDir}");
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

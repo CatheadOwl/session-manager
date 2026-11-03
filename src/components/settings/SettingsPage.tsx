@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type FC } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FC } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   setSettingValue,
@@ -30,8 +30,21 @@ const CATEGORY_ORDER: { group: string; label: string }[] = [
   { group: "sessions", label: "Sessions" },
 ];
 
+/** Insertable placeholder a string setting may declare (chips under the input). */
+interface SettingVariable {
+  /** Bare name; the chip inserts `{name}` at the textarea caret. */
+  name: string;
+  /** One-line meaning shown as the chip's tooltip. */
+  hint: string;
+  /** Concrete rendered example for the tooltip. */
+  example: string;
+}
+
 /** Per-setting presentation (user-side copy, never raw keys). */
-const SETTING_PRESENTATION: Record<string, { label: string; description?: string }> = {
+const SETTING_PRESENTATION: Record<
+  string,
+  { label: string; description?: string; variables?: SettingVariable[] }
+> = {
   "update.autoCheck": {
     label: "Check for updates automatically",
     description: "When off, the startup update check is skipped. Manual retry from the update toast still works.",
@@ -43,7 +56,24 @@ const SETTING_PRESENTATION: Record<string, { label: string; description?: string
   "sessions.resumeTemplate": {
     label: "Resume copy template",
     description:
-      "Template for a session's Resume row and its copy button. Variables: {ResumeCommand} (the agent resume command), {WorkDir} (project path), {SessionId}. Empty keeps the raw resume command; unknown names stay literal; quoting is up to your shell.",
+      "Template for a session's Resume row and its copy button. Multi-line templates are allowed (each line runs when pasted — PowerShell 5.1 has no &&). Empty keeps the raw resume command; unknown names stay literal; quoting is up to your shell.",
+    variables: [
+      {
+        name: "ResumeCommand",
+        hint: "The agent's resume command",
+        example: "codex resume a1b2c3",
+      },
+      {
+        name: "WorkDir",
+        hint: "The session's project directory",
+        example: "D:\\Document\\Projects\\foo",
+      },
+      {
+        name: "SessionId",
+        hint: "The session id",
+        example: "a1b2c3",
+      },
+    ],
   },
 };
 
@@ -88,15 +118,19 @@ const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) =>
 };
 
 /**
- * Text-input renderer for `string` settings. Follows the SourcesEditor path
- * rhythm: typing stays in a local draft (no per-keystroke IPC writes), and
- * the value commits on blur or Enter; Escape reverts to the served value.
+ * Multi-line text renderer for `string` settings. Follows the SourcesEditor
+ * draft rhythm: typing stays local (no per-keystroke IPC writes); the value
+ * commits on blur or Ctrl+Enter while Enter inserts a newline (templates may
+ * span lines); Escape reverts to the served value. Settings that declare
+ * `variables` get a chip row that inserts `{name}` at the textarea caret —
+ * placeholder spelling stops being a user problem.
  */
 const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
   const id = useId();
   const str =
     value !== undefined && "string" in value ? value.string : "string" in def.default ? def.default.string : "";
   const [draft, setDraft] = useState(str);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // External updates (settings-changed invalidation) overwrite the draft.
   useEffect(() => {
     setDraft(str);
@@ -104,6 +138,24 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
   const commit = () => {
     if (draft !== str) onChange({ string: draft });
   };
+  const insertVariable = (name: string) => {
+    const token = `{${name}}`;
+    const el = textareaRef.current;
+    if (!el) {
+      setDraft(draft + token);
+      return;
+    }
+    const start = el.selectionStart ?? draft.length;
+    const end = el.selectionEnd ?? start;
+    setDraft(draft.slice(0, start) + token + draft.slice(end));
+    // Caret lands AFTER the token once the re-render paints it.
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + token.length;
+      el.setSelectionRange(caret, caret);
+    });
+  };
+  const variables = SETTING_PRESENTATION[def.key]?.variables;
   return (
     <SettingRow
       label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
@@ -112,27 +164,44 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
       error={error}
       variant="full"
     >
-      <input
+      <textarea
+        ref={textareaRef}
         id={id}
-        className="setting-source-input"
-        type="text"
+        className="setting-string-input"
+        rows={2}
         value={draft}
         spellCheck={false}
         aria-invalid={error ? true : undefined}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commit();
-            event.currentTarget.blur();
-          } else if (event.key === "Escape") {
+          if (event.key === "Escape") {
             event.preventDefault();
             setDraft(str);
+            event.currentTarget.blur();
+          } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            commit();
             event.currentTarget.blur();
           }
         }}
       />
+      {variables ? (
+        <div className="setting-variable-chips">
+          {variables.map((variable) => (
+            <button
+              key={variable.name}
+              type="button"
+              className="setting-variable-chip"
+              aria-label={`Insert {${variable.name}}`}
+              title={`${variable.hint} — e.g. ${variable.example}`}
+              onClick={() => insertVariable(variable.name)}
+            >
+              {`{${variable.name}}`}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </SettingRow>
   );
 };

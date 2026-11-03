@@ -10,6 +10,8 @@
  * Semantics (deliberately predictable, no magic):
  * - An EMPTY template (unset, cleared, or whitespace-only) falls back to the
  *   raw resume command — the shipped default keeps today's copy behavior.
+ * - Newlines pass through: a multi-line template copies as multiple shell
+ *   lines (each runs on paste — the PowerShell 5.1 answer, which has no &&).
  * - Unknown placeholder names (typos) render literally so the mistake is
  *   visible in the row instead of silently swallowed.
  * - No quoting/escaping is applied: the result is pasted into the user's own

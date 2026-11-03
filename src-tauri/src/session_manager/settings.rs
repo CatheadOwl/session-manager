@@ -263,6 +263,21 @@ pub const SETTINGS: &[SettingDefinition] = &[
         default: SettingValue::SourceList(Vec::new()),
         group: "sources",
     },
+    // Resume-copy template, rendered on the TS side against each session's
+    // `{ResumeCommand}` (the provider-built resume command, e.g.
+    // `codex resume <id>`), `{WorkDir}` (project path) and `{SessionId}`.
+    // The default is EMPTY (const-context String): an empty/missing
+    // template renders as the raw resume command (see the TS-side
+    // fallback in `renderResumeTemplate`), so users opt into combined
+    // lines like `cd "{WorkDir}" && {ResumeCommand}`. Unknown placeholder
+    // names render literally, and quoting/shell syntax stays the user's
+    // responsibility — the app never guesses the target shell.
+    SettingDefinition {
+        key: "sessions.resumeTemplate",
+        setting_type: SettingType::Str,
+        default: SettingValue::Str(String::new()),
+        group: "sessions",
+    },
 ];
 
 /// Merged view served over IPC: descriptors + effective values.
@@ -289,6 +304,8 @@ struct SettingsStore {
     unknown_top: Map<String, Value>,
     /// Unknown fields inside the `update` section, preserved verbatim on save.
     unknown_update: Map<String, Value>,
+    /// Unknown fields inside the `sessions` section, preserved verbatim on save.
+    unknown_sessions: Map<String, Value>,
     /// D7: the loaded file contained comments (strip produced a diff).
     had_comments: bool,
     /// D7: the one-time "comments will be dropped" warning has been logged.
@@ -412,6 +429,40 @@ impl SettingsManager {
                         json_kind(&value)
                     ),
                 },
+                "sessions" => match value {
+                    Value::Object(fields) => {
+                        for (field, field_value) in fields {
+                            if field == "resumeTemplate" {
+                                match field_value.as_str() {
+                                    Some(s) => {
+                                        // Sparse: only remember non-default values.
+                                        if SettingValue::Str(s.to_string())
+                                            != default_of("sessions.resumeTemplate")
+                                        {
+                                            store.overrides.insert(
+                                                "sessions.resumeTemplate".to_string(),
+                                                SettingValue::Str(s.to_string()),
+                                            );
+                                        }
+                                    }
+                                    None => log::warn!(
+                                        "settings: wrong-typed `sessions.resumeTemplate` ({}) — dropped, falling back to default",
+                                        json_kind(&field_value)
+                                    ),
+                                }
+                            } else {
+                                log::warn!(
+                                    "settings: unknown field `sessions.{field}` — preserved for round-trip"
+                                );
+                                store.unknown_sessions.insert(field, field_value);
+                            }
+                        }
+                    }
+                    other => log::warn!(
+                        "settings: wrong-typed `sessions` ({}) — dropped, falling back to defaults",
+                        json_kind(&other)
+                    ),
+                },
                 _ => {
                     store.unknown_top.insert(key.clone(), value.clone());
                     log::warn!("settings: unknown key `{key}` — preserved for round-trip");
@@ -524,6 +575,12 @@ impl SettingsManager {
         for (field, value) in &store.unknown_update {
             sections
                 .entry("update")
+                .or_default()
+                .insert(field.clone(), value.clone());
+        }
+        for (field, value) in &store.unknown_sessions {
+            sections
+                .entry("sessions")
                 .or_default()
                 .insert(field.clone(), value.clone());
         }
@@ -1213,6 +1270,119 @@ mod tests {
         assert_eq!(
             snapshot.values["sources"],
             SettingValue::SourceList(Vec::new())
+        );
+    }
+
+    #[test]
+    fn resume_template_defaults_to_raw_command() {
+        // Empty default: the TS renderer falls back to the raw resume
+        // command, so the shipped behavior copies the bare command.
+        let dir = tempdir().expect("tempdir");
+        let manager = SettingsManager::new(settings_path(dir.path()));
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str(String::new()))
+        );
+    }
+
+    #[test]
+    fn resume_template_override_loads() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sessions\": {\"resumeTemplate\": \"cd \\\"{WorkDir}\\\" && {ResumeCommand}\"}}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str(
+                "cd \"{WorkDir}\" && {ResumeCommand}".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resume_template_wrong_typed_dropped_to_default() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sessions\": {\"resumeTemplate\": 42}, \"update\": {\"autoCheck\": false}}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str(String::new()))
+        );
+        // Other keys survive the wrong-typed field.
+        assert_eq!(
+            manager.get_value("update.autoCheck"),
+            Some(SettingValue::Bool(false))
+        );
+    }
+
+    #[test]
+    fn resume_template_round_trip_and_sparse_write() {
+        let dir = tempdir().expect("tempdir");
+        let path = settings_path(dir.path());
+        let manager = SettingsManager::new(path.clone());
+        manager
+            .set_value(
+                "sessions.resumeTemplate",
+                SettingValue::Str("cd \"{WorkDir}\" && {ResumeCommand}".to_string()),
+            )
+            .expect("set");
+
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(
+            saved["sessions"]["resumeTemplate"],
+            serde_json::json!("cd \"{WorkDir}\" && {ResumeCommand}")
+        );
+        // Reload round-trips the override.
+        assert_eq!(
+            SettingsManager::new(path.clone()).get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str(
+                "cd \"{WorkDir}\" && {ResumeCommand}".to_string()
+            ))
+        );
+
+        // Setting back to the default (empty) removes the section (sparse write).
+        manager
+            .set_value("sessions.resumeTemplate", SettingValue::Str(String::new()))
+            .expect("set");
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert!(
+            saved.get("sessions").is_none(),
+            "default-equal template must be omitted"
+        );
+    }
+
+    #[test]
+    fn sessions_unknown_field_preserved_through_save() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sessions\": {\"resumeTemplate\": \"x {SessionId}\", \"futureField\": [1, 2]}}",
+        );
+        let manager = SettingsManager::new(path.clone());
+        // An unrelated write keeps the unknown sessions field verbatim.
+        manager
+            .set_value("update.autoCheck", SettingValue::Bool(false))
+            .expect("set");
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(saved["sessions"]["futureField"], serde_json::json!([1, 2]));
+        assert_eq!(saved["sessions"]["resumeTemplate"], serde_json::json!("x {SessionId}"));
+    }
+
+    #[test]
+    fn set_value_validates_resume_template_type() {
+        let dir = tempdir().expect("tempdir");
+        let manager = SettingsManager::new(settings_path(dir.path()));
+        assert_eq!(
+            manager.set_value("sessions.resumeTemplate", SettingValue::Bool(true)),
+            Err("Type mismatch for `sessions.resumeTemplate`: expected string, got bool".to_string())
         );
     }
 }

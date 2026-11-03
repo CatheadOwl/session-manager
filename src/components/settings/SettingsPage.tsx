@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FC } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type FC } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   setSettingValue,
@@ -27,6 +27,7 @@ import { ToggleRow } from "@/components/ui/ToggleRow";
 const CATEGORY_ORDER: { group: string; label: string }[] = [
   { group: "update", label: "General" },
   { group: "sources", label: "Sources" },
+  { group: "sessions", label: "Sessions" },
 ];
 
 /** Per-setting presentation (user-side copy, never raw keys). */
@@ -38,6 +39,11 @@ const SETTING_PRESENTATION: Record<string, { label: string; description?: string
   sources: {
     label: "Extra session sources",
     description: "Additional home-mirrored roots scanned on top of this machine's home.",
+  },
+  "sessions.resumeTemplate": {
+    label: "Resume copy template",
+    description:
+      "Template for a session's Resume row and its copy button. Variables: {ResumeCommand} (the agent resume command), {WorkDir} (project path), {SessionId}. Empty keeps the raw resume command; unknown names stay literal; quoting is up to your shell.",
   },
 };
 
@@ -82,12 +88,64 @@ const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) =>
 };
 
 /**
- * v1 renderers cover the shipped setting types (`bool`, `sourceList`).
- * `string`/`stringList` are deferred until a setting uses them — an unknown
- * or missing type renders the visible fallback row below, never a crash.
+ * Text-input renderer for `string` settings. Follows the SourcesEditor path
+ * rhythm: typing stays in a local draft (no per-keystroke IPC writes), and
+ * the value commits on blur or Enter; Escape reverts to the served value.
+ */
+const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
+  const id = useId();
+  const str =
+    value !== undefined && "string" in value ? value.string : "string" in def.default ? def.default.string : "";
+  const [draft, setDraft] = useState(str);
+  // External updates (settings-changed invalidation) overwrite the draft.
+  useEffect(() => {
+    setDraft(str);
+  }, [str]);
+  const commit = () => {
+    if (draft !== str) onChange({ string: draft });
+  };
+  return (
+    <SettingRow
+      label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
+      description={SETTING_PRESENTATION[def.key]?.description}
+      id={id}
+      error={error}
+      variant="full"
+    >
+      <input
+        id={id}
+        className="setting-source-input"
+        type="text"
+        value={draft}
+        spellCheck={false}
+        aria-invalid={error ? true : undefined}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(str);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </SettingRow>
+  );
+};
+
+/**
+ * v1 renderers cover the shipped setting types (`bool`, `string`,
+ * `sourceList`). `stringList` is deferred until a setting uses it — an
+ * unknown or missing type renders the visible fallback row below, never a
+ * crash.
  */
 const RENDERERS: Partial<Record<SettingType, SettingRenderer>> = {
   bool: BoolRenderer,
+  string: StringRenderer,
   sourceList: SourceListRenderer,
 };
 

@@ -18,9 +18,11 @@ const fixture = (): SettingsSnapshot => ({
   descriptors: [
     { key: "update.autoCheck", type: "bool", default: { bool: true }, group: "update" },
     { key: "sources", type: "sourceList", default: { sourceList: [] }, group: "sources" },
+    { key: "sessions.resumeTemplate", type: "string", default: { string: "" }, group: "sessions" },
   ],
   values: {
     "update.autoCheck": { bool: true },
+    "sessions.resumeTemplate": { string: "" },
     sources: {
       sourceList: [
         // Local entries are `{ path, enabled }` — a legacy
@@ -132,6 +134,21 @@ describe("SettingsPage", () => {
     });
     renderPage();
     expect(await screen.findByText("Unsupported setting type: fancy")).toBeInTheDocument();
+  });
+
+  it("edits a string setting through the Sessions category and commits on Enter", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
+    const input = await screen.findByLabelText("Resume copy template");
+    expect(input).toHaveValue("");
+    fireEvent.change(input, { target: { value: 'cd "{WorkDir}" && {ResumeCommand}' } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
+        key: "sessions.resumeTemplate",
+        value: { string: 'cd "{WorkDir}" && {ResumeCommand}' },
+      });
+    });
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

@@ -15,6 +15,8 @@ import { RawSessionContent } from "./RawSessionContent";
 import { formatSessionTitle, formatTimestamp } from "@/utils/format";
 import { extractSystemBlocks } from "@/utils/system-blocks";
 import { supportsLifecycleOperations } from "@/lib/domain";
+import { useSettingsQuery } from "@/lib/query/queries";
+import { renderResumeTemplate } from "@/lib/resumeTemplate";
 
 interface SessionDetailProps {
   session: SessionMeta | null;
@@ -276,6 +278,27 @@ export const SessionDetail = memo(function SessionDetail({
     };
   }, [targetMsgIndex, messageMode, messages, qaPairs]);
 
+  // Resume row: the `sessions.resumeTemplate` setting (empty = raw command)
+  // renders against this session's values; the row shows AND copies the
+  // rendered string. Refreshed automatically by the settings-changed
+  // invalidation, so template edits apply without a rescan. Lives above the
+  // empty-session early return — hook order must not depend on selection.
+  const settingsQuery = useSettingsQuery();
+  const resumeTemplateSetting = settingsQuery.data?.values["sessions.resumeTemplate"];
+  const resumeTemplate =
+    resumeTemplateSetting !== undefined && "string" in resumeTemplateSetting
+      ? resumeTemplateSetting.string
+      : undefined;
+  const resumeDisplay = useMemo(
+    () =>
+      renderResumeTemplate(resumeTemplate, {
+        resumeCommand: session?.resumeCommand,
+        workDir: session?.projectDir,
+        sessionId: session?.sessionId,
+      }),
+    [resumeTemplate, session],
+  );
+
   if (!session) {
     return (
       <main className="session-detail empty-detail">
@@ -406,9 +429,9 @@ export const SessionDetail = memo(function SessionDetail({
               <div>
                 <dt>Resume</dt>
                 <dd className="metadata-copyable">
-                  <span className="metadata-value">{session.resumeCommand || "—"}</span>
-                  {session.resumeCommand ? (
-                    <CopyButton text={session.resumeCommand} label="Copy resume command" className="metadata-copy-btn" />
+                  <span className="metadata-value">{resumeDisplay || "—"}</span>
+                  {resumeDisplay ? (
+                    <CopyButton text={resumeDisplay} label="Copy resume command" className="metadata-copy-btn" />
                   ) : null}
                 </dd>
               </div>

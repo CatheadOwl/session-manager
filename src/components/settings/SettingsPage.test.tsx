@@ -18,10 +18,12 @@ const fixture = (): SettingsSnapshot => ({
   descriptors: [
     { key: "update.autoCheck", type: "bool", default: { bool: true }, group: "update" },
     { key: "sources", type: "sourceList", default: { sourceList: [] }, group: "sources" },
+    { key: "sessions.resumeTemplateEnabled", type: "bool", default: { bool: false }, group: "sessions" },
     { key: "sessions.resumeTemplate", type: "string", default: { string: "" }, group: "sessions" },
   ],
   values: {
     "update.autoCheck": { bool: true },
+    "sessions.resumeTemplateEnabled": { bool: false },
     "sessions.resumeTemplate": { string: "" },
     sources: {
       sourceList: [
@@ -136,44 +138,58 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("Unsupported setting type: fancy")).toBeInTheDocument();
   });
 
-  it("edits a string setting: Enter inserts a newline, Ctrl+Enter commits, Esc reverts", async () => {
+  it("defaults the template gate off and seeds the recommended template on first enable", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const editor = await screen.findByLabelText("Resume copy template");
-    expect(editor).toHaveValue("");
+    const gate = await screen.findByRole("switch", { name: "Resume copy template" });
+    expect(gate).toHaveAttribute("aria-checked", "false");
 
-    // Enter is a newline (multi-line template), NOT a commit.
-    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}"' } });
-    fireEvent.keyDown(editor, { key: "Enter" });
-    expect(mocks.invoke).not.toHaveBeenCalledWith("set_setting_value", expect.anything());
-    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}"\n{ResumeCommand}' } });
-
-    // Ctrl+Enter commits the draft.
-    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+    fireEvent.click(gate);
     await waitFor(() => {
       expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
         key: "sessions.resumeTemplate",
         value: { string: 'cd "{WorkDir}"\n{ResumeCommand}' },
       });
+      expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
+        key: "sessions.resumeTemplateEnabled",
+        value: { bool: true },
+      });
     });
+    // The seeded template is visible in the editor (cache mirrored).
+    expect(await screen.findByLabelText("Template")).toHaveValue('cd "{WorkDir}"\n{ResumeCommand}');
+  });
 
-    // Esc reverts the draft to the served value without a write.
-    mocks.invoke.mockClear();
-    fireEvent.change(editor, { target: { value: "junk" } });
-    fireEvent.keyDown(editor, { key: "Escape" });
-    expect(editor).toHaveValue('cd "{WorkDir}"\n{ResumeCommand}');
-    expect(mocks.invoke).not.toHaveBeenCalledWith("set_setting_value", expect.anything());
+  it("applies template edits immediately — what you type is what is saved", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
+    const editor = await screen.findByLabelText("Template");
+    fireEvent.change(editor, { target: { value: "{SessionId}" } });
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
+        key: "sessions.resumeTemplate",
+        value: { string: "{SessionId}" },
+      });
+    });
   });
 
   it("inserts a variable at the caret when its chip is clicked", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const editor = await screen.findByLabelText("Resume copy template");
+    const editor = await screen.findByLabelText("Template");
     fireEvent.change(editor, { target: { value: "cd " } });
     // Caret after "cd " — the chip token must land exactly there.
     (editor as HTMLTextAreaElement).setSelectionRange(3, 3);
     fireEvent.click(screen.getByRole("button", { name: "Insert {WorkDir}" }));
     expect(editor).toHaveValue("cd {WorkDir}");
+  });
+
+  it("previews the rendered result with example values under the editor", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
+    const editor = await screen.findByLabelText("Template");
+    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}" && {ResumeCommand}' } });
+    const preview = screen.getByTitle("Preview with example values");
+    expect(preview).toHaveTextContent('cd "D:\\Document\\Projects\\demo" && codex resume a1b2c3');
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

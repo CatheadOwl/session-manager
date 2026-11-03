@@ -419,6 +419,26 @@
   border-color: var(--accent);
 }
 
+/*
+ * Live result of the editor above it (draft value rendered against the
+ * example session) — the effect of a template edit is visible without
+ * leaving Settings. Multi-line results keep their breaks.
+ */
+.setting-value-preview {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.setting-value-preview::before {
+  content: "→ ";
+  font-weight: 700;
+}
+
 .setting-provider-trigger {
   min-width: 6rem;
   justify-content: space-between;

@@ -13,6 +13,11 @@ import { useSettingsQuery } from "@/lib/query/queries";
 import { SettingRow } from "@/components/ui/SettingRow";
 import { SourcesEditor } from "@/components/ui/SourcesEditor";
 import { ToggleRow } from "@/components/ui/ToggleRow";
+import {
+  DEFAULT_RESUME_TEMPLATE,
+  RESUME_TEMPLATE_EXAMPLE,
+  renderResumeTemplate,
+} from "@/lib/resumeTemplate";
 
 /**
  * Settings overlay page: a pure renderer over the
@@ -43,7 +48,13 @@ interface SettingVariable {
 /** Per-setting presentation (user-side copy, never raw keys). */
 const SETTING_PRESENTATION: Record<
   string,
-  { label: string; description?: string; variables?: SettingVariable[] }
+  {
+    label: string;
+    description?: string;
+    variables?: SettingVariable[];
+    /** Renders the live result under the editor (draft value in, preview out). */
+    preview?: (value: string) => string;
+  }
 > = {
   "update.autoCheck": {
     label: "Check for updates automatically",
@@ -53,27 +64,30 @@ const SETTING_PRESENTATION: Record<
     label: "Extra session sources",
     description: "Additional home-mirrored roots scanned on top of this machine's home.",
   },
-  "sessions.resumeTemplate": {
+  "sessions.resumeTemplateEnabled": {
     label: "Resume copy template",
-    description:
-      "Template for a session's Resume row and its copy button. Multi-line templates are allowed (each line runs when pasted — PowerShell 5.1 has no &&). Empty keeps the raw resume command; unknown names stay literal; quoting is up to your shell.",
+    description: "When on, the Resume row shows and copies the rendered template below.",
+  },
+  "sessions.resumeTemplate": {
+    label: "Template",
     variables: [
       {
         name: "ResumeCommand",
         hint: "The agent's resume command",
-        example: "codex resume a1b2c3",
+        example: RESUME_TEMPLATE_EXAMPLE.resumeCommand,
       },
       {
         name: "WorkDir",
         hint: "The session's project directory",
-        example: "D:\\Document\\Projects\\foo",
+        example: RESUME_TEMPLATE_EXAMPLE.workDir,
       },
       {
         name: "SessionId",
         hint: "The session id",
-        example: "a1b2c3",
+        example: RESUME_TEMPLATE_EXAMPLE.sessionId,
       },
     ],
+    preview: (value) => renderResumeTemplate(value, RESUME_TEMPLATE_EXAMPLE),
   },
 };
 
@@ -118,36 +132,38 @@ const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) =>
 };
 
 /**
- * Multi-line text renderer for `string` settings. Follows the SourcesEditor
- * draft rhythm: typing stays local (no per-keystroke IPC writes); the value
- * commits on blur or Ctrl+Enter while Enter inserts a newline (templates may
- * span lines); Escape reverts to the served value. Settings that declare
- * `variables` get a chip row that inserts `{name}` at the textarea caret —
- * placeholder spelling stops being a user problem.
+ * Multi-line text renderer for `string` settings — what you type is what is
+ * saved: every change applies immediately (local file write, no commit
+ * gesture); Enter is a plain newline, Escape just bubbles up and closes the
+ * page. Settings that declare `variables` get a chip row that inserts
+ * `{name}` at the textarea caret, and a `preview` renders the live result
+ * under the editor so the effect is visible without leaving Settings.
  */
 const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
   const id = useId();
   const str =
     value !== undefined && "string" in value ? value.string : "string" in def.default ? def.default.string : "";
+  // Mirror of the served value; equals it except mid-write (apply-on-change
+  // reconciles on the next settings-changed echo).
   const [draft, setDraft] = useState(str);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // External updates (settings-changed invalidation) overwrite the draft.
   useEffect(() => {
     setDraft(str);
   }, [str]);
-  const commit = () => {
-    if (draft !== str) onChange({ string: draft });
+  const set = (next: string) => {
+    setDraft(next);
+    onChange({ string: next });
   };
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const insertVariable = (name: string) => {
     const token = `{${name}}`;
     const el = textareaRef.current;
     if (!el) {
-      setDraft(draft + token);
+      set(draft + token);
       return;
     }
     const start = el.selectionStart ?? draft.length;
     const end = el.selectionEnd ?? start;
-    setDraft(draft.slice(0, start) + token + draft.slice(end));
+    set(draft.slice(0, start) + token + draft.slice(end));
     // Caret lands AFTER the token once the re-render paints it.
     requestAnimationFrame(() => {
       el.focus();
@@ -155,11 +171,11 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
       el.setSelectionRange(caret, caret);
     });
   };
-  const variables = SETTING_PRESENTATION[def.key]?.variables;
+  const presentation = SETTING_PRESENTATION[def.key];
   return (
     <SettingRow
-      label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
-      description={SETTING_PRESENTATION[def.key]?.description}
+      label={presentation?.label ?? def.key}
+      description={presentation?.description}
       id={id}
       error={error}
       variant="full"
@@ -168,27 +184,15 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
         ref={textareaRef}
         id={id}
         className="setting-string-input"
-        rows={2}
+        rows={3}
         value={draft}
         spellCheck={false}
         aria-invalid={error ? true : undefined}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(str);
-            event.currentTarget.blur();
-          } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-            event.preventDefault();
-            commit();
-            event.currentTarget.blur();
-          }
-        }}
+        onChange={(event) => set(event.target.value)}
       />
-      {variables ? (
+      {presentation?.variables ? (
         <div className="setting-variable-chips">
-          {variables.map((variable) => (
+          {presentation.variables.map((variable) => (
             <button
               key={variable.name}
               type="button"
@@ -200,6 +204,11 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
               {`{${variable.name}}`}
             </button>
           ))}
+        </div>
+      ) : null}
+      {presentation?.preview ? (
+        <div className="setting-value-preview" title="Preview with example values">
+          {presentation.preview(draft)}
         </div>
       ) : null}
     </SettingRow>
@@ -267,6 +276,29 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         });
       }
       try {
+        // Toggle-on seeding: enabling the resume template with an EMPTY
+        // template fills the recommended default once (persisted like any
+        // edit, mirrored into the cache so the editor shows it immediately)
+        // — the feature works out of the box; custom templates are never
+        // overwritten.
+        if (key === "sessions.resumeTemplateEnabled" && "bool" in value && value.bool) {
+          const template = prevSnapshot?.values["sessions.resumeTemplate"];
+          const empty = !template || !("string" in template) || !template.string.trim();
+          if (empty) {
+            await setSettingValue("sessions.resumeTemplate", { string: DEFAULT_RESUME_TEMPLATE });
+            queryClient.setQueryData<SettingsSnapshot>(queryKeys.settings(), (current: SettingsSnapshot | undefined) =>
+              current
+                ? {
+                    ...current,
+                    values: {
+                      ...current.values,
+                      "sessions.resumeTemplate": { string: DEFAULT_RESUME_TEMPLATE },
+                    },
+                  }
+                : current,
+            );
+          }
+        }
         await setSettingValue(key, value);
       } catch (err) {
         setErrors((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : String(err) }));

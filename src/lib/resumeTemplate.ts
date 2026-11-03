@@ -24,6 +24,23 @@ export interface ResumeTemplateValues {
   sessionId: string | null | undefined;
 }
 
+/**
+ * Seeded when the template gate is switched on with an empty template
+ * (persisted like any user edit). Doubles as the visible input example.
+ */
+export const DEFAULT_RESUME_TEMPLATE = 'cd "{WorkDir}"\n{ResumeCommand}';
+
+/**
+ * Deterministic example session (codex-flavored) backing the settings
+ * preview and the chip tooltips. `satisfies` keeps the non-null field types
+ * (consumers present them as plain strings).
+ */
+export const RESUME_TEMPLATE_EXAMPLE = {
+  resumeCommand: "codex resume a1b2c3",
+  workDir: "D:\\Document\\Projects\\demo",
+  sessionId: "a1b2c3",
+} satisfies ResumeTemplateValues;
+
 export function renderResumeTemplate(
   template: string | null | undefined,
   values: ResumeTemplateValues,

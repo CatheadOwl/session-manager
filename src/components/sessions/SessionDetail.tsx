@@ -278,15 +278,19 @@ export const SessionDetail = memo(function SessionDetail({
     };
   }, [targetMsgIndex, messageMode, messages, qaPairs]);
 
-  // Resume row: the `sessions.resumeTemplate` setting (empty = raw command)
-  // renders against this session's values; the row shows AND copies the
-  // rendered string. Refreshed automatically by the settings-changed
-  // invalidation, so template edits apply without a rescan. Lives above the
-  // empty-session early return — hook order must not depend on selection.
+  // Resume row: gated by `sessions.resumeTemplateEnabled` (default off —
+  // raw command); when on, the template renders against this session's
+  // values and the row shows AND copies the rendered string. Refreshed
+  // automatically by the settings-changed invalidation, so edits apply
+  // without a rescan. Lives above the empty-session early return — hook
+  // order must not depend on selection.
   const settingsQuery = useSettingsQuery();
+  const resumeEnabledSetting = settingsQuery.data?.values["sessions.resumeTemplateEnabled"];
+  const resumeEnabled =
+    resumeEnabledSetting !== undefined && "bool" in resumeEnabledSetting ? resumeEnabledSetting.bool : false;
   const resumeTemplateSetting = settingsQuery.data?.values["sessions.resumeTemplate"];
   const resumeTemplate =
-    resumeTemplateSetting !== undefined && "string" in resumeTemplateSetting
+    resumeEnabled && resumeTemplateSetting !== undefined && "string" in resumeTemplateSetting
       ? resumeTemplateSetting.string
       : undefined;
   const resumeDisplay = useMemo(

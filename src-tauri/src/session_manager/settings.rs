@@ -263,17 +263,23 @@ pub const SETTINGS: &[SettingDefinition] = &[
         default: SettingValue::SourceList(Vec::new()),
         group: "sources",
     },
-    // Resume-copy template, rendered on the TS side against each session's
-    // `{ResumeCommand}` (the provider-built resume command, e.g.
-    // `codex resume <id>`), `{WorkDir}` (project path) and `{SessionId}`.
-    // The default is EMPTY (const-context String): an empty/missing
-    // template renders as the raw resume command (see the TS-side
-    // fallback in `renderResumeTemplate`), so users opt into combined
-    // lines like `cd "{WorkDir}" && {ResumeCommand}`. Multi-line templates
-    // are allowed (newlines pass through — each line runs on paste).
-    // Unknown placeholder names render literally, and quoting/shell syntax
-    // stays the user's responsibility — the app never guesses the target
-    // shell.
+    // Resume-copy template gate + template, rendered on the TS side against
+    // each session's `{ResumeCommand}` (the provider-built resume command,
+    // e.g. `codex resume <id>`), `{WorkDir}` (project path) and `{SessionId}`.
+    // The gate defaults OFF (shipped behavior: copy the raw resume command);
+    // enabling with an empty template seeds the recommended default
+    // `cd "{WorkDir}"\n{ResumeCommand}` once (TS-side, persisted like any
+    // edit). The template persists while disabled so re-enabling restores
+    // it. Multi-line templates are allowed (newlines pass through — each
+    // line runs on paste). Unknown placeholder names render literally, and
+    // quoting/shell syntax stays the user's responsibility — the app never
+    // guesses the target shell.
+    SettingDefinition {
+        key: "sessions.resumeTemplateEnabled",
+        setting_type: SettingType::Bool,
+        default: SettingValue::Bool(false),
+        group: "sessions",
+    },
     SettingDefinition {
         key: "sessions.resumeTemplate",
         setting_type: SettingType::Str,
@@ -449,6 +455,24 @@ impl SettingsManager {
                                     }
                                     None => log::warn!(
                                         "settings: wrong-typed `sessions.resumeTemplate` ({}) — dropped, falling back to default",
+                                        json_kind(&field_value)
+                                    ),
+                                }
+                            } else if field == "resumeTemplateEnabled" {
+                                match field_value.as_bool() {
+                                    Some(b) => {
+                                        // Sparse: only remember non-default values.
+                                        if SettingValue::Bool(b)
+                                            != default_of("sessions.resumeTemplateEnabled")
+                                        {
+                                            store.overrides.insert(
+                                                "sessions.resumeTemplateEnabled".to_string(),
+                                                SettingValue::Bool(b),
+                                            );
+                                        }
+                                    }
+                                    None => log::warn!(
+                                        "settings: wrong-typed `sessions.resumeTemplateEnabled` ({}) — dropped, falling back to default",
                                         json_kind(&field_value)
                                     ),
                                 }
@@ -1385,6 +1409,73 @@ mod tests {
         assert_eq!(
             manager.set_value("sessions.resumeTemplate", SettingValue::Bool(true)),
             Err("Type mismatch for `sessions.resumeTemplate`: expected string, got bool".to_string())
+        );
+    }
+
+    /// The template gate defaults OFF; enabling persists while the template
+    /// survives disabling (re-enable restores it).
+    #[test]
+    fn resume_template_gate_defaults_off_and_keeps_template() {
+        let dir = tempdir().expect("tempdir");
+        let manager = SettingsManager::new(settings_path(dir.path()));
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplateEnabled"),
+            Some(SettingValue::Bool(false))
+        );
+
+        // Enable + set a template (the UI seeding shape: two writes).
+        manager
+            .set_value("sessions.resumeTemplateEnabled", SettingValue::Bool(true))
+            .expect("enable");
+        manager
+            .set_value(
+                "sessions.resumeTemplate",
+                SettingValue::Str("cd \"{WorkDir}\"\n{ResumeCommand}".to_string()),
+            )
+            .expect("set template");
+
+        // Disable: the gate flips back to its default (sparse write OMITS
+        // the default-equal key), while the template value survives in the
+        // file for the next enable.
+        manager
+            .set_value("sessions.resumeTemplateEnabled", SettingValue::Bool(false))
+            .expect("disable");
+        let saved: Value = serde_json::from_str(
+            &std::fs::read_to_string(settings_path(dir.path())).expect("read"),
+        )
+        .expect("parse");
+        assert!(
+            saved["sessions"].get("resumeTemplateEnabled").is_none(),
+            "default-equal gate must be omitted (sparse)"
+        );
+        assert_eq!(
+            saved["sessions"]["resumeTemplate"],
+            serde_json::json!("cd \"{WorkDir}\"\n{ResumeCommand}")
+        );
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str(
+                "cd \"{WorkDir}\"\n{ResumeCommand}".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resume_template_gate_wrong_typed_dropped() {
+        let dir = tempdir().expect("tempdir");
+        let path = write_settings(
+            dir.path(),
+            "{\"sessions\": {\"resumeTemplateEnabled\": \"yes\", \"resumeTemplate\": \"x\"}}",
+        );
+        let manager = SettingsManager::new(path);
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplateEnabled"),
+            Some(SettingValue::Bool(false))
+        );
+        // The sibling field is unaffected.
+        assert_eq!(
+            manager.get_value("sessions.resumeTemplate"),
+            Some(SettingValue::Str("x".to_string()))
         );
     }
 }

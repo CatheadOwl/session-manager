@@ -25,10 +25,27 @@ export interface ResumeTemplateValues {
 }
 
 /**
- * Seeded when the template gate is switched on with an empty template
- * (persisted like any user edit). Doubles as the visible input example.
+ * Recommended template — the natural fallback for a blank template while
+ * the gate is on (see effectiveResumeTemplate), and the editor's gray
+ * placeholder so the default is visible before anything is typed.
  */
 export const DEFAULT_RESUME_TEMPLATE = 'cd "{WorkDir}"\n{ResumeCommand}';
+
+/**
+ * Effective-template resolution — the single place "empty means default"
+ * lives. Gate OFF means no template at all (renderResumeTemplate falls back
+ * to the raw resume command); gate ON with a blank template falls back to
+ * the recommended default. The default is a RENDER-time fallback mirroring
+ * the editor's placeholder — it is never written to the settings file, so
+ * the file stays sparse and hand-editing `""` means "use the default".
+ */
+export function effectiveResumeTemplate(
+  enabled: boolean,
+  template: string | null | undefined,
+): string | null {
+  if (!enabled) return null;
+  return template?.trim() ? template : DEFAULT_RESUME_TEMPLATE;
+}
 
 /**
  * Deterministic example session (codex-flavored) backing the settings

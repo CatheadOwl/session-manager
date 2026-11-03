@@ -16,6 +16,7 @@ import { ToggleRow } from "@/components/ui/ToggleRow";
 import {
   DEFAULT_RESUME_TEMPLATE,
   RESUME_TEMPLATE_EXAMPLE,
+  effectiveResumeTemplate,
   renderResumeTemplate,
 } from "@/lib/resumeTemplate";
 
@@ -52,6 +53,8 @@ const SETTING_PRESENTATION: Record<
     label: string;
     description?: string;
     variables?: SettingVariable[];
+    /** Ghost text in the empty editor — the natural default, never written. */
+    placeholder?: string;
     /** Renders the live result under the editor (draft value in, preview out). */
     preview?: (value: string) => string;
   }
@@ -70,6 +73,7 @@ const SETTING_PRESENTATION: Record<
   },
   "sessions.resumeTemplate": {
     label: "Template",
+    placeholder: DEFAULT_RESUME_TEMPLATE,
     variables: [
       {
         name: "ResumeCommand",
@@ -87,7 +91,10 @@ const SETTING_PRESENTATION: Record<
         example: RESUME_TEMPLATE_EXAMPLE.sessionId,
       },
     ],
-    preview: (value) => renderResumeTemplate(value, RESUME_TEMPLATE_EXAMPLE),
+    // Preview renders the EFFECTIVE template (empty = default), matching
+    // what the Resume row would copy with the gate on.
+    preview: (value) =>
+      renderResumeTemplate(effectiveResumeTemplate(true, value), RESUME_TEMPLATE_EXAMPLE),
   },
 };
 
@@ -186,6 +193,7 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
         className="setting-string-input"
         rows={3}
         value={draft}
+        placeholder={presentation?.placeholder}
         spellCheck={false}
         aria-invalid={error ? true : undefined}
         onChange={(event) => set(event.target.value)}
@@ -276,29 +284,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         });
       }
       try {
-        // Toggle-on seeding: enabling the resume template with an EMPTY
-        // template fills the recommended default once (persisted like any
-        // edit, mirrored into the cache so the editor shows it immediately)
-        // — the feature works out of the box; custom templates are never
-        // overwritten.
-        if (key === "sessions.resumeTemplateEnabled" && "bool" in value && value.bool) {
-          const template = prevSnapshot?.values["sessions.resumeTemplate"];
-          const empty = !template || !("string" in template) || !template.string.trim();
-          if (empty) {
-            await setSettingValue("sessions.resumeTemplate", { string: DEFAULT_RESUME_TEMPLATE });
-            queryClient.setQueryData<SettingsSnapshot>(queryKeys.settings(), (current: SettingsSnapshot | undefined) =>
-              current
-                ? {
-                    ...current,
-                    values: {
-                      ...current.values,
-                      "sessions.resumeTemplate": { string: DEFAULT_RESUME_TEMPLATE },
-                    },
-                  }
-                : current,
-            );
-          }
-        }
         await setSettingValue(key, value);
       } catch (err) {
         setErrors((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : String(err) }));

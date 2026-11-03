@@ -422,21 +422,22 @@
 /*
  * Live result of the editor above it (draft value rendered against the
  * example session) — the effect of a template edit is visible without
- * leaving Settings. Multi-line results keep their breaks.
+ * leaving Settings. A quiet result block: text starts flush at the left
+ * edge so multi-line results align naturally (no inline marker pushing
+ * the first line).
  */
 .setting-value-preview {
   margin-top: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  border-left: 2px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--panel);
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.74rem;
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.setting-value-preview::before {
-  content: "→ ";
-  font-weight: 700;
 }
 
 .setting-provider-trigger {

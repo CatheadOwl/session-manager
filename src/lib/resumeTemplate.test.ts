@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { renderResumeTemplate } from "./resumeTemplate";
+import {
+  DEFAULT_RESUME_TEMPLATE,
+  effectiveResumeTemplate,
+  renderResumeTemplate,
+} from "./resumeTemplate";
 
 const values = {
   resumeCommand: "opencode -s abc123",
@@ -38,5 +42,23 @@ describe("renderResumeTemplate", () => {
 
   it("does not touch shell syntax around the placeholders", () => {
     expect(renderResumeTemplate("$env:{SessionId}$(echo)", values)).toBe("$env:abc123$(echo)");
+  });
+});
+
+describe("effectiveResumeTemplate", () => {
+  it("gate off → null (raw resume command) regardless of the template", () => {
+    expect(effectiveResumeTemplate(false, undefined)).toBeNull();
+    expect(effectiveResumeTemplate(false, "cd {WorkDir}")).toBeNull();
+  });
+
+  it("gate on + blank template → the recommended default (never written)", () => {
+    expect(effectiveResumeTemplate(true, undefined)).toBe(DEFAULT_RESUME_TEMPLATE);
+    expect(effectiveResumeTemplate(true, "")).toBe(DEFAULT_RESUME_TEMPLATE);
+    // Whitespace-only counts as blank (hand-edited file residue).
+    expect(effectiveResumeTemplate(true, "  \n ")).toBe(DEFAULT_RESUME_TEMPLATE);
+  });
+
+  it("gate on + real template → the template itself", () => {
+    expect(effectiveResumeTemplate(true, "{SessionId}")).toBe("{SessionId}");
   });
 });

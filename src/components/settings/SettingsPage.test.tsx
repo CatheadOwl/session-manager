@@ -138,7 +138,7 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("Unsupported setting type: fancy")).toBeInTheDocument();
   });
 
-  it("defaults the template gate off and seeds the recommended template on first enable", async () => {
+  it("defaults the gate off; enabling writes only the gate — the default is a placeholder, never data", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
     const gate = await screen.findByRole("switch", { name: "Resume copy template" });
@@ -147,16 +147,20 @@ describe("SettingsPage", () => {
     fireEvent.click(gate);
     await waitFor(() => {
       expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
-        key: "sessions.resumeTemplate",
-        value: { string: 'cd "{WorkDir}"\n{ResumeCommand}' },
-      });
-      expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
         key: "sessions.resumeTemplateEnabled",
         value: { bool: true },
       });
     });
-    // The seeded template is visible in the editor (cache mirrored).
-    expect(await screen.findByLabelText("Template")).toHaveValue('cd "{WorkDir}"\n{ResumeCommand}');
+    // NO template write happened — empty means default at render time.
+    const templateWrites = mocks.invoke.mock.calls.filter(
+      (call) => call[0] === "set_setting_value" && call[1]?.key === "sessions.resumeTemplate",
+    );
+    expect(templateWrites).toHaveLength(0);
+
+    // The default is visible as the editor's ghost text instead.
+    const editor = await screen.findByLabelText("Template");
+    expect(editor).toHaveValue("");
+    expect(editor).toHaveAttribute("placeholder", 'cd "{WorkDir}"\n{ResumeCommand}');
   });
 
   it("applies template edits immediately — what you type is what is saved", async () => {
@@ -187,9 +191,17 @@ describe("SettingsPage", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
     const editor = await screen.findByLabelText("Template");
-    fireEvent.change(editor, { target: { value: 'cd "{WorkDir}" && {ResumeCommand}' } });
+
+    // Empty editor: the preview renders the DEFAULT (what the Resume row
+    // would copy with the gate on), matching the placeholder.
     const preview = screen.getByTitle("Preview with example values");
-    expect(preview).toHaveTextContent('cd "D:\\Document\\Projects\\demo" && codex resume a1b2c3');
+    expect(preview).toHaveTextContent('cd "D:\\Document\\Projects\\demo"');
+    expect(preview).toHaveTextContent("codex resume a1b2c3");
+
+    // Typed template: the preview follows the draft immediately.
+    fireEvent.change(editor, { target: { value: "{SessionId}" } });
+    expect(preview).toHaveTextContent("a1b2c3");
+    expect(preview).not.toHaveTextContent("codex resume");
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

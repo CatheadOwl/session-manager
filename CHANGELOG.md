@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-03
+
+### Added
+
+- Add a configurable resume-copy template (Settings → Sessions): when enabled, the session detail's Resume row shows and copies the rendered template instead of the raw resume command — placeholders `{ResumeCommand}`, `{WorkDir}`, `{SessionId}` (unknown names stay literal), multi-line templates allowed (each line runs on paste), and an empty template uses the built-in default (`cd "{WorkDir}"` + resume command). Off by default.
+
 ## [0.4.2] - 2026-09-29
 
 ### Fixed

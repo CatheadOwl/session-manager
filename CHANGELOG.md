@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-04
+
+### Fixed
+
+- Resume launch on Windows: the launched terminal now sees a registry-composed PATH (machine + user) instead of inheriting the app's launch-time PATH snapshot. This heals two failure modes — apps started by launcher entry points that strip the user PATH (npm-installed CLIs like `codex` were not recognized in the launched terminal even though they work in a freshly opened one), and tools installed while the app is running (the snapshot stays stale until restart). Other environment variables keep plain inheritance, and a failed registry read falls back to plain inheritance rather than failing the launch. Windows only; macOS/Linux keep plain inheritance. Mechanics: [docs/resume-launch.md](docs/resume-launch.md).
+
+### Changed
+
+- The Windows default launch template now probes PowerShell 7+ against the same registry-composed PATH, so Store/MSIX `pwsh` installs that live only on the user PATH are recognized again and no longer fall back to Windows PowerShell 5.1.
+- Documentation surface restructured: the README is now a product face (one feature sentence + details links), configuration details moved to [docs/settings.md](docs/settings.md), source setup (local mirrors & SSH remotes) unified in [docs/sources.md](docs/sources.md).
+
 ## [0.4.4] - 2026-11-04
 
 ### Changed

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-04
+
 ### Changed
 
 - Rework the resume template feature into resume launch: the Settings → Sessions toggle now switches the session detail's Resume row into launch mode — a configurable free-form command-line template (shell invocation included, per-OS default provided — Windows: PowerShell via `pwsh -NoExit -Command "{ResumeCommand}"` when PowerShell 7+ is installed, `powershell.exe` fallback, launched with the project directory as the working directory so no `cd` is ever needed; macOS: Terminal.app via osascript; Linux: `x-terminal-emulator`) rendered against `{ResumeCommand}` / `{WorkDir}` / `{SessionId}`, with the button executing the rendered line in a terminal instead of copying it. The copy button remains in the off state and for SSH remote sessions (their project path is remote). Usage guide and per-OS details: [docs/resume-launch.md](docs/resume-launch.md). Supersedes the copy-template behavior introduced in 0.4.3. The template editor is a single-line input, and hand-edited multi-line values collapse to one line at spawn (a second line would otherwise execute as a second command).

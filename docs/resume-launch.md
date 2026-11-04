@@ -30,11 +30,23 @@ directory**. On Windows that means the default template needs no `cd` at all;
 on macOS/Linux the terminal launchers do not inherit the caller's working
 directory, so their recipes keep a `cd` inside.
 
+**PATH environment (Windows):** the spawned shell's PATH is rebuilt from the
+registry (machine `Path` first, user `Path` appended — the same composition a
+freshly opened terminal gets from the shell of the OS), NOT inherited from
+the app's launch-time environment. This matters because the app's own env
+block is a launch-time snapshot: some launcher entry points (remote-desktop
+helpers, elevation, certain launchers) strip the user PATH from it, and tools
+installed while the app runs never enter it — either way, commands that work
+in a freshly opened terminal would fail in a launched one. Other variables
+are not rebuilt, and non-Windows platforms keep plain inheritance. If both
+registry values are unreadable, the launch falls back to inheritance rather
+than failing.
+
 ## Defaults (resolved per OS at runtime)
 
 | OS | Default template |
 |----|------------------|
-| Windows | `pwsh -NoExit -Command "{ResumeCommand}"` when PowerShell 7+ is installed (probed via PATH); otherwise `powershell -NoExit -Command "{ResumeCommand}"` (Windows PowerShell 5.1, always present). The terminal is whatever the system provides — the shell is PowerShell either way, `-NoExit` is its keep-open |
+| Windows | `pwsh -NoExit -Command "{ResumeCommand}"` when PowerShell 7+ is installed (probed against the registry-composed PATH, so Store/MSIX installs count too); otherwise `powershell -NoExit -Command "{ResumeCommand}"` (Windows PowerShell 5.1, always present). The terminal is whatever the system provides — the shell is PowerShell either way, `-NoExit` is its keep-open |
 | macOS | `osascript -e 'tell application "Terminal" to do script "cd "{WorkDir}" && {ResumeCommand}"'` (first use asks for Automation permission) |
 | Linux | `x-terminal-emulator -e bash -c "cd "{WorkDir}" && {ResumeCommand}; exec bash"` (Debian alternatives pointer; `exec bash` keeps the terminal open) |
 
@@ -85,3 +97,9 @@ directory, so their recipes keep a `cd` inside.
 - **The shell opens in the wrong directory** — hand-edited template lost the
   `cd` (macOS/Linux) or wraps the payload in a launcher that changes
   directory; the default templates show the correct shape.
+- **`<tool>` is not recognized in the launched terminal but works in one you
+  opened yourself** — you are on an old build (pre PATH-rebuild) or on a
+  platform where only inheritance applies. The Windows default PATH comes
+  from the registry, so this should no longer happen for PATH-hosted tools;
+  a tool living on a custom per-shell PATH (set in a shell profile) still
+  needs the profile to run — use a template that starts a login shell.

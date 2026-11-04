@@ -5,6 +5,8 @@ mod diagnostics;
 mod fork_tree;
 mod fs_utils;
 mod session_manager;
+#[cfg(windows)]
+mod win_env;
 
 use session_manager::metadata::{MetadataManager, WindowState};
 use session_manager::settings::SettingsManager;

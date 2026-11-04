@@ -47,8 +47,12 @@ ssh2-config = { version = "0.8", default-features = false }
 # Console attach for the CLI branch: release builds
 # are GUI-subsystem (windows_subsystem="windows"), so Win32 AttachConsole +
 # SetStdHandle must re-open std handles to CONOUT$ before clap prints help.
+# Registry: resume-launch spawn rebuilds the child's PATH from the machine +
+# user registry Environment keys (win_env.rs) so the launched terminal sees
+# the same PATH a freshly opened one would, even when THIS app was started
+# by a launcher that only propagated the machine PATH.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_System_Console", "Win32_Foundation"] }
+windows = { version = "0.62", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Registry"] }
 
 [dev-dependencies]
 # (remote-source deps moved to [dependencies]: the phase 2 connection

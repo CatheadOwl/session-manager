@@ -686,9 +686,9 @@ fn merged_values(store: &SettingsStore) -> HashMap<String, SettingValue> {
 /// their terminal launchers — osascript `do script`, x-terminal-emulator —
 /// do not reliably inherit the spawning process's cwd.)
 /// - Windows: PowerShell — `pwsh -NoExit -Command {ResumeCommand}` when
-///   PowerShell 7+ is installed (probed via PATH, see `pwsh_on_path`),
-///   else `powershell -NoExit -Command {ResumeCommand}` (Windows
-///   PowerShell 5.1, guaranteed present). `-NoExit` is PowerShell's
+///   PowerShell 7+ is installed (probed via the registry-composed PATH,
+///   see `pwsh_on_path`), else `powershell -NoExit -Command {ResumeCommand}`
+///   (Windows PowerShell 5.1, guaranteed present). `-NoExit` is PowerShell's
 ///   keep-open; the terminal is whatever the system provides (conhost or
 ///   a registered default), which is presentation, not our business.
 ///   The payload is QUOTED — the standard form (about_PowerShell_exe
@@ -720,9 +720,13 @@ pub(crate) const WINDOWS_CMD_K_ALTERNATIVE: &str =
 #[cfg(windows)]
 fn pwsh_on_path() -> bool {
     // Same which-style scan the wt probe used: pwsh installs (MSI, dotnet
-    // global tool, winget) all land on PATH.
-    std::env::var("PATH")
-        .map(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()))
+    // global tool, winget, Store) all land on PATH. Probe the REGISTRY-
+    // composed PATH (`win_env::native_path`) rather than this process's
+    // launch-time snapshot — a degraded launcher strips the user PATH,
+    // which is where Store/MSIX pwsh installs live; None (both registry
+    // reads failed) falls back to the snapshot.
+    let path = crate::win_env::native_path().or_else(|| std::env::var("PATH").ok());
+    path.map(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()))
         .unwrap_or(false)
 }
 

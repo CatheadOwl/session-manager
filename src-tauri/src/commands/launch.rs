@@ -9,13 +9,24 @@
 //! WITHOUT any cd; a `wt -d …` / `gnome-terminal …` line may override the
 //! directory itself. The GUI process never waits on the spawned line (the
 //! terminal outlives this app call).
+//!
+//! Environment contract: the spawned shell must see what a freshly opened
+//! terminal would see. A child inherits THIS app's env block — frozen at
+//! app launch and, for some launcher entry points, stripped to the machine
+//! PATH — so on Windows the child's PATH is rebuilt from the registry
+//! (`win_env::native_path`); other variables and non-Windows platforms
+//! keep plain inheritance.
 
 use std::process::{Child, Command};
 
 /// Spawn `command` through the platform shell. The line reaches the shell
 /// byte-for-byte — quoting is the template author's concern, their recipe
 /// IS a shell command line by design. `work_dir` becomes the process's
-/// working directory (inherited by everything the line spawns).
+/// working directory (inherited by everything the line spawns). The child's
+/// PATH is rebuilt from the registry when readable (`win_env`): plain
+/// inheritance would propagate this app's launch-time PATH snapshot, which
+/// can be machine-only (degraded launcher) or stale (tools installed after
+/// launch).
 #[cfg(target_os = "windows")]
 fn spawn_shell(command: &str, work_dir: Option<&str>) -> std::io::Result<Child> {
     let mut cmd = Command::new("cmd");
@@ -24,6 +35,11 @@ fn spawn_shell(command: &str, work_dir: Option<&str>) -> std::io::Result<Child> 
     // arbitrary pre-built command line: /S strips exactly the outer quote
     // pair we add (inner quotes survive intact), /D skips AutoRun scripts.
     cmd.raw_arg(format!("/S /D /C \"{}\"", command));
+    // Single-key override — every other variable stays inherited. None
+    // means the registry could not serve either Path side; inherit as-is.
+    if let Some(native) = crate::win_env::native_path() {
+        cmd.env("PATH", native);
+    }
     if let Some(dir) = work_dir {
         cmd.current_dir(dir);
     }
@@ -189,6 +205,51 @@ mod tests {
             recorded.replace('/', "\\").contains(&expected.replace('/', "\\"))
                 || expected.contains(&recorded),
             "shell cwd {recorded:?} should be the work dir {expected:?}"
+        );
+    }
+
+    /// The PATH contract on Windows: the spawned shell's %PATH% is the
+    /// registry-composed one (machine + user, `win_env::native_path`),
+    /// not this process's launch-time snapshot — a degraded launcher's
+    /// inherited PATH (machine-only) is exactly what the rebuild heals.
+    /// Asserted by echoing the child's %PATH% to a file and checking the
+    /// rebuilt string appears in it. (From a healthy test process the
+    /// inherited PATH usually contains the same entries, so dropping the
+    /// injection would not trip THIS test — it pins the contract, and the
+    /// degraded-launch discrimination lives in win_env's composition test
+    /// plus the registry side being absent from a degraded parent.)
+    /// Caveat: `echo %PATH%` breaks on PATH values containing `&` — not
+    /// seen on stock machines; `set PATH` would have the same parsing
+    /// exposure through the outer cmd.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn spawned_shell_sees_registry_rebuilt_path() {
+        let native = crate::win_env::native_path()
+            .expect("machine and user registry Path values exist on real Windows");
+
+        let dir = std::env::temp_dir().join("sm-launch-child-path-test");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let out = dir.join("path.txt");
+        let _ = std::fs::remove_file(&out);
+        let probe = format!("echo %PATH% > \"{}\"", out.display());
+
+        assert_eq!(run_shell_command(probe, None), Ok(()));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut recorded = String::new();
+        while std::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&out) {
+                if !text.trim().is_empty() {
+                    recorded = text;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!recorded.is_empty(), "probe must have run");
+        assert!(
+            recorded.contains(&native),
+            "child %PATH% must contain the registry-composed PATH"
         );
     }
 

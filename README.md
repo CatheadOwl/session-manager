@@ -158,7 +158,7 @@ The file is JSONC (comments allowed) and stores only overridden keys: values equ
 
 **Resume launch template defaults** (resolved per OS at runtime — the app has no built-in terminal knowledge beyond this fallback; the template authors the whole invocation):
 
-**Resume launch** — defaults are resolved per OS at runtime (Windows: PowerShell, `pwsh` when installed; the app sets the project directory as the working directory, so templates need no `cd`; macOS/Linux keep a `cd` in their recipes). Payload quoting rules, per-OS default templates, alternatives and troubleshooting: **[docs/resume-launch.md](docs/resume-launch.md)**.
+**Resume launch** — defaults are resolved per OS at runtime (Windows: PowerShell, `pwsh` when installed; the app sets the project directory as the working directory, so templates need no `cd`; macOS/Linux keep a `cd` in their recipes). On Windows the launched shell's PATH is rebuilt from the registry (machine + user), so PATH-hosted tools resolve as in a freshly opened terminal even when the app itself was started with a stripped environment. Payload quoting rules, per-OS default templates, alternatives and troubleshooting: **[docs/resume-launch.md](docs/resume-launch.md)**.
 
 **Local source** — `path` points at an **alternate home root**: every provider's standard directory is discovered under it, same model as a remote machine. There is no per-entry `provider` field anymore; a legacy `provider` key from an older file is preserved but ignored.
 

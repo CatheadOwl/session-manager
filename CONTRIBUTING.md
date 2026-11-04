@@ -35,12 +35,16 @@ src/              # React frontend (TypeScript)
   components/     # UI components
   hooks/          # Custom React hooks
   lib/            # Tauri command bindings & shared logic
-  styles/         # CSS modules
+  styles/         # Plain CSS, split by area (layout, detail, tree, …)
+  icons/          # SVG icons
   utils/          # Utility functions
 src-tauri/        # Rust backend (Tauri v2)
-  src/commands/   # Tauri IPC command handlers
+  src/commands/         # Tauri IPC command handlers
   src/session_manager/  # Provider adapters & session logic
+    providers/    # Per-provider session adapters
+    remote/       # SSH remote sources
   src/fork_tree/  # Fork tree computation
+  src/cli.rs      # Headless CLI entry (export)
 ```
 
 ## Commit Convention
@@ -91,7 +95,6 @@ chore: bump version to 0.4.0
 
 - Keep changes focused and within scope.
 - Do not add new dependencies without discussing first.
-- If a markdown file exceeds 200 lines, split it into a folder with an `INDEX.md`.
 - Run `pnpm typecheck` and `cargo test` before submitting a PR.
 
 ## License

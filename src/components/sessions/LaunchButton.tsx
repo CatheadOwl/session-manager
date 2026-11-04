@@ -7,7 +7,9 @@ interface LaunchButtonProps {
   command: string;
   /**
    * The session's project directory — becomes the spawned process's
-   * working directory (Rust sets it natively, templates need no cd).
+   * working directory (Rust sets it natively on every platform; only
+   * Windows default templates need no cd, macOS/Linux ones carry their
+   * own).
    */
   workDir?: string | null;
   label?: string;

@@ -681,10 +681,11 @@ fn merged_values(store: &SettingsStore) -> HashMap<String, SettingValue> {
 /// command LINE — shell invocation included — with keep-open semantics.
 /// The session's project directory is NOT in the template: the launch
 /// command sets it as the spawned process's working directory
-/// (`current_dir`, see commands/launch.rs), so a plain shell line starts
-/// in the project. (macOS/Linux keep a `cd` inside their recipes because
-/// their terminal launchers — osascript `do script`, x-terminal-emulator —
-/// do not reliably inherit the spawning process's cwd.)
+/// (`current_dir`, see commands/launch.rs, every platform). Only the
+/// Windows default can rely on it for a no-cd start; macOS/Linux keep a
+/// `cd` inside their recipes because their terminal launchers —
+/// osascript `do script`, x-terminal-emulator — do not reliably inherit
+/// the spawning process's cwd.
 /// - Windows: PowerShell — `pwsh -NoExit -Command {ResumeCommand}` when
 ///   PowerShell 7+ is installed (probed via the registry-composed PATH,
 ///   see `pwsh_on_path`), else `powershell -NoExit -Command {ResumeCommand}`

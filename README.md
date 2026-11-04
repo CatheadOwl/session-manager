@@ -11,7 +11,7 @@
 [![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=white)](https://react.dev)
 [![Rust](https://img.shields.io/badge/Rust-1.85+-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 
-[Overview](#overview) | [Install](#install) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Remote Sources](#remote-sources-ssh) | [Development](#development) | [Manual Settings](#manual-settings) | [Architecture](#architecture)
+[Overview](#overview) | [Install](#install) | [Features](#features) | [Screenshots](#screenshots) | [Providers](#supported-providers) | [Development](#development) | [Configuration](#configuration) | [Architecture](#architecture)
 
 </div>
 
@@ -46,10 +46,10 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 - **Session detail** - full messages or compact Q&A pairs, with metadata, tool calls, and a Markdown rendering toggle.
 - **Starred sessions** - mark important sessions and filter to them.
 - **Archive and restore** - single or folder-level batch, between active and archived directories.
-- **Batch delete** - checkbox selection (tri-state select-all) scoped to the visible list; the provider root and session id are validated before anything is trashed.
+- **Batch delete** - select multiple sessions and send them to the system trash in one action.
 - **Time-ranged Q&A export** - export the visible sessions as Q&A-distilled JSON or Markdown with full provenance; also scriptable headlessly (`session-manager export --help`).
-- **SSH remote sources** - register remote hosts as read-only sources and browse their sessions alongside local ones ([details](#remote-sources-ssh)).
-- **Resume launch** - one click on the session detail opens a terminal in the project directory and resumes the session, via a configurable command-line template with `{ResumeCommand}` / `{WorkDir}` / `{SessionId}` variables (Settings → Sessions, off by default; SSH remote sessions keep the copy button).
+- **SSH remote sources** - register remote hosts as read-only sources and browse their sessions alongside local ones ([details](docs/sources.md)).
+- **Resume launch** - one click opens a terminal in the session's project directory and resumes the agent ([details](docs/resume-launch.md)).
 
 ## Screenshots
 
@@ -91,22 +91,6 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 >
 > **Codex formats** - sessions are read in both the classic single-file rollout format and the paginated history format (Codex 0.153+).
 
-## Remote Sources (SSH)
-
-Remote sources let you browse sessions that live on another machine — for example a Linux dev server where Codex or Claude Code runs over VS Code Remote SSH.
-
-Open **Settings** (the gear at the bottom of the folder strip) → **Sources** → **Add SSH source**. Two entry paths, both with a connection test before saving:
-
-- **Alias picker** - lists `Host` aliases from your `~/.ssh/config`; connection settings and keys are read live from the config block (ssh-agent identities first, then the block's `IdentityFile`). `ProxyJump` hosts are not supported yet and are greyed out.
-- **Manual form** ("Advanced") - enter host / port / user yourself and pick an auth mode: ssh-agent, or an explicit key file (`~` expanded).
-
-Behavior:
-
-- Provider session directories are discovered automatically under the remote home (`~/.codex/sessions/`, `~/.claude/projects/`, …) — same providers as local, no remote path configuration.
-- Remote sessions appear in the same list and detail views; message content is fetched over SSH when you open a session and cached locally for re-opens and exports.
-- Remote sources are **read-only** in this release: delete / archive / restore remain local-only.
-- The remote cache lives in the OS cache directory (`%LOCALAPPDATA%\session-manager\remote-cache` on Windows) and is safe to delete at any time — deleted entries are simply refetched on the next open.
-
 ## Development
 
 ### Prerequisites
@@ -138,55 +122,9 @@ pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Manual Settings
+## Configuration
 
-Settings are editable from the app's Settings panel, and also live in a hand-editable file (VS Code-style) — both edit the same data:
-
-```
-~/.session-manager/settings.json
-```
-
-The file is JSONC (comments allowed) and stores only overridden keys: values equal to the built-in defaults are omitted, and `version` is always written. Restart the app after hand-editing.
-
-| Key | Type | Default | Semantics |
-|-----|------|---------|-----------|
-| `version` | number | *(always written)* | Migration anchor; current = `1` |
-| `update.autoCheck` | bool | `true` | `false` skips the automatic update check on startup (manual retry still works) |
-| `sources[]` | array | `[]` | Extra session sources, scanned in addition to the built-in provider locations. Entries carry a `kind` tag: local entries have no `kind` key, SSH entries carry `"kind": "ssh"` |
-| `sessions.resumeTemplateEnabled` | bool | `false` | When `true`, the session detail's Resume row renders `sessions.resumeLaunchTemplate` and its button **launches** the rendered line in a terminal instead of copying the raw resume command. SSH remote sessions always keep raw + copy (their project path is remote) |
-| `sessions.resumeLaunchTemplate` | string | *(per-OS, see below)* | Free-form single command LINE — terminal invocation included; runs via `cmd` (Windows) / `sh` (macOS, Linux), detached. Placeholders: `{ResumeCommand}` (the provider-built resume command), `{WorkDir}` (project path), `{SessionId}`; unknown names stay literal; an empty string means the per-OS default |
-
-**Resume launch template defaults** (resolved per OS at runtime — the app has no built-in terminal knowledge beyond this fallback; the template authors the whole invocation):
-
-**Resume launch** — defaults are resolved per OS at runtime (Windows: PowerShell, `pwsh` when installed; the app sets the project directory as the working directory, so templates need no `cd`; macOS/Linux keep a `cd` in their recipes). On Windows the launched shell's PATH is rebuilt from the registry (machine + user), so PATH-hosted tools resolve as in a freshly opened terminal even when the app itself was started with a stripped environment. Payload quoting rules, per-OS default templates, alternatives and troubleshooting: **[docs/resume-launch.md](docs/resume-launch.md)**.
-
-**Local source** — `path` points at an **alternate home root**: every provider's standard directory is discovered under it, same model as a remote machine. There is no per-entry `provider` field anymore; a legacy `provider` key from an older file is preserved but ignored.
-
-**SSH source** — `host`/`port`/`user` plus an `auth` block with three modes — `sshConfig` (alias from `~/.ssh/config`), `agent` (ssh-agent), or `key` (explicit key file):
-
-```jsonc
-{
-  "version": 1,
-  "update": { "autoCheck": false },
-  "sources": [
-    // local: alternate home root, providers discovered under it
-    { "path": "D:\\home-mirror", "enabled": true },
-    // ssh: alias mode — settings read live from ~/.ssh/config
-    { "kind": "ssh", "id": "devbox", "host": "", "user": "", "port": 22,
-      "auth": { "mode": "sshConfig", "alias": "dev" } },
-    // ssh: agent / explicit key modes
-    { "kind": "ssh", "id": "build", "host": "192.0.2.10", "user": "admin", "port": 2222,
-      "auth": { "mode": "key", "keyPath": "~/.ssh/id_ed25519" } }
-  ]
-}
-```
-
-Common entry fields: `enabled` (default `true`; disabled entries are kept but not scanned), `id` (required for SSH, optional for local), `label` (optional, SSH).
-
-Loading is lenient — a broken file never blocks startup (defaults are used), unknown keys are preserved on programmatic saves, and wrong-typed known keys fall back to defaults with a logged warning.
-
-> [!NOTE]
-> Comments are a hand-editing convenience only: the first time the app saves the file programmatically (e.g. changing a setting from the UI), comments are dropped.
+Settings live in the app's Settings panel, backed by a hand-editable JSONC file (`~/.session-manager/settings.json`) — both edit the same data. The full key reference lives in **[docs/settings.md](docs/settings.md)**; per-feature details are linked from the Features list.
 
 ## Architecture
 

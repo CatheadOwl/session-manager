@@ -58,11 +58,10 @@ than failing.
   must shield it.
 - On Windows that means quotes around `{ResumeCommand}`: without them, any
   cmd-special character in the payload (`|`, `&`, …) is parsed by the outer
-  shell and the command silently never runs (verified end-to-end; plain
-  tokens like `codex resume <id>` happen to survive unquoted, which is why
-  both forms can appear to work). This is the standard documented form
-  (`about_PowerShell_exe`: from cmd, wrap the `-Command` value in double
-  quotes).
+  shell and the command silently never runs (plain tokens like `codex resume <id>`
+  happen to survive unquoted, which is why both forms can appear to work). This is
+  the standard documented form (`about_PowerShell_exe`: from cmd, wrap the
+  `-Command` value in double quotes).
 - On macOS/Linux the DEFAULT recipes already embed the payload inside their
   own quoting (the `do script "…"` string, the `bash -c "…"` string) — do
   NOT add extra quotes around `{ResumeCommand}` there; it would corrupt the

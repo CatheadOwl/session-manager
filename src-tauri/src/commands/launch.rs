@@ -4,9 +4,11 @@
 //! `sessions.resumeLaunchTemplate`) — the app has NO built-in terminal
 //! knowledge. This command only runs the rendered string through the
 //! platform shell, detached, with the session's project directory set as
-//! the process working directory (`current_dir`) — a plain
-//! `powershell -NoExit -Command …` line starts in the project directory
-//! WITHOUT any cd; a `wt -d …` / `gnome-terminal …` line may override the
+//! the process working directory (`current_dir`, every platform). Only
+//! Windows default recipes can rely on it for a no-cd start (the payload
+//! stays inside the cmd tree); macOS/Linux defaults hop through a
+//! terminal app that does not reliably inherit the caller's cwd, so they
+//! carry a `cd`. A `wt -d …` / `gnome-terminal …` line may override the
 //! directory itself. The GUI process never waits on the spawned line (the
 //! terminal outlives this app call).
 //!

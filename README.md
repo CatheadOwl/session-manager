@@ -49,7 +49,7 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 - **Batch delete** - checkbox selection (tri-state select-all) scoped to the visible list; the provider root and session id are validated before anything is trashed.
 - **Time-ranged Q&A export** - export the visible sessions as Q&A-distilled JSON or Markdown with full provenance; also scriptable headlessly (`session-manager export --help`).
 - **SSH remote sources** - register remote hosts as read-only sources and browse their sessions alongside local ones ([details](#remote-sources-ssh)).
-- **Resume copy template** - one click on the session detail copies a ready-to-paste resume command — optionally `cd <project dir>` first — from a configurable multi-line template with `{ResumeCommand}` / `{WorkDir}` / `{SessionId}` variables (Settings → Sessions, off by default).
+- **Resume launch** - one click on the session detail opens a terminal in the project directory and resumes the session, via a configurable command-line template with `{ResumeCommand}` / `{WorkDir}` / `{SessionId}` variables (Settings → Sessions, off by default; SSH remote sessions keep the copy button).
 
 ## Screenshots
 
@@ -153,8 +153,12 @@ The file is JSONC (comments allowed) and stores only overridden keys: values equ
 | `version` | number | *(always written)* | Migration anchor; current = `1` |
 | `update.autoCheck` | bool | `true` | `false` skips the automatic update check on startup (manual retry still works) |
 | `sources[]` | array | `[]` | Extra session sources, scanned in addition to the built-in provider locations. Entries carry a `kind` tag: local entries have no `kind` key, SSH entries carry `"kind": "ssh"` |
-| `sessions.resumeTemplateEnabled` | bool | `false` | When `true`, the session detail's Resume row renders `sessions.resumeTemplate` (display AND copy payload) instead of the raw resume command |
-| `sessions.resumeTemplate` | string | `""` | Template for the Resume row. Placeholders: `{ResumeCommand}` (the provider-built resume command), `{WorkDir}` (project path), `{SessionId}`; unknown names stay literal; newlines are kept (each line runs on paste); an empty string means the built-in default: `cd "{WorkDir}"` + resume command on two lines |
+| `sessions.resumeTemplateEnabled` | bool | `false` | When `true`, the session detail's Resume row renders `sessions.resumeLaunchTemplate` and its button **launches** the rendered line in a terminal instead of copying the raw resume command. SSH remote sessions always keep raw + copy (their project path is remote) |
+| `sessions.resumeLaunchTemplate` | string | *(per-OS, see below)* | Free-form single command LINE — terminal invocation included; runs via `cmd` (Windows) / `sh` (macOS, Linux), detached. Placeholders: `{ResumeCommand}` (the provider-built resume command), `{WorkDir}` (project path), `{SessionId}`; unknown names stay literal; an empty string means the per-OS default |
+
+**Resume launch template defaults** (resolved per OS at runtime — the app has no built-in terminal knowledge beyond this fallback; the template authors the whole invocation):
+
+**Resume launch** — defaults are resolved per OS at runtime (Windows: PowerShell, `pwsh` when installed; the app sets the project directory as the working directory, so templates need no `cd`; macOS/Linux keep a `cd` in their recipes). Payload quoting rules, per-OS default templates, alternatives and troubleshooting: **[docs/resume-launch.md](docs/resume-launch.md)**.
 
 **Local source** — `path` points at an **alternate home root**: every provider's standard directory is discovered under it, same model as a remote machine. There is no per-entry `provider` field anymore; a legacy `provider` key from an older file is preserved but ignored.
 

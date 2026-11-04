@@ -19,12 +19,12 @@ const fixture = (): SettingsSnapshot => ({
     { key: "update.autoCheck", type: "bool", default: { bool: true }, group: "update" },
     { key: "sources", type: "sourceList", default: { sourceList: [] }, group: "sources" },
     { key: "sessions.resumeTemplateEnabled", type: "bool", default: { bool: false }, group: "sessions" },
-    { key: "sessions.resumeTemplate", type: "string", default: { string: "" }, group: "sessions" },
+    { key: "sessions.resumeLaunchTemplate", type: "string", default: { string: 'powershell -NoExit -Command "{ResumeCommand}"' }, group: "sessions" },
   ],
   values: {
     "update.autoCheck": { bool: true },
     "sessions.resumeTemplateEnabled": { bool: false },
-    "sessions.resumeTemplate": { string: "" },
+    "sessions.resumeLaunchTemplate": { string: 'powershell -NoExit -Command "{ResumeCommand}"' },
     sources: {
       sourceList: [
         // Local entries are `{ path, enabled }` — a legacy
@@ -141,7 +141,7 @@ describe("SettingsPage", () => {
   it("defaults the gate off; enabling writes only the gate — the default is a placeholder, never data", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const gate = await screen.findByRole("switch", { name: "Resume copy template" });
+    const gate = await screen.findByRole("switch", { name: "Resume launch" });
     expect(gate).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(gate);
@@ -153,24 +153,26 @@ describe("SettingsPage", () => {
     });
     // NO template write happened — empty means default at render time.
     const templateWrites = mocks.invoke.mock.calls.filter(
-      (call) => call[0] === "set_setting_value" && call[1]?.key === "sessions.resumeTemplate",
+      (call) => call[0] === "set_setting_value" && call[1]?.key === "sessions.resumeLaunchTemplate",
     );
     expect(templateWrites).toHaveLength(0);
 
-    // The default is visible as the editor's ghost text instead.
-    const editor = await screen.findByLabelText("Template");
-    expect(editor).toHaveValue("");
-    expect(editor).toHaveAttribute("placeholder", 'cd "{WorkDir}"\n{ResumeCommand}');
+    // The snapshot's values always carry the effective default, so the
+    // editor is PRE-FILLED with it (ghost text shows the same string when
+    // the user clears the box).
+    const editor = await screen.findByLabelText("Launch template");
+    expect(editor).toHaveValue('powershell -NoExit -Command "{ResumeCommand}"');
+    expect(editor).toHaveAttribute("placeholder", 'powershell -NoExit -Command "{ResumeCommand}"');
   });
 
   it("applies template edits immediately — what you type is what is saved", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const editor = await screen.findByLabelText("Template");
+    const editor = await screen.findByLabelText("Launch template");
     fireEvent.change(editor, { target: { value: "{SessionId}" } });
     await waitFor(() => {
       expect(mocks.invoke).toHaveBeenCalledWith("set_setting_value", {
-        key: "sessions.resumeTemplate",
+        key: "sessions.resumeLaunchTemplate",
         value: { string: "{SessionId}" },
       });
     });
@@ -179,7 +181,7 @@ describe("SettingsPage", () => {
   it("inserts a variable at the caret when its chip is clicked", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const editor = await screen.findByLabelText("Template");
+    const editor = await screen.findByLabelText("Launch template");
     fireEvent.change(editor, { target: { value: "cd " } });
     // Caret after "cd " — the chip token must land exactly there.
     (editor as HTMLTextAreaElement).setSelectionRange(3, 3);
@@ -190,13 +192,14 @@ describe("SettingsPage", () => {
   it("previews the rendered result with example values under the editor", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Sessions" }));
-    const editor = await screen.findByLabelText("Template");
+    const editor = await screen.findByLabelText("Launch template");
 
-    // Empty editor: the preview renders the DEFAULT (what the Resume row
-    // would copy with the gate on), matching the placeholder.
+    // The served value is the per-OS default: the preview renders exactly
+    // what the Resume row would run with the gate on.
     const preview = screen.getByTitle("Preview with example values");
-    expect(preview).toHaveTextContent('cd "D:\\Document\\Projects\\demo"');
-    expect(preview).toHaveTextContent("codex resume a1b2c3");
+    expect(preview).toHaveTextContent(
+      'powershell -NoExit -Command "codex resume a1b2c3"',
+    );
 
     // Typed template: the preview follows the draft immediately.
     fireEvent.change(editor, { target: { value: "{SessionId}" } });

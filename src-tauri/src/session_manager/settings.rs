@@ -263,17 +263,23 @@ pub const SETTINGS: &[SettingDefinition] = &[
         default: SettingValue::SourceList(Vec::new()),
         group: "sources",
     },
-    // Resume-copy template gate + template, rendered on the TS side against
-    // each session's `{ResumeCommand}` (the provider-built resume command,
-    // e.g. `codex resume <id>`), `{WorkDir}` (project path) and `{SessionId}`.
-    // The gate defaults OFF (shipped behavior: copy the raw resume command);
-    // enabling with an empty template seeds the recommended default
-    // `cd "{WorkDir}"\n{ResumeCommand}` once (TS-side, persisted like any
-    // edit). The template persists while disabled so re-enabling restores
-    // it. Multi-line templates are allowed (newlines pass through — each
-    // line runs on paste). Unknown placeholder names render literally, and
-    // quoting/shell syntax stays the user's responsibility — the app never
-    // guesses the target shell.
+    // Resume launch mode: one gate switches the session detail's Resume row
+    // between the shipped behavior (raw resume command + copy button) and
+    // launch mode (the rendered launch template + a launch button that runs
+    // it in the user's terminal). The template is FREE-FORM — the app has no
+    // built-in terminal knowledge; the template authors the whole invocation
+    // (e.g. `wt -d "{WorkDir}" cmd /k {ResumeCommand}` on Windows,
+    // `osascript … do script …` on macOS). Rendered on the TS side against
+    // `{ResumeCommand}` (the provider-built resume command, e.g.
+    // `codex resume <id>`), `{WorkDir}` (project path) and `{SessionId}`;
+    // unknown placeholder names render literally; it is a single command
+    // LINE (no newlines). The DEFAULT is per-OS (see
+    // `default_launch_template`) so the feature works with zero
+    // configuration — the empty table default below is a placeholder, the
+    // effective default is injected at runtime (single point:
+    // `default_of`). SSH remote sessions never enter launch mode (their
+    // WorkDir is a remote path); the gate value persists while it would be
+    // disabled for them.
     SettingDefinition {
         key: "sessions.resumeTemplateEnabled",
         setting_type: SettingType::Bool,
@@ -281,7 +287,7 @@ pub const SETTINGS: &[SettingDefinition] = &[
         group: "sessions",
     },
     SettingDefinition {
-        key: "sessions.resumeTemplate",
+        key: "sessions.resumeLaunchTemplate",
         setting_type: SettingType::Str,
         default: SettingValue::Str(String::new()),
         group: "sessions",
@@ -440,21 +446,21 @@ impl SettingsManager {
                 "sessions" => match value {
                     Value::Object(fields) => {
                         for (field, field_value) in fields {
-                            if field == "resumeTemplate" {
+                            if field == "resumeLaunchTemplate" {
                                 match field_value.as_str() {
                                     Some(s) => {
                                         // Sparse: only remember non-default values.
                                         if SettingValue::Str(s.to_string())
-                                            != default_of("sessions.resumeTemplate")
+                                            != default_of("sessions.resumeLaunchTemplate")
                                         {
                                             store.overrides.insert(
-                                                "sessions.resumeTemplate".to_string(),
+                                                "sessions.resumeLaunchTemplate".to_string(),
                                                 SettingValue::Str(s.to_string()),
                                             );
                                         }
                                     }
                                     None => log::warn!(
-                                        "settings: wrong-typed `sessions.resumeTemplate` ({}) — dropped, falling back to default",
+                                        "settings: wrong-typed `sessions.resumeLaunchTemplate` ({}) — dropped, falling back to default",
                                         json_kind(&field_value)
                                     ),
                                 }
@@ -497,12 +503,27 @@ impl SettingsManager {
         }
     }
 
-    /// Merged view: defaults overlaid by non-default overrides.
+    /// Merged view: defaults overlaid by non-default overrides. Descriptors
+    /// carry the EFFECTIVE default (per-OS for the launch template) so
+    /// consumers see the real fallback without duplicating the selection.
     pub fn get(&self) -> SettingsSnapshot {
         let store = self.store.lock().unwrap();
         SettingsSnapshot {
             version: SETTINGS_VERSION,
-            descriptors: SETTINGS.to_vec(),
+            descriptors: SETTINGS
+                .iter()
+                .map(|def| {
+                    let effective = default_of(def.key);
+                    if effective == def.default {
+                        def.clone()
+                    } else {
+                        SettingDefinition {
+                            default: effective,
+                            ..def.clone()
+                        }
+                    }
+                })
+                .collect(),
             values: merged_values(&store),
         }
     }
@@ -535,7 +556,7 @@ impl SettingsManager {
         }
 
         let mut store = self.store.lock().unwrap();
-        if value == def.default {
+        if value == default_of(key) {
             // Sparse: setting back to the default removes the override.
             store.overrides.remove(key);
         } else {
@@ -650,13 +671,89 @@ fn merged_values(store: &SettingsStore) -> HashMap<String, SettingValue> {
                     .overrides
                     .get(def.key)
                     .cloned()
-                    .unwrap_or_else(|| def.default.clone()),
+                    .unwrap_or_else(|| default_of(def.key)),
             )
         })
         .collect()
 }
 
+/// Per-OS default launch template. Each recipe is a complete user-authored
+/// command LINE — shell invocation included — with keep-open semantics.
+/// The session's project directory is NOT in the template: the launch
+/// command sets it as the spawned process's working directory
+/// (`current_dir`, see commands/launch.rs), so a plain shell line starts
+/// in the project. (macOS/Linux keep a `cd` inside their recipes because
+/// their terminal launchers — osascript `do script`, x-terminal-emulator —
+/// do not reliably inherit the spawning process's cwd.)
+/// - Windows: PowerShell — `pwsh -NoExit -Command {ResumeCommand}` when
+///   PowerShell 7+ is installed (probed via PATH, see `pwsh_on_path`),
+///   else `powershell -NoExit -Command {ResumeCommand}` (Windows
+///   PowerShell 5.1, guaranteed present). `-NoExit` is PowerShell's
+///   keep-open; the terminal is whatever the system provides (conhost or
+///   a registered default), which is presentation, not our business.
+///   The payload is QUOTED — the standard form (about_PowerShell_exe
+///   examples) and empirically the robust one through the cmd /S /D /C
+///   wrapper: the quotes shield the payload from the OUTER shell's
+///   parsing (an unquoted payload dies on any cmd-special character,
+///   e.g. `|`, verified end-to-end; a quoted payload executes as code).
+///   (The `cmd /k "cd /d …"` shape remains a documented MANUAL
+///   alternative — its quoted-payload quoting is subtle and pinned by
+///   the ampersand regression test in commands/launch.rs.)
+/// - macOS: Terminal.app via osascript `do script` — the most universally
+///   present terminal; first use triggers an Automation permission prompt.
+/// - Linux: no cross-distro standard (no xdg-terminal); the Debian
+///   alternatives pointer `x-terminal-emulator` is the widest-coverage
+///   single guess; `exec bash` keeps the terminal open after the TUI exits.
+///   Distro-specific alternatives are documented in the README.
+/// `pub(crate)` for the launch command's tests.
+pub(crate) const WINDOWS_PWSH_DEFAULT: &str = "pwsh -NoExit -Command \"{ResumeCommand}\"";
+
+/// No-PowerShell-7 fallback: Windows PowerShell 5.1 (guaranteed present).
+pub(crate) const WINDOWS_POWERSHELL_FALLBACK: &str =
+    "powershell -NoExit -Command \"{ResumeCommand}\"";
+
+/// Manual cmd alternative (README-documented, regression-test-pinned —
+/// NOT a default).
+pub(crate) const WINDOWS_CMD_K_ALTERNATIVE: &str =
+    "cmd /k \"cd /d \"{WorkDir}\" && {ResumeCommand}\"";
+
+#[cfg(windows)]
+fn pwsh_on_path() -> bool {
+    // Same which-style scan the wt probe used: pwsh installs (MSI, dotnet
+    // global tool, winget) all land on PATH.
+    std::env::var("PATH")
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()))
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn pwsh_on_path() -> bool {
+    false
+}
+
+pub(crate) fn default_launch_template() -> &'static str {
+    if cfg!(windows) {
+        if pwsh_on_path() {
+            WINDOWS_PWSH_DEFAULT
+        } else {
+            WINDOWS_POWERSHELL_FALLBACK
+        }
+    } else if cfg!(target_os = "macos") {
+        "osascript -e 'tell application \"Terminal\" to do script \"cd \\\"{WorkDir}\\\" && {ResumeCommand}\"'"
+    } else {
+        "x-terminal-emulator -e bash -c \"cd \\\"{WorkDir}\\\" && {ResumeCommand}; exec bash\""
+    }
+}
+
+/// Effective default for a setting key: per-OS for the launch template
+/// (the const table carries an empty placeholder — `String` constants
+/// cannot be per-OS), table default otherwise. THE single resolution
+/// point; every consumer (merged values, sparse-write comparison, served
+/// descriptors) goes through here.
 fn default_of(key: &str) -> SettingValue {
+    if key == "sessions.resumeLaunchTemplate" {
+        return SettingValue::Str(default_launch_template().to_string());
+    }
     SETTINGS
         .iter()
         .find(|d| d.key == key)
@@ -1299,45 +1396,88 @@ mod tests {
         );
     }
 
+    /// The launch template's effective default is PER-OS (never empty): it
+    /// must render a runnable line out of the box and carry the resume
+    /// command placeholder.
     #[test]
-    fn resume_template_defaults_to_raw_command() {
-        // Empty default: the TS renderer falls back to the raw resume
-        // command, so the shipped behavior copies the bare command.
+    fn launch_template_default_is_per_os() {
         let dir = tempdir().expect("tempdir");
         let manager = SettingsManager::new(settings_path(dir.path()));
+        let expected = default_launch_template().to_string();
         assert_eq!(
-            manager.get_value("sessions.resumeTemplate"),
-            Some(SettingValue::Str(String::new()))
+            manager.get_value("sessions.resumeLaunchTemplate"),
+            Some(SettingValue::Str(expected.clone()))
+        );
+        assert!(expected.contains("{ResumeCommand}"), "got: {expected}");
+        if cfg!(windows) {
+            // Machine-dependent on the EDITION (pwsh 7 probed, else
+            // Windows PowerShell 5.1) — always PowerShell with keep-open.
+            assert!(
+                expected.starts_with("pwsh -NoExit") || expected.starts_with("powershell -NoExit"),
+                "got: {expected}"
+            );
+            // THE quoting pin: the payload must stay QUOTED — the quotes
+            // shield it from the outer cmd /S /D /C wrapper (an unquoted
+            // payload dies on any cmd-special character, e.g. `|`,
+            // verified end-to-end; see the quoted-executes test in
+            // commands/launch.rs).
+            assert!(
+                expected.contains("\"{ResumeCommand}\""),
+                "payload must stay quoted: {expected}"
+            );
+        } else if cfg!(target_os = "macos") {
+            assert!(expected.contains("osascript"), "got: {expected}");
+        } else {
+            assert!(expected.contains("x-terminal-emulator"), "got: {expected}");
+        }
+    }
+
+    /// The served snapshot's descriptor carries the EFFECTIVE per-OS
+    /// default (not the table's empty placeholder) so TS consumers see the
+    /// real fallback without duplicating the selection.
+    #[test]
+    fn snapshot_descriptor_carries_effective_launch_default() {
+        let dir = tempdir().expect("tempdir");
+        let manager = SettingsManager::new(settings_path(dir.path()));
+        let snapshot = manager.get();
+        let def = snapshot
+            .descriptors
+            .iter()
+            .find(|d| d.key == "sessions.resumeLaunchTemplate")
+            .expect("descriptor present");
+        assert_eq!(
+            def.default,
+            SettingValue::Str(default_launch_template().to_string())
         );
     }
 
     #[test]
-    fn resume_template_override_loads() {
+    fn launch_template_override_loads() {
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
-            "{\"sessions\": {\"resumeTemplate\": \"cd \\\"{WorkDir}\\\" && {ResumeCommand}\"}}",
+            "{\"sessions\": {\"resumeLaunchTemplate\": \"wt -d \\\"{WorkDir}\\\" cmd /k {ResumeCommand}\"}}",
         );
         let manager = SettingsManager::new(path);
         assert_eq!(
-            manager.get_value("sessions.resumeTemplate"),
+            manager.get_value("sessions.resumeLaunchTemplate"),
             Some(SettingValue::Str(
-                "cd \"{WorkDir}\" && {ResumeCommand}".to_string()
+                "wt -d \"{WorkDir}\" cmd /k {ResumeCommand}".to_string()
             ))
         );
     }
 
     #[test]
-    fn resume_template_wrong_typed_dropped_to_default() {
+    fn launch_template_wrong_typed_dropped_to_default() {
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
-            "{\"sessions\": {\"resumeTemplate\": 42}, \"update\": {\"autoCheck\": false}}",
+            "{\"sessions\": {\"resumeLaunchTemplate\": 42}, \"update\": {\"autoCheck\": false}}",
         );
         let manager = SettingsManager::new(path);
         assert_eq!(
-            manager.get_value("sessions.resumeTemplate"),
-            Some(SettingValue::Str(String::new()))
+            manager.get_value("sessions.resumeLaunchTemplate"),
+            Some(SettingValue::Str(default_launch_template().to_string()))
         );
         // Other keys survive the wrong-typed field.
         assert_eq!(
@@ -1346,41 +1486,39 @@ mod tests {
         );
     }
 
+    /// A hand-edited EMPTY template means "use the per-OS default" — equal
+    /// to the effective default it is sparse-omitted like any default value.
     #[test]
-    fn resume_template_round_trip_and_sparse_write() {
+    fn launch_template_empty_falls_back_to_default_and_is_sparse() {
         let dir = tempdir().expect("tempdir");
         let path = settings_path(dir.path());
         let manager = SettingsManager::new(path.clone());
         manager
             .set_value(
-                "sessions.resumeTemplate",
-                SettingValue::Str("cd \"{WorkDir}\" && {ResumeCommand}".to_string()),
+                "sessions.resumeLaunchTemplate",
+                SettingValue::Str("my-launcher {ResumeCommand}".to_string()),
             )
             .expect("set");
-
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
         assert_eq!(
-            saved["sessions"]["resumeTemplate"],
-            serde_json::json!("cd \"{WorkDir}\" && {ResumeCommand}")
-        );
-        // Reload round-trips the override.
-        assert_eq!(
-            SettingsManager::new(path.clone()).get_value("sessions.resumeTemplate"),
-            Some(SettingValue::Str(
-                "cd \"{WorkDir}\" && {ResumeCommand}".to_string()
-            ))
+            manager.get_value("sessions.resumeLaunchTemplate"),
+            Some(SettingValue::Str("my-launcher {ResumeCommand}".to_string()))
         );
 
-        // Setting back to the default (empty) removes the section (sparse write).
+        // Setting the EFFECTIVE default (whatever this OS ships) removes
+        // the override from the file. (A hand-edited EMPTY string is stored
+        // as an override by the loader — it differs from the per-OS
+        // default — but the TS renderer treats blank as "use the default",
+        // so it stays harmless.)
         manager
-            .set_value("sessions.resumeTemplate", SettingValue::Str(String::new()))
+            .set_value(
+                "sessions.resumeLaunchTemplate",
+                default_of("sessions.resumeLaunchTemplate"),
+            )
             .expect("set");
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        let text = std::fs::read_to_string(&path).expect("read");
         assert!(
-            saved.get("sessions").is_none(),
-            "default-equal template must be omitted"
+            !text.contains("resumeLaunchTemplate"),
+            "default-equal template must be omitted, got: {text}"
         );
     }
 
@@ -1389,7 +1527,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
-            "{\"sessions\": {\"resumeTemplate\": \"x {SessionId}\", \"futureField\": [1, 2]}}",
+            "{\"sessions\": {\"resumeLaunchTemplate\": \"x {SessionId}\", \"futureField\": [1, 2]}}",
         );
         let manager = SettingsManager::new(path.clone());
         // An unrelated write keeps the unknown sessions field verbatim.
@@ -1399,23 +1537,53 @@ mod tests {
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
         assert_eq!(saved["sessions"]["futureField"], serde_json::json!([1, 2]));
-        assert_eq!(saved["sessions"]["resumeTemplate"], serde_json::json!("x {SessionId}"));
+        assert_eq!(saved["sessions"]["resumeLaunchTemplate"], serde_json::json!("x {SessionId}"));
     }
 
+    /// The retired pre-launch key (`resumeTemplate`, shipped briefly in
+    /// 0.4.3 as a copy template) must round-trip as an unknown field, never
+    /// crash the loader.
     #[test]
-    fn set_value_validates_resume_template_type() {
+    fn sessions_retired_resume_template_key_preserved_as_unknown() {
         let dir = tempdir().expect("tempdir");
-        let manager = SettingsManager::new(settings_path(dir.path()));
+        let path = write_settings(
+            dir.path(),
+            "{\"sessions\": {\"resumeTemplate\": \"old copy template\", \"resumeLaunchTemplate\": \"new {SessionId}\"}}",
+        );
+        let manager = SettingsManager::new(path.clone());
         assert_eq!(
-            manager.set_value("sessions.resumeTemplate", SettingValue::Bool(true)),
-            Err("Type mismatch for `sessions.resumeTemplate`: expected string, got bool".to_string())
+            manager.get_value("sessions.resumeLaunchTemplate"),
+            Some(SettingValue::Str("new {SessionId}".to_string()))
+        );
+        // Unrelated write keeps the retired key verbatim.
+        manager
+            .set_value("update.autoCheck", SettingValue::Bool(false))
+            .expect("set");
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(
+            saved["sessions"]["resumeTemplate"],
+            serde_json::json!("old copy template")
         );
     }
 
-    /// The template gate defaults OFF; enabling persists while the template
+    #[test]
+    fn set_value_validates_launch_template_type() {
+        let dir = tempdir().expect("tempdir");
+        let manager = SettingsManager::new(settings_path(dir.path()));
+        assert_eq!(
+            manager.set_value("sessions.resumeLaunchTemplate", SettingValue::Bool(true)),
+            Err(
+                "Type mismatch for `sessions.resumeLaunchTemplate`: expected string, got bool"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The launch gate defaults OFF; enabling persists while the template
     /// survives disabling (re-enable restores it).
     #[test]
-    fn resume_template_gate_defaults_off_and_keeps_template() {
+    fn launch_gate_defaults_off_and_keeps_template() {
         let dir = tempdir().expect("tempdir");
         let manager = SettingsManager::new(settings_path(dir.path()));
         assert_eq!(
@@ -1423,14 +1591,14 @@ mod tests {
             Some(SettingValue::Bool(false))
         );
 
-        // Enable + set a template (the UI seeding shape: two writes).
+        // Enable + set a template (the UI editing shape: two writes).
         manager
             .set_value("sessions.resumeTemplateEnabled", SettingValue::Bool(true))
             .expect("enable");
         manager
             .set_value(
-                "sessions.resumeTemplate",
-                SettingValue::Str("cd \"{WorkDir}\"\n{ResumeCommand}".to_string()),
+                "sessions.resumeLaunchTemplate",
+                SettingValue::Str("my-launcher {ResumeCommand}".to_string()),
             )
             .expect("set template");
 
@@ -1449,23 +1617,21 @@ mod tests {
             "default-equal gate must be omitted (sparse)"
         );
         assert_eq!(
-            saved["sessions"]["resumeTemplate"],
-            serde_json::json!("cd \"{WorkDir}\"\n{ResumeCommand}")
+            saved["sessions"]["resumeLaunchTemplate"],
+            serde_json::json!("my-launcher {ResumeCommand}")
         );
         assert_eq!(
-            manager.get_value("sessions.resumeTemplate"),
-            Some(SettingValue::Str(
-                "cd \"{WorkDir}\"\n{ResumeCommand}".to_string()
-            ))
+            manager.get_value("sessions.resumeLaunchTemplate"),
+            Some(SettingValue::Str("my-launcher {ResumeCommand}".to_string()))
         );
     }
 
     #[test]
-    fn resume_template_gate_wrong_typed_dropped() {
+    fn launch_gate_wrong_typed_dropped() {
         let dir = tempdir().expect("tempdir");
         let path = write_settings(
             dir.path(),
-            "{\"sessions\": {\"resumeTemplateEnabled\": \"yes\", \"resumeTemplate\": \"x\"}}",
+            "{\"sessions\": {\"resumeTemplateEnabled\": \"yes\", \"resumeLaunchTemplate\": \"x\"}}",
         );
         let manager = SettingsManager::new(path);
         assert_eq!(
@@ -1474,7 +1640,7 @@ mod tests {
         );
         // The sibling field is unaffected.
         assert_eq!(
-            manager.get_value("sessions.resumeTemplate"),
+            manager.get_value("sessions.resumeLaunchTemplate"),
             Some(SettingValue::Str("x".to_string()))
         );
     }

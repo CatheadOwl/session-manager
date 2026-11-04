@@ -3,8 +3,11 @@ import type { ReactNode } from "react";
 export interface SettingRowProps {
   /** Human label for the setting (TS-side presentation, never the raw key). */
   label: string;
-  /** Optional one-line explanation under the label. */
-  description?: string;
+  /**
+   * Optional explanation under the label — one string, or several lines
+   * rendered as stacked rows (what-it-is first, usage rules after).
+   */
+  description?: string | string[];
   /** The control (toggle, editor, …) rendered to the right of the label. */
   children: ReactNode;
   /** Associates the label with a focusable control (`htmlFor` semantics). */
@@ -36,7 +39,13 @@ export function SettingRow({ label, description, children, id, error, variant = 
         <label className="setting-label" htmlFor={id}>
           {label}
         </label>
-        {description ? <div className="setting-description">{description}</div> : null}
+        {(Array.isArray(description) ? description : description ? [description] : []).map(
+          (line) => (
+            <div key={line} className="setting-description">
+              {line}
+            </div>
+          ),
+        )}
         {error ? (
           <div className="setting-error" role="alert">
             {error}

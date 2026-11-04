@@ -3,7 +3,7 @@ import { SettingRow } from "./SettingRow";
 
 export interface ToggleRowProps {
   label: string;
-  description?: string;
+  description?: string | string[];
   value: boolean;
   onChange: (next: boolean) => void;
   /** Display-only inline error surfaced on the row. */

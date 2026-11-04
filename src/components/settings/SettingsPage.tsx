@@ -14,7 +14,6 @@ import { SettingRow } from "@/components/ui/SettingRow";
 import { SourcesEditor } from "@/components/ui/SourcesEditor";
 import { ToggleRow } from "@/components/ui/ToggleRow";
 import {
-  DEFAULT_RESUME_TEMPLATE,
   RESUME_TEMPLATE_EXAMPLE,
   effectiveResumeTemplate,
   renderResumeTemplate,
@@ -38,7 +37,7 @@ const CATEGORY_ORDER: { group: string; label: string }[] = [
 
 /** Insertable placeholder a string setting may declare (chips under the input). */
 interface SettingVariable {
-  /** Bare name; the chip inserts `{name}` at the textarea caret. */
+  /** Bare name; the chip inserts `{name}` at the input caret. */
   name: string;
   /** One-line meaning shown as the chip's tooltip. */
   hint: string;
@@ -51,12 +50,11 @@ const SETTING_PRESENTATION: Record<
   string,
   {
     label: string;
-    description?: string;
+    /** One or stacked explanation lines (SettingRow renders each on its own row). */
+    description?: string | string[];
     variables?: SettingVariable[];
-    /** Ghost text in the empty editor — the natural default, never written. */
-    placeholder?: string;
     /** Renders the live result under the editor (draft value in, preview out). */
-    preview?: (value: string) => string;
+    preview?: (value: string, defaultTemplate: string) => string;
   }
 > = {
   "update.autoCheck": {
@@ -68,12 +66,15 @@ const SETTING_PRESENTATION: Record<
     description: "Additional home-mirrored roots scanned on top of this machine's home.",
   },
   "sessions.resumeTemplateEnabled": {
-    label: "Resume copy template",
-    description: "When on, the Resume row shows and copies the rendered template below.",
+    label: "Resume launch",
+    description: "When on, the Resume row button runs the rendered launch template in a terminal (instead of copying the raw resume command). SSH remote sessions keep copy.",
   },
-  "sessions.resumeTemplate": {
-    label: "Template",
-    placeholder: DEFAULT_RESUME_TEMPLATE,
+  "sessions.resumeLaunchTemplate": {
+    label: "Launch template",
+    description: [
+      "Single command line — the shell/terminal invocation included.",
+      "The app sets the session's project directory as the spawn working directory (Windows default needs no cd; macOS/Linux recipes carry one).",
+    ],
     variables: [
       {
         name: "ResumeCommand",
@@ -91,10 +92,10 @@ const SETTING_PRESENTATION: Record<
         example: RESUME_TEMPLATE_EXAMPLE.sessionId,
       },
     ],
-    // Preview renders the EFFECTIVE template (empty = default), matching
-    // what the Resume row would copy with the gate on.
-    preview: (value) =>
-      renderResumeTemplate(effectiveResumeTemplate(true, value), RESUME_TEMPLATE_EXAMPLE),
+    // Preview renders the EFFECTIVE template (blank = per-OS default from
+    // the descriptor), matching what the Resume row would run.
+    preview: (value, defaultTemplate) =>
+      renderResumeTemplate(effectiveResumeTemplate(true, value, defaultTemplate), RESUME_TEMPLATE_EXAMPLE),
   },
 };
 
@@ -139,12 +140,13 @@ const SourceListRenderer: SettingRenderer = ({ def, value, error, onChange }) =>
 };
 
 /**
- * Multi-line text renderer for `string` settings — what you type is what is
- * saved: every change applies immediately (local file write, no commit
- * gesture); Enter is a plain newline, Escape just bubbles up and closes the
- * page. Settings that declare `variables` get a chip row that inserts
- * `{name}` at the textarea caret, and a `preview` renders the live result
- * under the editor so the effect is visible without leaving Settings.
+ * Single-line text renderer for `string` settings — what you type is what
+ * is saved: every change applies immediately (local file write, no commit
+ * gesture). The ghost text is the descriptor's EFFECTIVE default (per-OS
+ * on the Rust side for the launch template). Settings that declare
+ * `variables` get a chip row that inserts `{name}` at the caret, and a
+ * `preview` renders the live result under the editor so the effect is
+ * visible without leaving Settings.
  */
 const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
   const id = useId();
@@ -160,10 +162,10 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
     setDraft(next);
     onChange({ string: next });
   };
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const insertVariable = (name: string) => {
     const token = `{${name}}`;
-    const el = textareaRef.current;
+    const el = inputRef.current;
     if (!el) {
       set(draft + token);
       return;
@@ -179,6 +181,7 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
     });
   };
   const presentation = SETTING_PRESENTATION[def.key];
+  const defaultTemplate = "string" in def.default ? def.default.string : "";
   return (
     <SettingRow
       label={presentation?.label ?? def.key}
@@ -187,13 +190,13 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
       error={error}
       variant="full"
     >
-      <textarea
-        ref={textareaRef}
+      <input
+        ref={inputRef}
         id={id}
         className="setting-string-input"
-        rows={3}
+        type="text"
         value={draft}
-        placeholder={presentation?.placeholder}
+        placeholder={defaultTemplate}
         spellCheck={false}
         aria-invalid={error ? true : undefined}
         onChange={(event) => set(event.target.value)}
@@ -216,7 +219,7 @@ const StringRenderer: SettingRenderer = ({ def, value, error, onChange }) => {
       ) : null}
       {presentation?.preview ? (
         <div className="setting-value-preview" title="Preview with example values">
-          {presentation.preview(draft)}
+          {presentation.preview(draft, defaultTemplate)}
         </div>
       ) : null}
     </SettingRow>

@@ -8,6 +8,7 @@ import { SessionQaPair } from "./SessionQaPair";
 import { MessageSearchBar } from "./MessageSearchBar";
 import { QATocPopover, type QATocItem } from "./QATocPopover";
 import { CopyButton } from "./CopyButton";
+import { LaunchButton } from "./LaunchButton";
 import { getProviderDisplay } from "./provider-display";
 import { StarButton } from "./StarButton";
 import { SegmentedControl } from "./SegmentedControl";
@@ -16,6 +17,7 @@ import { formatSessionTitle, formatTimestamp } from "@/utils/format";
 import { extractSystemBlocks } from "@/utils/system-blocks";
 import { supportsLifecycleOperations } from "@/lib/domain";
 import { useSettingsQuery } from "@/lib/query/queries";
+import type { SettingDefinition } from "@/lib/api/settings";
 import { effectiveResumeTemplate, renderResumeTemplate } from "@/lib/resumeTemplate";
 
 interface SessionDetailProps {
@@ -278,31 +280,39 @@ export const SessionDetail = memo(function SessionDetail({
     };
   }, [targetMsgIndex, messageMode, messages, qaPairs]);
 
-  // Resume row: effectiveResumeTemplate resolves gate + empty-means-default
-  // (gate off → null → renderer falls back to the raw resume command; blank
-  // template while on → the recommended default, never written to the file).
-  // The row shows AND copies the rendered string, refreshed automatically by
-  // the settings-changed invalidation. Lives above the empty-session early
-  // return — hook order must not depend on selection.
+  // Resume row mode switch (`sessions.resumeTemplateEnabled`): ON renders
+  // the launch template and the button EXECUTES the rendered line (local
+  // sessions only — SSH remote sessions are pinned to raw + copy because
+  // their WorkDir is a remote path); OFF keeps the shipped raw command +
+  // copy. Blank template falls back to the per-OS default from the
+  // descriptor (never written to the settings file). Refreshed
+  // automatically by the settings-changed invalidation. Lives above the
+  // empty-session early return — hook order must not depend on selection.
   const settingsQuery = useSettingsQuery();
   const resumeEnabledSetting = settingsQuery.data?.values["sessions.resumeTemplateEnabled"];
   const resumeEnabled =
     resumeEnabledSetting !== undefined && "bool" in resumeEnabledSetting ? resumeEnabledSetting.bool : false;
-  const resumeTemplateSetting = settingsQuery.data?.values["sessions.resumeTemplate"];
-  const resumeTemplate = effectiveResumeTemplate(
-    resumeEnabled,
-    resumeTemplateSetting !== undefined && "string" in resumeTemplateSetting
-      ? resumeTemplateSetting.string
-      : undefined,
+  const resumeTemplateSetting = settingsQuery.data?.values["sessions.resumeLaunchTemplate"];
+  const launchDefault = settingsQuery.data?.descriptors.find(
+    (d: SettingDefinition) => d.key === "sessions.resumeLaunchTemplate",
   );
+  const launchDefaultTemplate =
+    launchDefault && "string" in launchDefault.default ? launchDefault.default.string : "";
+  const isRemoteSession = session?.locator?.kind === "remote";
+  const launchMode = resumeEnabled && !isRemoteSession;
+  const resumeTemplate = effectiveResumeTemplate(resumeEnabled, resumeTemplateSetting !== undefined && "string" in resumeTemplateSetting
+    ? resumeTemplateSetting.string
+    : undefined, launchDefaultTemplate);
   const resumeDisplay = useMemo(
     () =>
-      renderResumeTemplate(resumeTemplate, {
-        resumeCommand: session?.resumeCommand,
-        workDir: session?.projectDir,
-        sessionId: session?.sessionId,
-      }),
-    [resumeTemplate, session],
+      launchMode
+        ? renderResumeTemplate(resumeTemplate, {
+            resumeCommand: session?.resumeCommand,
+            workDir: session?.projectDir,
+            sessionId: session?.sessionId,
+          })
+        : (session?.resumeCommand ?? ""),
+    [launchMode, resumeTemplate, session],
   );
 
   if (!session) {
@@ -317,7 +327,6 @@ export const SessionDetail = memo(function SessionDetail({
   }
 
   const sessionTitle = formatSessionTitle(session);
-  const isRemoteSession = session.locator?.kind === "remote";
   const lifecycleSupported = supportsLifecycleOperations(session);
   // Read-only tooltip: remote (SSH) sessions are read-only;
   // the OpenCode message covers the other lifecycle-unsupported case.
@@ -437,7 +446,15 @@ export const SessionDetail = memo(function SessionDetail({
                 <dd className="metadata-copyable">
                   <span className="metadata-value">{resumeDisplay || "—"}</span>
                   {resumeDisplay ? (
-                    <CopyButton text={resumeDisplay} label="Copy resume command" className="metadata-copy-btn" />
+                    launchMode ? (
+                      <LaunchButton
+                        command={resumeDisplay}
+                        workDir={session.projectDir}
+                        className="metadata-copy-btn"
+                      />
+                    ) : (
+                      <CopyButton text={resumeDisplay} label="Copy resume command" className="metadata-copy-btn" />
+                    )
                   ) : null}
                 </dd>
               </div>

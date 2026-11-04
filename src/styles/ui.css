@@ -364,14 +364,14 @@
 }
 
 /*
- * Multi-line string setting editor (resume template): same border/radius
- * rhythm as the source inputs, but a resizable textarea with the mono
- * stack (template text is code-ish) and a taller box.
+ * String setting editor (resume template): same border/radius rhythm as
+ * the source inputs, mono stack (template text is code-ish). Single-line
+ * by contract — the rendered preview below carries long results.
  */
 .setting-string-input {
   width: 100%;
-  min-height: 3.1rem;
-  padding: 0.4rem 0.55rem;
+  height: 1.9rem;
+  padding: 0 0.55rem;
   border: 1px solid var(--border);
   border-radius: 0.55rem;
   background: var(--panel);
@@ -380,7 +380,6 @@
   font-size: 0.78rem;
   font-weight: 550;
   line-height: 1.45;
-  resize: vertical;
 }
 
 .setting-string-input:focus-visible {

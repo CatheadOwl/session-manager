@@ -6,7 +6,7 @@ import { SettingRow } from "./SettingRow";
 
 export interface SourcesEditorProps {
   label: string;
-  description?: string;
+  description?: string | string[];
   value: SourceEntry[];
   /** Commits the WHOLE sources value (settings core writes per key; this key's value is the full list). */
   onChange: (next: SourceEntry[]) => void;

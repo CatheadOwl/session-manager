@@ -32,7 +32,11 @@ fn spawn_shell(command: &str, work_dir: Option<&str>) -> std::io::Result<Child> 
 
 #[cfg(not(target_os = "windows"))]
 fn spawn_shell(command: &str, work_dir: Option<&str>) -> std::io::Result<Child> {
-    let mut cmd = Command::new("sh").arg("-c").arg(command);
+    // No chaining off `Command::new` — the chain's `&mut` borrows a
+    // temporary that dies at the statement end (E0716, caught by CI on
+    // Linux after this branch compiled only on Windows machines).
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command);
     if let Some(dir) = work_dir {
         cmd.current_dir(dir);
     }

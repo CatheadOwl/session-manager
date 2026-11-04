@@ -122,7 +122,16 @@ mod tests {
 
     /// Single-line contract: a hand-edited multi-line template collapses
     /// to one line — the second line must NOT execute (through `sh -c` an
-    /// uncollapsed newline would run it for real).
+    /// uncollapsed newline would run it for real). Discrimination is
+    /// CONTENT-based and race-free: the collapsed line is ONE echo whose
+    /// LAST redirection target receives the whole output ("FIRST echo
+    /// SECOND" — cmd and sh both resolve chained redirects last-wins), so
+    /// the second file can only ever start with the FIRST line's payload;
+    /// an uncollapsed second line would write plain "SECOND" into its own
+    /// file. Positive-evidence gate: poll until the output file carries
+    /// content — the detached child may lag the spawn by an arbitrary
+    /// margin, and a plain absence check here raced it (flaked under CI
+    /// runner contention while the same commit passed elsewhere).
     #[test]
     fn newlines_collapse_to_spaces_no_second_line_executes() {
         assert_eq!(collapse_newlines("a\r\nb\nc"), "a b c");
@@ -130,25 +139,40 @@ mod tests {
 
         let dir = std::env::temp_dir().join("sm-launch-single-line-test");
         std::fs::create_dir_all(&dir).expect("mkdir");
+        let first = dir.join("first.txt");
         let second = dir.join("second.txt");
+        let _ = std::fs::remove_file(&first);
         let _ = std::fs::remove_file(&second);
 
         #[cfg(target_os = "windows")]
         let payload = format!(
             "echo FIRST > \"{}\"\r\necho SECOND > \"{}\"",
-            dir.join("first.txt").display(),
+            first.display(),
             second.display()
         );
         #[cfg(not(target_os = "windows"))]
         let payload = format!(
             "echo FIRST > \"{}\"\necho SECOND > \"{}\"",
-            dir.join("first.txt").display(),
+            first.display(),
             second.display()
         );
         assert_eq!(run_shell_command(payload, None), Ok(()));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut content = String::new();
+        while std::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&second) {
+                if !text.trim().is_empty() {
+                    content = text;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!content.trim().is_empty(), "the collapsed line must have run");
         assert!(
-            !second.exists(),
-            "the post-newline line must never execute (collapsed to one line)"
+            content.starts_with("FIRST"),
+            "second line executed as a command (collapsed output: {content:?})"
         );
     }
 

@@ -36,7 +36,7 @@ export const UpdateToast = memo(function UpdateToast({
       }
     >
       {busy ? <RefreshCw size={14} /> : <Download size={14} />}
-      {!busy && <span className="update-dot" />}
+      {!busy && <span className="dot-badge" />}
     </button>
   );
 });

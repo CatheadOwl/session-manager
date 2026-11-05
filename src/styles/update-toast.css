@@ -28,22 +28,3 @@
   animation: spin-cw 0.8s linear infinite;
 }
 
-/* Red dot badge (shared by collapsed button & panel-left collapse button) */
-.update-dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #dc2626;
-}
-
-/* Header variant: larger, center pinned to the button's top-right corner */
-.update-dot--header {
-  top: 0;
-  right: 0;
-  width: 8px;
-  height: 8px;
-  transform: translate(50%, -50%);
-}

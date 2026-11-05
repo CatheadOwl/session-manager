@@ -672,3 +672,26 @@
   flex: 1 1 10rem;
   width: auto;
 }
+
+/* ---- Dot badge ----------------------------------------------------------
+   Red status dot for `position: relative` anchors (icon buttons). Placement
+   is INSET: `top/right: 3px`, overlapping the anchor's top-right icon — a
+   deliberate house style, chosen over the conventional "center pinned on
+   the corner" notification-badge placement. */
+.dot-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #dc2626;
+}
+
+/* Larger variant (panel-header toggles); same inset offsets, so the
+   rendered placement matches the base dot exactly. */
+.dot-badge--lg {
+  width: 8px;
+  height: 8px;
+  transform: translate(50%, -50%);
+}

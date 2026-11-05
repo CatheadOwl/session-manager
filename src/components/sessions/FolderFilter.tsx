@@ -139,7 +139,7 @@ export const FolderFilter = memo(function FolderFilter({
           >
             <PanelToggleIcon direction="collapse" />
             {updateStatus === "available" && (
-              <span className="update-dot update-dot--header" />
+              <span className="dot-badge dot-badge--lg" />
             )}
           </button>
         </div>

@@ -33,7 +33,7 @@ describe("UpdateToast", () => {
 
     expect(btn).toBeDisabled();
     expect(btn.className).toContain("spinning");
-    expect(container.querySelector(".update-dot")).toBeNull();
+    expect(container.querySelector(".dot-badge")).toBeNull();
   });
 
   it("shows an actionable button with a red dot when available", () => {
@@ -45,7 +45,7 @@ describe("UpdateToast", () => {
 
     expect(btn).not.toBeDisabled();
     expect(btn.getAttribute("title")).toBe("Update to v0.2.0");
-    expect(container.querySelector(".update-dot")).not.toBeNull();
+    expect(container.querySelector(".dot-badge")).not.toBeNull();
 
     fireEvent.click(btn);
     expect(onInstall).toHaveBeenCalledTimes(1);

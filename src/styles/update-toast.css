@@ -41,8 +41,8 @@
 
 /* Header variant: larger, center pinned to the button's top-right corner */
 .update-dot--header {
-  top: 1;
-  right: 1;
+  top: 0;
+  right: 0;
   width: 8px;
   height: 8px;
   transform: translate(50%, -50%);

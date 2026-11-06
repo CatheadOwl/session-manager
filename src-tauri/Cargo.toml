@@ -28,6 +28,7 @@ tauri = { version = "2.8.2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 tempfile = "3"
 trash = "3"
 # Remote-source connection layer. default-features off: avoid aws-lc-rs

@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef } from "react";
+import type { MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import type { Components } from "react-markdown";
@@ -10,9 +12,20 @@ interface MarkdownContentProps {
   highlightQuery?: string;
 }
 
+const EXTERNAL_LINK = /^(https?:|mailto:)/i;
+
+// The Tauri webview silently drops target="_blank" navigations, so external
+// links must be handed to the OS; anything else would navigate the app window.
+function handleLinkClick(event: MouseEvent<HTMLAnchorElement>, href: string | undefined) {
+  event.preventDefault();
+  if (href && EXTERNAL_LINK.test(href)) {
+    openUrl(href).catch((err) => console.error("Failed to open link", href, err));
+  }
+}
+
 const components: Components = {
   a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer">
+    <a href={href} rel="noopener noreferrer" onClick={(e) => handleLinkClick(e, href)}>
       {children}
     </a>
   ),

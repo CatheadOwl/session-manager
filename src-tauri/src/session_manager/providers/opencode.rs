@@ -191,19 +191,17 @@ fn derive_storage_base(session_path: &Path) -> PathBuf {
 fn scan_sessions_from_scan_root(root: &Path) -> Vec<SessionMeta> {
     let start = Instant::now();
     let mut sessions = Vec::new();
+    let mut seen_session_ids: HashSet<String> = HashSet::new();
 
-    let db_path = if root.file_name().and_then(|name| name.to_str()) == Some("opencode.db") {
-        root.to_path_buf()
-    } else {
-        root.join("opencode.db")
-    };
-    if db_path.is_file() {
-        sessions.extend(scan_sessions_in_db(&db_path));
+    // 多库定位:标准库 + channel 后缀库 + $OPENCODE_DB 指定库;同 id 跨库
+    // 以前先扫到的为准(确定性排序)。
+    for db_path in candidate_db_paths(root) {
+        for meta in scan_sessions_in_db(&db_path) {
+            if seen_session_ids.insert(meta.session_id.clone()) {
+                sessions.push(meta);
+            }
+        }
     }
-    let mut seen_session_ids: HashSet<String> = sessions
-        .iter()
-        .map(|meta| meta.session_id.clone())
-        .collect();
 
     let storage_root = if root.join("session").is_dir() {
         root.to_path_buf()
@@ -224,6 +222,60 @@ fn scan_sessions_from_scan_root(root: &Path) -> Vec<SessionMeta> {
     );
 
     sessions
+}
+
+/// Candidate OpenCode database files under one scan root.
+///
+/// 官方 database-path.ts 规则:`$OPENCODE_DB` 直接指定库文件(`:memory:`
+/// 表示无文件,相对路径相对数据目录解析);否则默认 `opencode.db`,但非标准
+/// channel(latest/dev/beta/next/prod 之外)的构建写成
+/// `opencode-<channel>.db`(channel 名中非 [a-zA-Z0-9._-] 字符替换为 `-`)。
+/// 读侧拿不到构建时烧入的 channel 名,按 `opencode.db` + `opencode-*.db`
+/// glob 兜底,候选按文件名排序保证确定性。
+fn candidate_db_paths(root: &Path) -> Vec<PathBuf> {
+    if let Ok(path) = std::env::var("OPENCODE_DB") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            if trimmed == ":memory:" {
+                return Vec::new();
+            }
+            let configured = PathBuf::from(trimmed);
+            let resolved = if configured.is_absolute() {
+                configured
+            } else {
+                root.join(configured)
+            };
+            return vec![resolved];
+        }
+    }
+
+    if root.is_file() {
+        let name = root.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name == "opencode.db" || (name.starts_with("opencode-") && name.ends_with(".db")) {
+            return vec![root.to_path_buf()];
+        }
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => return candidates,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == "opencode.db" || (name.starts_with("opencode-") && name.ends_with(".db")) {
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+    candidates
 }
 
 fn warn_opencode_scan(path: &Path, message: impl std::fmt::Display) {
@@ -785,17 +837,28 @@ fn extract_tool_output(value: &Value) -> Option<String> {
 
 /// Extract the tool result from a V2 `content[]` tool item.
 ///
-/// V2 把结果放在 `state.content`(文本项数组;实测原生与导入行同构);
+/// V2 把结果放在 `state.content`(实测原生与导入行同构:text 项数组,导入器
+/// 还会把工具产物附件作为 `{type:"file", uri/mime/name?}` 项放进来);
 /// 老字段 `state.output` / `state.metadata.output` 作为防御性兜底保留。
 fn extract_v2_tool_output(item: &Value) -> Option<String> {
     let state = item.get("state")?;
     match state.get("content") {
         Some(Value::Array(items)) => {
-            let text = items
+            let mut lines: Vec<String> = items
                 .iter()
                 .filter_map(|v| v.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .map(str::to_string)
+                .collect();
+            for file in items.iter().filter(|v| v.get("type").and_then(Value::as_str) == Some("file")) {
+                let label = file
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .or_else(|| file.get("uri").and_then(Value::as_str))
+                    .unwrap_or("attachment");
+                let mime = file.get("mime").and_then(Value::as_str).unwrap_or("unknown");
+                lines.push(format!("[Attachment: {label} ({mime})]"));
+            }
+            let text = lines.join("\n");
             if !text.trim().is_empty() {
                 return Some(text);
             }
@@ -1034,6 +1097,28 @@ impl DbMessageDraft {
                 } else {
                     format!("[error: {err_type}] {err_message}")
                 });
+            }
+        }
+
+        // user 侧附件与 agent 提及:导入器把 data-URI 附件放进 `files`
+        // (base64,官方 migrateFile)、@提及放进 `agents`;非 data-URI 附件
+        // 已由导入器折进 text("[Attachment unavailable ...]"),这里只补
+        // 占位展示。
+        if let Some(files) = value.get("files").and_then(Value::as_array) {
+            for file in files {
+                let name = file
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment");
+                let mime = file.get("mime").and_then(Value::as_str).unwrap_or("unknown");
+                self.content_parts.push(format!("[Attachment: {name} ({mime})]"));
+            }
+        }
+        if let Some(agents) = value.get("agents").and_then(Value::as_array) {
+            for agent in agents {
+                if let Some(name) = agent.get("name").and_then(Value::as_str) {
+                    self.content_parts.push(format!("[Agent: {name}]"));
+                }
             }
         }
     }
@@ -3462,7 +3547,9 @@ mod tests {
                         {"type":"text","text":"Let me look"},
                         {"type":"tool","id":"call_v2_1","name":"read","executed":false,
                          "state":{"status":"completed","input":{"path":"/tmp/probe"},
-                                  "content":[{"type":"text","text":"a.md\nb.txt"}],"metadata":{}},
+                                  "content":[{"type":"text","text":"a.md\nb.txt"},
+                                             {"type":"file","uri":"file:///tmp/shot.png","mime":"image/png","name":"shot.png"}],
+                                  "metadata":{}},
                          "time":{}}
                     ],
                     "finish":"tool-calls",
@@ -3678,6 +3765,43 @@ mod tests {
         )
         .expect("insert ses_v2_empty");
 
+        // user 附件与 agent 提及占位(导入器 migrateFile/agentAttachments 形态)
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_v2_attach",
+                "Attach Session",
+                "/tmp/proj-f",
+                Option::<String>::None,
+                1_740_000_009_500i64,
+                1_740_000_009_600i64,
+                "model-v2",
+                "build",
+                0.0f64,
+                1i64,
+                2i64,
+                "2.2.7"
+            ],
+        )
+        .expect("insert ses_v2_attach");
+        conn.execute(
+            "INSERT INTO session_message VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                "env_att1",
+                "ses_v2_attach",
+                "user",
+                4i64,
+                1_740_000_009_600i64,
+                serde_json::json!({
+                    "text":"see this",
+                    "files":[{"name":"img.png","mime":"image/png","data":"aGVsbG8=","source":{"type":"inline"}}],
+                    "agents":[{"name":"explore"}],
+                    "time":{}
+                }).to_string()
+            ],
+        )
+        .expect("insert ses_v2_attach envelope");
+
         db_path
     }
 
@@ -3754,7 +3878,10 @@ mod tests {
         assert_eq!(calls[0].call_id.as_deref(), Some("call_v2_1"));
         assert!(calls[0].input.contains("/tmp/probe"));
         let result = messages[1].tool_result.as_ref().expect("tool result");
-        assert_eq!(result.content, "a.md\nb.txt");
+        assert_eq!(
+            result.content,
+            "a.md\nb.txt\n[Attachment: shot.png (image/png)]"
+        );
         assert_eq!(result.call_id.as_deref(), Some("call_v2_1"));
 
         assert_eq!(messages[2].role, "assistant");
@@ -3835,5 +3962,102 @@ mod tests {
             1,
             "user → assistant(tool) → assistant 组成 QA 对"
         );
+    }
+
+    #[test]
+    fn load_messages_renders_v2_user_files_and_agents_placeholders() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_v2_attach").expect("load attach session");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].content,
+            "see this\n[Attachment: img.png (image/png)]\n[Agent: explore]"
+        );
+    }
+
+    #[test]
+    fn scan_sessions_reads_channel_suffixed_database() {
+        // 官方 database-path.ts:非标准 channel 构建写 opencode-<channel>.db
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode-beta.db");
+        let conn = Connection::open(&db_path).expect("open channel db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER,
+                version TEXT
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            "#,
+        )
+        .expect("create channel schema");
+        conn.execute(
+            "INSERT INTO session VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_channel",
+                "Channel Session",
+                "/tmp/proj",
+                Option::<String>::None,
+                1_740_000_000_000i64,
+                1_740_000_000_500i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "2.2.7-beta"
+            ],
+        )
+        .expect("insert channel session");
+        drop(conn);
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "ses_channel");
+        assert_eq!(sessions[0].storage_version.as_deref(), Some("2.2.7-beta"));
+    }
+
+    #[test]
+    fn candidate_db_paths_honors_opencode_db_env() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let temp = tempdir().expect("tempdir");
+        let custom = temp.path().join("custom-location.db");
+        Connection::open(&custom).expect("create custom db");
+        let base = temp.path().join("base");
+        std::fs::create_dir_all(&base).expect("create base");
+
+        // $OPENCODE_DB 绝对路径:直接采用,忽略 glob
+        let _env = EnvVarGuard::set_path("OPENCODE_DB", &custom);
+        assert_eq!(candidate_db_paths(&base), vec![custom.clone()]);
+
+        // :memory: 表示无库文件
+        let _memory = EnvVarGuard::set_path("OPENCODE_DB", Path::new(":memory:"));
+        assert!(candidate_db_paths(&base).is_empty());
     }
 }

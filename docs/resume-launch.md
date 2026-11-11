@@ -102,3 +102,20 @@ than failing.
   from the registry, so this should no longer happen for PATH-hosted tools;
   a tool living on a custom per-shell PATH (set in a shell profile) still
   needs the profile to run — use a template that starts a login shell.
+- **The click seems to do nothing at all** — local spawn failures flash the
+  button icon to ✗ for 2.5 s with the error in the tooltip (hover right
+  after clicking). Three cases fail locally: the project directory no longer
+  exists (sessions recorded under a since-deleted or renamed directory —
+  e.g. one under a cleaned temp dir — always fail this way), an empty
+  rendered line, or a missing shell. Everything else — the command's own
+  outcome, the terminal's visibility — is outside the app.
+- **No terminal appears, but Task Manager shows the spawned `pwsh`/`cmd`
+  running the resume command** — headless-console artifact, not a failed
+  launch. Debug builds (`pnpm tauri dev`) are console-subsystem executables;
+  when the dev chain itself has no console (app launched by an agent, CI, or
+  any detached background task), the spawned terminal attaches to that
+  invisible console instead of opening a new one. Release builds are
+  GUI-subsystem (`windows_subsystem = "windows"`) and allocate a fresh
+  visible console, so the installed app is unaffected. To confirm, check
+  `Get-CimInstance Win32_Process` for a pwsh/cmd whose command line carries
+  the resume command — a living process means the click worked.

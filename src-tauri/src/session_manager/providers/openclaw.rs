@@ -305,6 +305,8 @@ fn parse_session_with_options(
         }),
         resume_command: None,
         forked_from_id: None,
+        storage_family: None,
+        storage_version: None,
     })
 }
 

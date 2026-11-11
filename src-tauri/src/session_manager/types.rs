@@ -24,6 +24,17 @@ pub struct SessionMeta {
     /// Provider-specific session ID this session forked from (e.g. Codex's forked_from_id).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<String>,
+    /// Read-side storage provenance of the session row (pass-through fact, no
+    /// adjudication). OpenCode sets "sqlite-v2" / "sqlite-v1" (table family)
+    /// for database-backed rows and "storage-files" for legacy JSON files;
+    /// other providers leave it unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_family: Option<String>,
+    /// Row-side version signal (creating client's version string) when the
+    /// storage exposes one. Deliberately coarse: the storage layer does not
+    /// promise semantics for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_version: Option<String>,
 }
 
 impl SessionMeta {
@@ -377,6 +388,8 @@ mod tests {
             locator,
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         }
     }
 

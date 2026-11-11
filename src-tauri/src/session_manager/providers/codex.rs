@@ -382,6 +382,8 @@ fn parse_session_with_titles(
         }),
         resume_command: Some(format!("codex resume {session_id}")),
         forked_from_id,
+        storage_family: None,
+        storage_version: None,
     })
 }
 

@@ -211,6 +211,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         locator: Some(SessionLocator::File { path: source_path }),
         resume_command: None,
         forked_from_id: None,
+        storage_family: None,
+        storage_version: None,
     })
 }
 

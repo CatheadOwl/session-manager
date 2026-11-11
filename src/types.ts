@@ -9,6 +9,10 @@ export interface SessionMeta {
   sourcePath?: string;
   locator?: SessionLocator;
   resumeCommand?: string;
+  /** Read-side storage provenance (OpenCode: "sqlite-v2" | "sqlite-v1" | "storage-files"); other providers unset. */
+  storageFamily?: string;
+  /** Row-side creating-client version signal when the storage exposes one (coarse, pass-through). */
+  storageVersion?: string;
 }
 
 export type SessionLocator =

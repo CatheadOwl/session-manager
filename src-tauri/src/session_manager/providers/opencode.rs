@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -14,6 +15,11 @@ use super::utils::{move_single_file, path_basename, truncate_summary, TITLE_MAX_
 use super::SessionProvider;
 
 const PROVIDER_ID: &str = "opencode";
+
+/// storage_family 标记:V2 现行表族 / V1 legacy 表族 / legacy 文件存储。
+const STORAGE_FAMILY_SQLITE_V2: &str = "sqlite-v2";
+const STORAGE_FAMILY_SQLITE_V1: &str = "sqlite-v1";
+const STORAGE_FAMILY_STORAGE_FILES: &str = "storage-files";
 
 /// Cap on the number of SQLite sessions returned per list scan.
 ///
@@ -277,6 +283,15 @@ fn open_db_readonly(db_path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// Column list shared by the V1/V2 session-row scan queries. Columns 0-5 feed
+/// `db_session_row_to_meta`; 6-10 are kept for query parity with the original
+/// scan (currently unused); column 11 is the preview and column 12 the
+/// row-side version signal (both may be absent on older schemas — read
+/// defensively).
+const SESSION_ROW_COLUMNS: &str = "id, title, directory, parent_id, time_created, time_updated, \
+     model, agent, cost, tokens_input, tokens_output";
+const SESSION_ROW_ORDER: &str = "ORDER BY time_updated DESC, id DESC LIMIT ?";
+
 fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
     let start = Instant::now();
     let conn = match open_db_readonly(db_path) {
@@ -287,53 +302,34 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
         }
     };
 
-    let summary_query = "SELECT id, title, directory, parent_id, time_created, time_updated, \
-            model, agent, cost, tokens_input, tokens_output, \
-            (SELECT json_extract(p.data, '$.text') \
-               FROM message m \
-               JOIN part p ON p.message_id = m.id \
-              WHERE m.session_id = session.id \
-                AND json_extract(p.data, '$.type') = 'text' \
-                AND trim(coalesce(json_extract(p.data, '$.text'), '')) <> '' \
-              ORDER BY m.time_created DESC, m.id DESC, p.time_created DESC, p.id DESC \
-              LIMIT 1) AS preview_text \
-     FROM session \
-     ORDER BY time_updated DESC, id DESC \
-     LIMIT ?";
-    let session_only_query = "SELECT id, title, directory, parent_id, time_created, time_updated, \
-            model, agent, cost, tokens_input, tokens_output, NULL AS preview_text \
-     FROM session \
-     ORDER BY time_updated DESC, id DESC \
-     LIMIT ?";
-
-    let mut stmt = match conn
-        .prepare(summary_query)
-        .or_else(|_| conn.prepare(session_only_query))
-    {
-        Ok(stmt) => stmt,
-        Err(err) => {
-            warn_opencode_scan(db_path, format!("failed to prepare session query: {err}"));
-            return Vec::new();
+    // V1/V2 双表族并存(V2 现行写入、V1 只读历史):两族都读,同 id 去重时
+    // V2 优先、V1 补缺。官方导入的完整性读侧不可观测(导入失败静默缺行),
+    // 不能作为只读一族的前置假设。
+    let mut sessions: Vec<SessionMeta> = Vec::new();
+    let mut seen_session_ids: HashSet<String> = HashSet::new();
+    if sqlite_table_exists(&conn, "session_v2") {
+        for meta in scan_session_family_rows(
+            &conn,
+            db_path,
+            "session_v2",
+            v2_preview_sql(),
+            STORAGE_FAMILY_SQLITE_V2,
+        ) {
+            seen_session_ids.insert(meta.session_id.clone());
+            sessions.push(meta);
         }
-    };
-
-    let rows = match stmt.query_map([DB_LIST_LIMIT], |row| db_session_row_to_meta(row, db_path)) {
-        Ok(rows) => rows,
-        Err(err) => {
-            warn_opencode_scan(db_path, format!("failed to query session rows: {err}"));
-            return Vec::new();
+    }
+    for meta in scan_session_family_rows(
+        &conn,
+        db_path,
+        "session",
+        v1_preview_sql(),
+        STORAGE_FAMILY_SQLITE_V1,
+    ) {
+        if seen_session_ids.insert(meta.session_id.clone()) {
+            sessions.push(meta);
         }
-    };
-
-    let sessions: Vec<_> = rows
-        .filter_map(|result| match result {
-            Ok(meta) => Some(meta),
-            Err(err) => {
-                warn_opencode_scan(db_path, format!("failed to read session row: {err}"));
-                None
-            }
-        })
-        .collect();
+    }
 
     log::debug!(
         "opencode_db_scan finish path={} session_count={} elapsed_ms={}",
@@ -345,7 +341,113 @@ fn scan_sessions_in_db(db_path: &Path) -> Vec<SessionMeta> {
     sessions
 }
 
-fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<SessionMeta> {
+fn sqlite_table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .unwrap_or(false)
+}
+
+/// Latest text for the list preview across a V1-family session.
+fn v1_preview_sql() -> String {
+    "(SELECT json_extract(p.data, '$.text') \
+       FROM message m \
+       JOIN part p ON p.message_id = m.id \
+      WHERE m.session_id = session.id \
+        AND json_extract(p.data, '$.type') = 'text' \
+        AND trim(coalesce(json_extract(p.data, '$.text'), '')) <> '' \
+      ORDER BY m.time_created DESC, m.id DESC, p.time_created DESC, p.id DESC \
+      LIMIT 1)"
+        .to_string()
+}
+
+/// Latest text for the list preview across a V2-family session.
+///
+/// V2 文本有两个载体:信封内嵌 `content[]` 的 text item 与信封自身的
+/// `$.text`(user/system 侧);两侧 UNION 后按信封 seq 取最新。
+fn v2_preview_sql() -> String {
+    "(SELECT x.t FROM ( \
+       SELECT json_extract(it.value, '$.text') AS t, sm.seq \
+         FROM session_message sm, json_each(sm.data, '$.content') it \
+        WHERE sm.session_id = session_v2.id \
+          AND json_extract(it.value, '$.type') = 'text' \
+          AND trim(coalesce(json_extract(it.value, '$.text'), '')) <> '' \
+       UNION ALL \
+       SELECT json_extract(sm2.data, '$.text') AS t, sm2.seq \
+         FROM session_message sm2 \
+        WHERE sm2.session_id = session_v2.id \
+          AND json_type(sm2.data, '$.text') = 'text' \
+          AND trim(coalesce(json_extract(sm2.data, '$.text'), '')) <> '' \
+     ) x ORDER BY x.seq DESC LIMIT 1)"
+        .to_string()
+}
+
+/// Run the session-row scan for one table family.
+///
+/// 查询链逐级降级:version 列或 preview 依赖的 JSON 表/函数在更旧的 schema
+/// 上可能不存在,依次退到无 version、无 preview 的形态。
+fn scan_session_family_rows(
+    conn: &Connection,
+    db_path: &Path,
+    table: &str,
+    preview_sql: String,
+    family: &str,
+) -> Vec<SessionMeta> {
+    let queries = [
+        format!(
+            "SELECT {SESSION_ROW_COLUMNS}, {preview_sql}, version \
+             FROM {table} {SESSION_ROW_ORDER}"
+        ),
+        format!(
+            "SELECT {SESSION_ROW_COLUMNS}, {preview_sql}, NULL AS storage_version \
+             FROM {table} {SESSION_ROW_ORDER}"
+        ),
+        format!(
+            "SELECT {SESSION_ROW_COLUMNS}, NULL AS preview_text, NULL AS storage_version \
+             FROM {table} {SESSION_ROW_ORDER}"
+        ),
+    ];
+
+    for query in queries.iter() {
+        let mut stmt = match conn.prepare(query) {
+            Ok(stmt) => stmt,
+            Err(_) => continue,
+        };
+        let rows = match stmt.query_map([DB_LIST_LIMIT], |row| {
+            db_session_row_to_meta(row, db_path, family)
+        }) {
+            Ok(rows) => rows,
+            Err(err) => {
+                warn_opencode_scan(db_path, format!("failed to query session rows: {err}"));
+                return Vec::new();
+            }
+        };
+        return rows
+            .filter_map(|result| match result {
+                Ok(meta) => Some(meta),
+                Err(err) => {
+                    warn_opencode_scan(db_path, format!("failed to read session row: {err}"));
+                    None
+                }
+            })
+            .collect();
+    }
+
+    warn_opencode_scan(
+        db_path,
+        format!("failed to prepare session query for table {table}"),
+    );
+    Vec::new()
+}
+
+fn db_session_row_to_meta(
+    row: &Row<'_>,
+    db_path: &Path,
+    storage_family: &str,
+) -> rusqlite::Result<SessionMeta> {
     let session_id: String = row.get(0)?;
     let title: Option<String> = row.get(1)?;
     let directory: Option<String> = row.get(2)?;
@@ -353,6 +455,8 @@ fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<Ses
     let created_at: Option<i64> = row.get(4)?;
     let updated_at: Option<i64> = row.get(5)?;
     let summary: Option<String> = row.get(11)?;
+    // version 列在旧 schema/fixture 上可能缺失:读取失败按未提供处理
+    let storage_version: Option<String> = row.get(12).ok();
     let db_path_string = db_path.to_string_lossy().to_string();
 
     Ok(SessionMeta {
@@ -375,6 +479,8 @@ fn db_session_row_to_meta(row: &Row<'_>, db_path: &Path) -> rusqlite::Result<Ses
         }),
         resume_command: Some(format!("opencode -s {session_id}")),
         forked_from_id: parent_id,
+        storage_family: Some(storage_family.to_string()),
+        storage_version,
     })
 }
 
@@ -431,6 +537,8 @@ fn parse_session_file(path: &Path, storage_dir: &Path) -> Option<SessionMeta> {
         locator: Some(SessionLocator::File { path: source_path }),
         resume_command: Some(format!("opencode -s {session_id}")),
         forked_from_id: None,
+        storage_family: Some(STORAGE_FAMILY_STORAGE_FILES.to_string()),
+        storage_version: None,
     })
 }
 
@@ -675,6 +783,33 @@ fn extract_tool_output(value: &Value) -> Option<String> {
     })
 }
 
+/// Extract the tool result from a V2 `content[]` tool item.
+///
+/// V2 把结果放在 `state.content`(文本项数组;实测原生与导入行同构);
+/// 老字段 `state.output` / `state.metadata.output` 作为防御性兜底保留。
+fn extract_v2_tool_output(item: &Value) -> Option<String> {
+    let state = item.get("state")?;
+    match state.get("content") {
+        Some(Value::Array(items)) => {
+            let text = items
+                .iter()
+                .filter_map(|v| v.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+        Some(Value::String(text)) => {
+            if !text.trim().is_empty() {
+                return Some(text.clone());
+            }
+        }
+        _ => {}
+    }
+    extract_tool_output(item)
+}
+
 /// Read tool result outputs from the parts directory.
 /// Mirrors `read_part_tool_calls` for the file-backed storage layout.
 fn read_part_tool_results(part_dir: &Path) -> Option<ToolResultInfo> {
@@ -839,6 +974,100 @@ impl DbMessageDraft {
             tool_result: self.tool_result,
         })
     }
+
+    /// Parse the embedded content of a V2 envelope row into the draft.
+    ///
+    /// 信封类型即角色(原样透传);`idle`/`model-switched` 是生命周期事件,
+    /// 不产生对话内容。user/system 侧文本在 `$.text`,assistant 侧内容在
+    /// `content[]` items(text/tool/file;reasoning 与 V1 part 路径同策略,
+    /// 不入正文,未知类型跳过不崩)。失败的 assistant(`finish=error`、
+    /// `content[]` 为空)把 error 摘要写进正文,保证失败会话如实展示。
+    fn push_envelope_data(&mut self, envelope_type: &str, data: Option<&Value>) {
+        if matches!(envelope_type, "idle" | "model-switched") {
+            return;
+        }
+        let Some(value) = data else {
+            return;
+        };
+
+        if let Some(text) = value.get("text").and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                self.content_parts.push(text.to_string());
+            }
+        }
+
+        if let Some(items) = value.get("content").and_then(Value::as_array) {
+            for item in items {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = item
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.trim().is_empty())
+                        {
+                            self.content_parts.push(text.to_string());
+                        }
+                    }
+                    Some("tool") => self.push_tool_item(item),
+                    Some("file") => {
+                        if let Some(path) = item
+                            .get("path")
+                            .or_else(|| item.get("filename"))
+                            .or_else(|| item.get("name"))
+                            .and_then(Value::as_str)
+                        {
+                            self.content_parts.push(format!("[File: {path}]"));
+                        }
+                    }
+                    // reasoning:与 V1 part 路径同策略,不入正文;未知类型跳过
+                    _ => {}
+                }
+            }
+        }
+
+        if envelope_type == "assistant" {
+            if let Some(err) = value.get("error") {
+                let err_type = err.get("type").and_then(Value::as_str).unwrap_or("error");
+                let err_message = err.get("message").and_then(Value::as_str).unwrap_or("");
+                self.content_parts.push(if err_message.is_empty() {
+                    format!("[error: {err_type}]")
+                } else {
+                    format!("[error: {err_type}] {err_message}")
+                });
+            }
+        }
+    }
+
+    /// V2 content[] 的 tool item:{id(call_id), name, state{input, content,
+    /// metadata, status}, time}——结果载体是 `state.content`(文本项数组),
+    /// 与 V1 part 的 `state.output` 不同。
+    fn push_tool_item(&mut self, item: &Value) {
+        let Some(name) = item.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        let call_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let input = item
+            .get("state")
+            .and_then(|state| state.get("input"))
+            .map(|input| input.to_string())
+            .unwrap_or_default();
+
+        self.content_parts.push(format!("[Tool: {name}]"));
+        self.tool_calls.push(ToolCallInfo {
+            name: name.to_string(),
+            input,
+            call_id: call_id.clone(),
+        });
+        if let Some(output) = extract_v2_tool_output(item) {
+            self.tool_result = Some(ToolResultInfo {
+                content: output,
+                call_id,
+            });
+        }
+    }
 }
 
 fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<SessionMessage>, String> {
@@ -849,7 +1078,62 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Session
         session_id
     );
     let conn = open_db_readonly(db_path)?;
-    let part_join = if part_table_has_session_id(&conn)? {
+    let result = load_messages_from_conn(&conn, session_id);
+    match &result {
+        Ok(messages) => log::debug!(
+            "opencode_db_detail finish path={} session={} message_count={} elapsed_ms={}",
+            db_path.display(),
+            session_id,
+            messages.len(),
+            start.elapsed().as_millis()
+        ),
+        Err(err) => log::warn!(
+            "opencode_db_detail error path={} session={} elapsed_ms={} error={}",
+            db_path.display(),
+            session_id,
+            start.elapsed().as_millis(),
+            err
+        ),
+    }
+    result
+}
+
+/// Dispatch by storage family: prefer the V2 envelope stream for sessions
+/// present in `session_v2`, fall back to the V1 message/part family when the
+/// V2 family yields nothing for that id.
+fn load_messages_from_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<SessionMessage>, String> {
+    // V2 表族优先(导入保留 V1 id,同 id 会话读 V2 信封流);V2 无消息行时
+    // 掉回 V1 表族补缺——导入非 1:1,行缺失读侧不可观测,按事实补读。
+    let has_v2_session =
+        sqlite_table_exists(conn, "session_v2") && session_row_exists(conn, "session_v2", session_id);
+    if has_v2_session {
+        let messages = load_v2_messages(conn, session_id)?;
+        if !messages.is_empty() {
+            return Ok(messages);
+        }
+        log::warn!(
+            "opencode_db_detail v2_family_empty session={} fallback=v1",
+            session_id
+        );
+    }
+    load_v1_messages(conn, session_id)
+}
+
+fn session_row_exists(conn: &Connection, table: &str, session_id: &str) -> bool {
+    conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM [{table}] WHERE id = ?1)"),
+        [session_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .unwrap_or(false)
+}
+
+fn load_v1_messages(conn: &Connection, session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    let part_join = if part_table_has_session_id(conn)? {
         "LEFT JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id"
     } else {
         "LEFT JOIN part p ON p.message_id = m.id"
@@ -910,16 +1194,102 @@ fn load_messages_from_db(db_path: &Path, session_id: &str) -> Result<Vec<Session
         .filter_map(DbMessageDraft::into_message)
         .collect();
 
-    log::debug!(
-        "opencode_db_detail finish path={} session={} message_count={} part_row_count={} elapsed_ms={}",
-        db_path.display(),
-        session_id,
-        messages.len(),
-        part_row_count,
-        start.elapsed().as_millis()
-    );
+    Ok(messages)
+}
+
+/// Load one V2 session's messages from the envelope table.
+///
+/// 信封行在 `session_message`(稀疏 `seq` 游标排序——只 ORDER BY,不得假设
+/// 连续或从 0 起)。内容默认内嵌在信封 data(user/system 侧 `text`、
+/// assistant 侧 `content[]`);若该会话在 `session_part` 有分片行,按
+/// message_id 改从分片读(内容双路:内嵌优先,分片存在时不漏读)。
+/// `idle`/`model-switched` 是生命周期事件信封,不是对话内容,跳过(空内容
+/// 过滤自然丢弃);失败的 assistant(`finish=error`、`content[]` 空)把
+/// error 摘要写进正文——失败会话是一等公民,必须如实展示。
+fn load_v2_messages(conn: &Connection, session_id: &str) -> Result<Vec<SessionMessage>, String> {
+    // 分片双路探测:session_part 非空的会话按 message_id 从分片行读内容
+    let part_rows = load_session_part_rows(conn, session_id);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, time_created, type, data \
+             FROM session_message \
+             WHERE session_id = ? \
+             ORDER BY seq ASC",
+        )
+        .map_err(|e| format!("Failed to prepare OpenCode V2 envelope query: {e}"))?;
+
+    let mut rows = stmt
+        .query([session_id])
+        .map_err(|e| format!("Failed to query OpenCode V2 envelopes: {e}"))?;
+
+    let mut messages: Vec<SessionMessage> = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to read OpenCode V2 envelope row: {e}"))?
+    {
+        let message_id: String = row
+            .get(0)
+            .map_err(|e| format!("OpenCode V2 envelope row is missing id: {e}"))?;
+        let created: Option<i64> = row.get(1).ok();
+        let envelope_type: String = row.get(2).unwrap_or_else(|_| "unknown".to_string());
+        let data_raw: Option<String> = row.get(3).ok();
+        let data: Option<Value> = data_raw
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok());
+
+        let mut draft = DbMessageDraft::from_row(message_id, created, None);
+        draft.role = envelope_type.clone();
+        match part_rows.get(&draft.id) {
+            Some(parts) => {
+                for part in parts {
+                    draft.push_part(part.clone());
+                }
+            }
+            None => draft.push_envelope_data(&envelope_type, data.as_ref()),
+        }
+        if let Some(message) = draft.into_message() {
+            messages.push(message);
+        }
+    }
 
     Ok(messages)
+}
+
+/// Read `session_part` rows for one session, grouped by message (ordinal
+/// order preserved). Defensive by design: the table exists in the current
+/// schema but may be empty or absent across revisions — any failure just
+/// yields an empty map and the caller stays on the embedded path.
+fn load_session_part_rows(conn: &Connection, session_id: &str) -> HashMap<String, Vec<Option<String>>> {
+    let mut map: HashMap<String, Vec<Option<String>>> = HashMap::new();
+    let row_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM session_part WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if row_count <= 0 {
+        return map;
+    }
+
+    let mut stmt = match conn.prepare(
+        "SELECT message_id, data FROM session_part WHERE session_id = ?1 ORDER BY ordinal ASC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            log::warn!("opencode_session_part query failed session={} error={}", session_id, err);
+            return map;
+        }
+    };
+    if let Ok(mut rows) = stmt.query([session_id]) {
+        while let Ok(Some(row)) = rows.next() {
+            let message_id: String = row.get(0).unwrap_or_default();
+            let data: Option<String> = row.get(1).ok();
+            map.entry(message_id).or_default().push(data);
+        }
+    }
+    map
 }
 
 fn part_table_has_session_id(conn: &Connection) -> Result<bool, String> {
@@ -2863,5 +3233,607 @@ mod tests {
     /// Helper to call user_events_internal directly for testing.
     fn provider_user_events_internal_wrapper(session_path: &Path, storage: &Path) -> Vec<String> {
         user_events_internal(session_path, storage).expect("user_events_internal")
+    }
+
+    // ─── V2 表族双读 fixture/tests ────────────────────────────────────────────
+
+    /// V1/V2 双表族并存 fixture(真实库形态):
+    /// - `ses_v1_only`:只在 V1 表(V2 未导入的补缺形态)
+    /// - `ses_both`:两族同 id(导入保留 V1 id),V2 行优先展示
+    /// - `ses_v2_new`:原生 V2 会话,信封 seq 稀疏(4,5,9,14)
+    /// - `ses_v2_failed`:失败会话(finish=error、content[] 空、idle/model-switched)
+    /// - `ses_part_row`:内容走 session_part 分片行(内嵌内容被覆盖)
+    /// - `ses_hybrid`:V2 无信封行 → 掉回 V1 表族补缺(消息级)
+    /// - `ses_v2_empty`:V2 会话无任何消息
+    fn write_sqlite_v2_fixture(base: &Path) -> PathBuf {
+        std::fs::create_dir_all(base).expect("create opencode base");
+        let db_path = base.join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open sqlite fixture");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER,
+                version TEXT
+            );
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE session_v2 (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                directory TEXT,
+                parent_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                model TEXT,
+                agent TEXT,
+                cost REAL,
+                tokens_input INTEGER,
+                tokens_output INTEGER,
+                version TEXT
+            );
+            CREATE TABLE session_message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                time_created INTEGER,
+                data TEXT
+            );
+            CREATE TABLE session_part (
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                type TEXT,
+                call_id TEXT,
+                time_created INTEGER,
+                data TEXT
+            );
+            "#,
+        )
+        .expect("create sqlite schema");
+
+        // V1-only 会话
+        conn.execute(
+            "INSERT INTO session VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_v1_only",
+                "V1 Only",
+                "/tmp/proj-a",
+                Option::<String>::None,
+                1_740_000_000_000i64,
+                1_740_000_010_000i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "1.18.14"
+            ],
+        )
+        .expect("insert v1-only session");
+        conn.execute(
+            "INSERT INTO message VALUES (?1,?2,?3,?4)",
+            params![
+                "msg_v1_only",
+                "ses_v1_only",
+                1_740_000_001_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert v1-only message");
+        conn.execute(
+            "INSERT INTO part VALUES (?1,?2,?3,?4,?5)",
+            params![
+                "part_v1_only",
+                "msg_v1_only",
+                "ses_v1_only",
+                1_740_000_001_100i64,
+                serde_json::json!({"type":"text","text":"From V1 only"}).to_string()
+            ],
+        )
+        .expect("insert v1-only part");
+
+        // 导入形态:两族同 id
+        conn.execute(
+            "INSERT INTO session VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_both",
+                "V1 Title",
+                "/tmp/proj-b",
+                Option::<String>::None,
+                1_740_000_000_500i64,
+                1_740_000_020_000i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "1.2.26"
+            ],
+        )
+        .expect("insert ses_both v1 row");
+        conn.execute(
+            "INSERT INTO message VALUES (?1,?2,?3,?4)",
+            params![
+                "msg_both_v1",
+                "ses_both",
+                1_740_000_002_000i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert ses_both v1 message");
+        conn.execute(
+            "INSERT INTO part VALUES (?1,?2,?3,?4,?5)",
+            params![
+                "part_both_v1",
+                "msg_both_v1",
+                "ses_both",
+                1_740_000_002_100i64,
+                serde_json::json!({"type":"text","text":"From V1 part"}).to_string()
+            ],
+        )
+        .expect("insert ses_both v1 part");
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_both",
+                "V2 Title",
+                "/tmp/proj-b",
+                Option::<String>::None,
+                1_740_000_000_500i64,
+                1_740_000_020_000i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "1.2.26"
+            ],
+        )
+        .expect("insert ses_both v2 row");
+        conn.execute(
+            "INSERT INTO session_message VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                "env_both",
+                "ses_both",
+                "user",
+                4i64,
+                1_740_000_002_000i64,
+                serde_json::json!({"text":"From V2 envelope","time":{}}).to_string()
+            ],
+        )
+        .expect("insert ses_both envelope");
+
+        // 原生 V2 会话:tool 调用 + reasoning/未知 item 跳过 + idle 丢弃
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_v2_new",
+                "V2 Native",
+                "/tmp/probe",
+                Option::<String>::None,
+                1_740_000_003_000i64,
+                1_740_000_009_000i64,
+                "model-v2",
+                "build",
+                0.0f64,
+                1i64,
+                2i64,
+                "2.2.7"
+            ],
+        )
+        .expect("insert ses_v2_new");
+        let envelopes: [(&str, i64, &str, serde_json::Value); 4] = [
+            (
+                "env_u1",
+                4,
+                "user",
+                serde_json::json!({"text":"list the directory","files":[],"time":{}}),
+            ),
+            (
+                "env_a1",
+                5,
+                "assistant",
+                serde_json::json!({
+                    "agent":"build",
+                    "model":{"id":"m","providerID":"p"},
+                    "content":[
+                        {"type":"text","text":"Let me look"},
+                        {"type":"tool","id":"call_v2_1","name":"read","executed":false,
+                         "state":{"status":"completed","input":{"path":"/tmp/probe"},
+                                  "content":[{"type":"text","text":"a.md\nb.txt"}],"metadata":{}},
+                         "time":{}}
+                    ],
+                    "finish":"tool-calls",
+                    "time":{}
+                }),
+            ),
+            (
+                "env_a2",
+                9,
+                "assistant",
+                serde_json::json!({
+                    "content":[
+                        {"type":"text","text":"2 files found"},
+                        {"type":"reasoning","text":"internal reasoning"},
+                        {"type":"agent","unknown":true}
+                    ],
+                    "finish":"stop"
+                }),
+            ),
+            (
+                "env_idle1",
+                14,
+                "idle",
+                serde_json::json!({"outcome":"succeeded","time":{}}),
+            ),
+        ];
+        for (id, seq, kind, data) in envelopes {
+            conn.execute(
+                "INSERT INTO session_message VALUES (?1,?2,?3,?4,?5,?6)",
+                params![id, "ses_v2_new", kind, seq, 1_740_000_003_000i64 + seq * 100, data.to_string()],
+            )
+            .expect("insert ses_v2_new envelope");
+        }
+
+        // 失败会话(finish=error、content[] 空)
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_v2_failed",
+                Option::<String>::None,
+                "C:/Users/someone",
+                Option::<String>::None,
+                1_740_000_004_000i64,
+                1_740_000_008_000i64,
+                "model-v2",
+                "build",
+                0.0f64,
+                0i64,
+                0i64,
+                "2.2.7"
+            ],
+        )
+        .expect("insert ses_v2_failed");
+        let failed: [(&str, i64, &str, serde_json::Value); 4] = [
+            (
+                "env_fu",
+                4,
+                "user",
+                serde_json::json!({"text":"hello","files":[],"time":{}}),
+            ),
+            (
+                "env_fa",
+                5,
+                "assistant",
+                serde_json::json!({
+                    "content":[],
+                    "finish":"error",
+                    "error":{"type":"provider.free-limit","message":"Free usage limit reached.","status":429}
+                }),
+            ),
+            (
+                "env_fi",
+                7,
+                "idle",
+                serde_json::json!({"outcome":"failed","error":{"type":"provider.free-limit"},"time":{}}),
+            ),
+            (
+                "env_fm",
+                16,
+                "model-switched",
+                serde_json::json!({"model":{"id":"m2"},"previous":{"id":"m1"},"time":{}}),
+            ),
+        ];
+        for (id, seq, kind, data) in failed {
+            conn.execute(
+                "INSERT INTO session_message VALUES (?1,?2,?3,?4,?5,?6)",
+                params![id, "ses_v2_failed", kind, seq, 1_740_000_004_000i64 + seq * 100, data.to_string()],
+            )
+            .expect("insert ses_v2_failed envelope");
+        }
+
+        // session_part 分片行覆盖内嵌内容的形态
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_part_row",
+                "Part Row Session",
+                "/tmp/proj-c",
+                Option::<String>::None,
+                1_740_000_005_000i64,
+                1_740_000_006_000i64,
+                "model-v2",
+                "build",
+                0.0f64,
+                1i64,
+                2i64,
+                "2.2.7"
+            ],
+        )
+        .expect("insert ses_part_row");
+        conn.execute(
+            "INSERT INTO session_message VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                "env_pa",
+                "ses_part_row",
+                "assistant",
+                5i64,
+                1_740_000_005_100i64,
+                serde_json::json!({"content":[{"type":"text","text":"embedded stale"}],"finish":"stop"}).to_string()
+            ],
+        )
+        .expect("insert ses_part_row envelope");
+        conn.execute(
+            "INSERT INTO session_part VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                "env_pa",
+                "ses_part_row",
+                0i64,
+                "text",
+                Option::<String>::None,
+                1_740_000_005_200i64,
+                serde_json::json!({"type":"text","text":"from part rows"}).to_string()
+            ],
+        )
+        .expect("insert ses_part_row part");
+
+        // V2 无信封行 → 掉回 V1 表族补缺(消息级)
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_hybrid",
+                "Hybrid",
+                "/tmp/proj-d",
+                Option::<String>::None,
+                1_740_000_007_000i64,
+                1_740_000_007_500i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "1.18.13"
+            ],
+        )
+        .expect("insert ses_hybrid v2 row");
+        conn.execute(
+            "INSERT INTO session VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_hybrid",
+                "Hybrid",
+                "/tmp/proj-d",
+                Option::<String>::None,
+                1_740_000_007_000i64,
+                1_740_000_007_500i64,
+                "model-a",
+                "agent-a",
+                0.0f64,
+                1i64,
+                2i64,
+                "1.18.13"
+            ],
+        )
+        .expect("insert ses_hybrid v1 row");
+        conn.execute(
+            "INSERT INTO message VALUES (?1,?2,?3,?4)",
+            params![
+                "msg_hybrid",
+                "ses_hybrid",
+                1_740_000_007_200i64,
+                serde_json::json!({"role":"user"}).to_string()
+            ],
+        )
+        .expect("insert ses_hybrid message");
+        conn.execute(
+            "INSERT INTO part VALUES (?1,?2,?3,?4,?5)",
+            params![
+                "part_hybrid",
+                "msg_hybrid",
+                "ses_hybrid",
+                1_740_000_007_300i64,
+                serde_json::json!({"type":"text","text":"Rescued from V1"}).to_string()
+            ],
+        )
+        .expect("insert ses_hybrid part");
+
+        // V2 会话无任何消息(空会话不崩)
+        conn.execute(
+            "INSERT INTO session_v2 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                "ses_v2_empty",
+                "Empty V2",
+                "/tmp/proj-e",
+                Option::<String>::None,
+                1_740_000_008_500i64,
+                1_740_000_008_600i64,
+                "model-v2",
+                "build",
+                0.0f64,
+                0i64,
+                0i64,
+                "2.2.7"
+            ],
+        )
+        .expect("insert ses_v2_empty");
+
+        db_path
+    }
+
+    #[test]
+    fn scan_sessions_merges_v2_family_with_v2_preferred_dedup() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let sessions = scan_sessions_from_scan_root(temp.path());
+        let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<HashSet<_>>().len(),
+            "no duplicate session ids across table families"
+        );
+
+        // 导入保留 id:同 id 两族并存只出一行,V2 版本优先
+        let both: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.session_id == "ses_both")
+            .collect();
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].title.as_deref(), Some("V2 Title"));
+        assert_eq!(both[0].storage_family.as_deref(), Some("sqlite-v2"));
+
+        let v1_only = sessions
+            .iter()
+            .find(|s| s.session_id == "ses_v1_only")
+            .expect("v1-only session listed via V1 补缺");
+        assert_eq!(v1_only.storage_family.as_deref(), Some("sqlite-v1"));
+        assert_eq!(v1_only.storage_version.as_deref(), Some("1.18.14"));
+
+        let native = sessions
+            .iter()
+            .find(|s| s.session_id == "ses_v2_new")
+            .expect("native v2 session listed");
+        assert_eq!(native.storage_family.as_deref(), Some("sqlite-v2"));
+        assert_eq!(native.storage_version.as_deref(), Some("2.2.7"));
+        assert_eq!(
+            native.locator,
+            Some(SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_v2_new".to_string(),
+            })
+        );
+
+        // 失败会话(title 缺失 → directory basename 兜底)与空会话都进入列表
+        assert!(sessions.iter().any(|s| s.session_id == "ses_v2_failed"));
+        assert!(sessions.iter().any(|s| s.session_id == "ses_v2_empty"));
+
+        // V2 preview 取 seq 最新的 text(内嵌 content[] 侧)
+        assert_eq!(native.summary.as_deref(), Some("2 files found"));
+    }
+
+    #[test]
+    fn load_messages_reads_v2_envelope_content() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_v2_new").expect("load v2 messages");
+
+        // idle 丢弃、reasoning/未知 item 跳过:seq 4(user) → 5(assistant+tool) → 9(assistant text)
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].content, "list the directory");
+        assert_eq!(messages[0].ts, Some(1_740_000_003_400));
+
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].content, "Let me look\n[Tool: read]");
+        let calls = messages[1].tool_calls.as_ref().expect("tool calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].call_id.as_deref(), Some("call_v2_1"));
+        assert!(calls[0].input.contains("/tmp/probe"));
+        let result = messages[1].tool_result.as_ref().expect("tool result");
+        assert_eq!(result.content, "a.md\nb.txt");
+        assert_eq!(result.call_id.as_deref(), Some("call_v2_1"));
+
+        assert_eq!(messages[2].role, "assistant");
+        assert_eq!(messages[2].content, "2 files found");
+        assert!(messages[2].tool_calls.is_none());
+    }
+
+    #[test]
+    fn load_messages_surfaces_failed_v2_assistant_error() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_v2_failed").expect("load failed session");
+
+        // user + error assistant;idle/model-switched 生命周期信封丢弃
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "hello");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(
+            messages[1].content,
+            "[error: provider.free-limit] Free usage limit reached."
+        );
+    }
+
+    #[test]
+    fn load_messages_v2_part_rows_override_embedded_content() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_part_row").expect("load part-row session");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "from part rows");
+    }
+
+    #[test]
+    fn load_messages_v2_falls_back_to_v1_family_when_envelopes_missing() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_hybrid").expect("load hybrid session");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "Rescued from V1");
+    }
+
+    #[test]
+    fn load_messages_v2_empty_session_returns_empty() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+
+        let messages =
+            super::load_messages_from_db(&db_path, "ses_v2_empty").expect("load empty session");
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn load_session_detail_reads_v2_session_through_registry() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = write_sqlite_v2_fixture(temp.path());
+        let registry = build_provider_registry();
+        let handle = SessionHandle {
+            provider_id: "opencode".to_string(),
+            session_id: "ses_v2_new".to_string(),
+            locator: SessionLocator::Database {
+                path: db_path.to_string_lossy().to_string(),
+                record_id: "ses_v2_new".to_string(),
+            },
+        };
+
+        let detail = load_session_detail_for_handle(&registry, &handle).expect("load v2 detail");
+        assert_eq!(detail.messages.len(), 3);
+        assert_eq!(
+            detail.qa_pairs.len(),
+            1,
+            "user → assistant(tool) → assistant 组成 QA 对"
+        );
     }
 }

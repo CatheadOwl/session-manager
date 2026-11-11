@@ -446,6 +446,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         }),
         resume_command: Some(format!("claude --resume {session_id}")),
         forked_from_id: None,
+        storage_family: None,
+        storage_version: None,
     })
 }
 

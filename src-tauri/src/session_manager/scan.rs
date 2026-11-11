@@ -286,6 +286,8 @@ mod tests {
             locator: Some(SessionLocator::File { path }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         }
     }
 

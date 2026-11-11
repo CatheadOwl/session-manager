@@ -219,6 +219,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         locator: Some(SessionLocator::File { path: source_path }),
         resume_command: Some(format!("gemini --resume {session_id}")),
         forked_from_id: None,
+        storage_family: None,
+        storage_version: None,
     })
 }
 

@@ -815,6 +815,8 @@ mod tests {
             locator: path.map(|p| SessionLocator::File { path: p }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         };
 
         let registry = super::super::build_provider_registry();
@@ -884,6 +886,8 @@ mod tests {
             }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         };
         let local_meta = SessionMeta {
             provider_id: "claude".to_string(),
@@ -899,6 +903,8 @@ mod tests {
             }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         };
 
         let registry = super::super::build_provider_registry();
@@ -961,6 +967,8 @@ mod tests {
             }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         };
 
         let registry = super::super::build_provider_registry();
@@ -1006,6 +1014,8 @@ mod tests {
             }),
             resume_command: None,
             forked_from_id: None,
+            storage_family: None,
+            storage_version: None,
         };
 
         let registry = super::super::build_provider_registry();

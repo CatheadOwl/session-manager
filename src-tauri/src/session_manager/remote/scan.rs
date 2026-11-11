@@ -662,6 +662,8 @@ mod tests {
                 locator: Some(SessionLocator::File { path: file }),
                 resume_command: None,
                 forked_from_id: None,
+                storage_family: None,
+                storage_version: None,
             })
         }
         fn move_session(&self, _source: &Path, _dest: &Path) -> Result<(), String> {

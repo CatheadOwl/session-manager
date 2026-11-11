@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode V2 support: sessions are now read from BOTH storage families — the V1 legacy tables (`session`/`message`/`part`) and the 2.x tables (`session_v2`/`session_message`/`session_part`) — deduplicated by session id with V2 preferred and V1 filling gaps. V2 sessions render the envelope stream (ordering by the sparse `seq` cursor, embedded `content[]` with tool calls and tool results from `state.content`); lifecycle-only envelopes (idle / model-switched) are dropped; failed assistants surface their error summary, so failed sessions display truthfully instead of going blank; `session_part` rows take precedence per message as a storage-location fallback with the V1 family as a last resort. Storage provenance rides on SessionMeta (`storageFamily` / `storageVersion`). Design and acceptance evidence: the JsonlReader knowledge base (`agents/opencode/`).
+- Multi-database location for OpenCode, per the official database-path rules: `$OPENCODE_DB` is honored (absolute path, or relative to the data directory; `:memory:` skipped), and channel-suffixed databases (`opencode-<channel>.db`) are scanned alongside the default `opencode.db`.
+- V2 user-side file attachments and agent mentions render as `[Attachment: name (mime)]` / `[Agent: name]` placeholders; tool results include file items from `state.content`.
+
+### Fixed
+
+- "OpenCode V2 sessions are invisible": the reader only read the V1 table family, so sessions created after the 2.0 cutover — and everything on a fresh 2.x install — never appeared. The migration's completeness is unobservable from the read side (imports can silently drop rows), so the reader now reads both families instead of assuming a completed import. Troubleshooting notes for the resume launcher (workDir-missing flash, dev-build headless-console artifact) landed in [docs/resume-launch.md](docs/resume-launch.md).
+
 ## [0.4.5] - 2026-11-04
 
 ### Fixed

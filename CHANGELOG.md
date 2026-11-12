@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-12
+
 ### Added
 
 - OpenCode V2 support: sessions are now read from BOTH storage families — the V1 legacy tables (`session`/`message`/`part`) and the 2.x tables (`session_v2`/`session_message`/`session_part`) — deduplicated by session id with V2 preferred and V1 filling gaps. V2 sessions render the envelope stream (ordering by the sparse `seq` cursor, embedded `content[]` with tool calls and tool results from `state.content`); lifecycle-only envelopes (idle / model-switched) are dropped; failed assistants surface their error summary, so failed sessions display truthfully instead of going blank; `session_part` rows take precedence per message as a storage-location fallback with the V1 family as a last resort. Storage provenance rides on SessionMeta (`storageFamily` / `storageVersion`).

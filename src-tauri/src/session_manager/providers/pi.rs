@@ -44,7 +44,10 @@ impl SessionProvider for PiProvider {
     }
 
     fn roots(&self) -> Vec<PathBuf> {
-        vec![crate::config::get_pi_sessions_dir()]
+        vec![
+            crate::config::get_pi_sessions_dir(),
+            crate::config::get_pi_archive_dir(),
+        ]
     }
 
     fn scan_sessions(&self, root: &Path) -> Vec<SessionMeta> {
@@ -63,8 +66,8 @@ impl SessionProvider for PiProvider {
         parse_session(path)
     }
 
-    fn move_session(&self, _source: &Path, _dest: &Path) -> Result<(), String> {
-        Err("Pi does not support archive".to_string())
+    fn move_session(&self, source: &Path, dest: &Path) -> Result<(), String> {
+        move_pi_session(source, dest)
     }
 
     fn user_events(&self, path: &Path) -> Result<Vec<String>, String> {
@@ -448,9 +451,9 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
 
 // ─── Move session ─────────────────────────────────────────────────────────
 
-/// Physical file move logic — kept for when archive support is added.
-/// Currently unused because Pi does not support archive/restore operations.
-#[allow(dead_code)]
+/// Physical file move for archive/restore: rename the session file into the
+/// target root, carrying along the sidecar directory (Pi's `{stem}/run-N/`
+/// sub-run data) when present.
 fn move_pi_session(source: &Path, dest: &Path) -> Result<(), String> {
     move_single_file(source, dest)?;
 
@@ -502,7 +505,7 @@ mod tests {
     fn pi_provider_trait_impl() {
         let provider = PiProvider;
         assert_eq!(provider.id(), "pi");
-        assert_eq!(provider.roots().len(), 1);
+        assert_eq!(provider.roots().len(), 2);
     }
 
     #[test]
@@ -846,12 +849,43 @@ mod tests {
     }
 
     #[test]
-    fn move_session_returns_err_for_archive() {
+    fn move_session_moves_file_to_archive_dir() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("019fb1ad-aa6c-7d65-b92d-24d5547df15f.jsonl");
+        write_pi_session(&source, "019fb1ad-aa6c-7d65-b92d-24d5547df15f", "/tmp", &[]);
+        let dest_dir = temp.path().join("archived");
+
         let provider = PiProvider;
-        let err = provider
-            .move_session(Path::new("/tmp/source.jsonl"), Path::new("/tmp/dest"))
-            .expect_err("should return error");
-        assert!(err.contains("does not support archive"));
+        provider
+            .move_session(&source, &dest_dir)
+            .expect("move should succeed");
+
+        assert!(!source.exists());
+        assert!(dest_dir
+            .join("019fb1ad-aa6c-7d65-b92d-24d5547df15f.jsonl")
+            .exists());
+    }
+
+    #[test]
+    fn move_session_carries_sidecar_directory() {
+        let temp = tempdir().expect("tempdir");
+        let stem = "019fb1ad-aa6c-7d65-b92d-24d5547df15f";
+        let source = temp.path().join(format!("{stem}.jsonl"));
+        write_pi_session(&source, stem, "/tmp", &[]);
+        let sidecar = temp.path().join(stem).join("run-1");
+        std::fs::create_dir_all(&sidecar).expect("create sidecar");
+        std::fs::write(sidecar.join("session.jsonl"), "{}").expect("write sub-run");
+        let dest_dir = temp.path().join("archived");
+
+        let provider = PiProvider;
+        provider
+            .move_session(&source, &dest_dir)
+            .expect("move should succeed");
+
+        assert!(!source.exists());
+        assert!(!temp.path().join(stem).exists());
+        let moved_sidecar = dest_dir.join(stem).join("run-1").join("session.jsonl");
+        assert!(moved_sidecar.exists());
     }
 
     #[test]

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Markdown links in session messages open in the system browser (#7): clicks on `http(s)`/`mailto` links are handed to the default application via `tauri-plugin-opener` instead of relying on `target="_blank"`, which the in-app webview drops. The opener capability is scoped to those protocols only (`javascript:`/`tel:` hrefs render inert — sanitization empties the href and the click gate cancels navigation), so session content cannot open local paths or arbitrary apps.
+- Pi sessions can now be archived and restored. Archive moves a session's `.jsonl` (plus its sidecar `run-N/` sub-run directory, when present) from `~/.pi/agent/sessions` to a new sibling `~/.pi/agent/sessions_archived` folder, preserving the per-project subdirectory layout; restore moves it back. The Archived scope, folder-level batch archive, and single-session archive/restore buttons now apply to Pi like the other file-backed providers. Proposed by @keeganwitt in #6.
 
 ## [0.4.6] - 2026-11-12
 

@@ -75,6 +75,10 @@ pub fn get_pi_sessions_dir() -> PathBuf {
     get_home_dir().join(".pi").join("agent").join("sessions")
 }
 
+pub fn get_pi_archive_dir() -> PathBuf {
+    get_home_dir().join(".pi").join("agent").join("sessions_archived")
+}
+
 pub fn get_opencode_base_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {

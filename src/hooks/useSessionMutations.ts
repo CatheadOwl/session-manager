@@ -102,6 +102,13 @@ export function useSessionMutations(
   // exists. On that sentinel error, ask once; confirming resends the same
   // mutation variables with overwrite: true. Cancelling stays silent, the
   // same convention as cancelling a native dialog elsewhere in the app.
+  //
+  // Both handlers go through mutateAsync + promise chaining instead of
+  // mutate(variables, { callbacks }): the mutate-call callbacks live on the
+  // MutationObserver and are wiped when the component re-renders while the
+  // mutation is pending (this app re-renders on every cache invalidation),
+  // which silently dropped both the conflict dialog and the success side
+  // effects. The mutateAsync promise is observer-independent.
   const confirmOverwriteAndResend = useCallback(
     async (
       error: Error,
@@ -128,16 +135,13 @@ export function useSessionMutations(
       const input = getLifecycleOperationOptions(session);
       if (!input) return;
       const resend = (retry: DeleteSessionOptions) =>
-        archiveMutation.mutate(retry, {
-          onSuccess: () => onSessionArchived(),
-          onError: (retryError) => window.alert(retryError.message),
-        });
-      archiveMutation.mutate(
-        input,
-        {
-          onSuccess: () => onSessionArchived(),
-          onError: (error) => void confirmOverwriteAndResend(error, input, resend),
-        },
+        archiveMutation.mutateAsync(retry).then(
+          () => onSessionArchived(),
+          (retryError: Error) => window.alert(retryError.message),
+        );
+      archiveMutation.mutateAsync(input).then(
+        () => onSessionArchived(),
+        (error: Error) => void confirmOverwriteAndResend(error, input, resend),
       );
     },
     [archiveMutation, onSessionArchived, confirmOverwriteAndResend],
@@ -148,16 +152,13 @@ export function useSessionMutations(
       const input = getLifecycleOperationOptions(session);
       if (!input) return;
       const resend = (retry: DeleteSessionOptions) =>
-        restoreMutation.mutate(retry, {
-          onSuccess: () => onSessionRestored(),
-          onError: (retryError) => window.alert(retryError.message),
-        });
-      restoreMutation.mutate(
-        input,
-        {
-          onSuccess: () => onSessionRestored(),
-          onError: (error) => void confirmOverwriteAndResend(error, input, resend),
-        },
+        restoreMutation.mutateAsync(retry).then(
+          () => onSessionRestored(),
+          (retryError: Error) => window.alert(retryError.message),
+        );
+      restoreMutation.mutateAsync(input).then(
+        () => onSessionRestored(),
+        (error: Error) => void confirmOverwriteAndResend(error, input, resend),
       );
     },
     [restoreMutation, onSessionRestored, confirmOverwriteAndResend],
@@ -168,10 +169,13 @@ export function useSessionMutations(
     (action: FolderLifecycleAction, items: DeleteSessionOptions[]) => {
       if (items.length === 0) return;
       const mutate = action === "archive" ? archiveSessionsMutation : restoreSessionsMutation;
-      mutate.mutate(items, {
-        onSuccess: (outcomes) => onFolderOperationComplete(outcomes, action),
-        onError: (error) => window.alert(error.message),
-      });
+      // mutateAsync for the same observer-callback race as the single-session
+      // handlers: batch results feed the conflict-escalation flow, which must
+      // not depend on mutate-call callbacks surviving re-renders.
+      mutate.mutateAsync(items).then(
+        (outcomes) => onFolderOperationComplete(outcomes, action),
+        (error: Error) => window.alert(error.message),
+      );
     },
     [archiveSessionsMutation, restoreSessionsMutation, onFolderOperationComplete],
   );

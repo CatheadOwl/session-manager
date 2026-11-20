@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Markdown links in session messages open in the system browser (#7): clicks on `http(s)`/`mailto` links are handed to the default application via `tauri-plugin-opener` instead of relying on `target="_blank"`, which the in-app webview drops. The opener capability is scoped to those protocols only (`javascript:`/`tel:` hrefs render inert — sanitization empties the href and the click gate cancels navigation), so session content cannot open local paths or arbitrary apps.
+
 ## [0.4.6] - 2026-11-12
 
 ### Added

@@ -17,7 +17,23 @@ export interface SessionHandleOptions {
 
 export interface DeleteSessionOptions extends SessionHandleOptions {
   sourcePath: string;
+  /**
+   * Allow replacing an existing session at the destination on archive/restore.
+   * Only set after the user confirmed a destination conflict; absent keeps the
+   * backend default (refuse the move).
+   */
+  overwrite?: boolean;
 }
+
+/**
+ * Sentinel prefix the backend puts on archive/restore errors when the move
+ * would replace an existing session at the destination. The UI matches on it
+ * to offer an explicit "replace?" confirm instead of a raw failure alert.
+ */
+export const DESTINATION_CONFLICT_PREFIX = "Destination conflict:";
+
+export const isDestinationConflict = (error: string): boolean =>
+  error.startsWith(DESTINATION_CONFLICT_PREFIX);
 
 const databaseRecordId = (
   locator: Extract<SessionLocator, { kind: "database" }>,
@@ -168,19 +184,21 @@ export const sessionsApi = {
   },
 
   async archive(options: DeleteSessionOptions): Promise<boolean> {
-    const { providerId, sessionId, sourcePath, locator } = options;
-    return await invoke("archive_session", { providerId, sessionId, sourcePath, locator });
+    const { providerId, sessionId, sourcePath, locator, overwrite } = options;
+    return await invoke("archive_session", { providerId, sessionId, sourcePath, locator, overwrite });
   },
 
   async archiveMany(
     items: DeleteSessionOptions[],
   ): Promise<DeleteSessionResult[]> {
+    // Each item is one batch request entry; a per-item `overwrite` (set only
+    // after the user confirmed the conflict) flows through serialization.
     return await invoke("archive_sessions", { items });
   },
 
   async restore(options: DeleteSessionOptions): Promise<boolean> {
-    const { providerId, sessionId, sourcePath, locator } = options;
-    return await invoke("restore_session", { providerId, sessionId, sourcePath, locator });
+    const { providerId, sessionId, sourcePath, locator, overwrite } = options;
+    return await invoke("restore_session", { providerId, sessionId, sourcePath, locator, overwrite });
   },
 
   async restoreMany(

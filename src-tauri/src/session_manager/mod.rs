@@ -462,12 +462,14 @@ mod tests {
                 session_id: "s1".to_string(),
                 source_path: "/tmp/s1".to_string(),
                 locator: None,
+                overwrite: None,
             },
             DeleteSessionRequest {
                 provider_id: "claude".to_string(),
                 session_id: "s2".to_string(),
                 source_path: "/tmp/s2".to_string(),
                 locator: None,
+                overwrite: None,
             },
         ];
 
@@ -496,6 +498,7 @@ mod tests {
                 path: "Z:/missing/opencode.db".to_string(),
                 record_id: "row-a".to_string(),
             }),
+            overwrite: None,
         }];
 
         let registry = test_registry();
@@ -521,9 +524,9 @@ mod tests {
         };
         let registry = test_registry();
 
-        let archive_err = archive_session_for_handle(&registry, &handle)
+        let archive_err = archive_session_for_handle(&registry, &handle, false)
             .expect_err("database archive should be unsupported");
-        let restore_err = restore_session_for_handle(&registry, &handle)
+        let restore_err = restore_session_for_handle(&registry, &handle, false)
             .expect_err("database restore should be unsupported");
 
         assert_eq!(
@@ -560,6 +563,7 @@ mod tests {
                 locator: Some(SessionLocator::File {
                     path: source.to_string_lossy().to_string(),
                 }),
+                overwrite: None,
             },
             DeleteSessionRequest {
                 provider_id: "opencode".to_string(),
@@ -569,6 +573,7 @@ mod tests {
                     path: "Z:/missing/opencode.db".to_string(),
                     record_id: "row-a".to_string(),
                 }),
+                overwrite: None,
             },
         ];
 

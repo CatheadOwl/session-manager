@@ -194,8 +194,8 @@ async fn g2_remote_v1_end_to_end() {
         err.contains("Remote"),
         "delete rejection must mention remote, got: {err}"
     );
-    assert!(operations::archive_session_for_handle(&registry, &handle).is_err());
-    assert!(operations::restore_session_for_handle(&registry, &handle).is_err());
+    assert!(operations::archive_session_for_handle(&registry, &handle, false).is_err());
+    assert!(operations::restore_session_for_handle(&registry, &handle, false).is_err());
     println!("[g2.3] lifecycle entries rejected: delete/archive/restore");
 
     // ---- G2.4 local perf: report-only artifact ----

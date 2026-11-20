@@ -1,5 +1,10 @@
 import { useCallback } from "react";
-import { type DeleteSessionOptions, type DeleteSessionResult } from "@/lib/api/sessions";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import {
+  isDestinationConflict,
+  type DeleteSessionOptions,
+  type DeleteSessionResult,
+} from "@/lib/api/sessions";
 import {
   useArchiveSessionMutation,
   useArchiveSessionsMutation,
@@ -20,7 +25,7 @@ interface UseSessionMutationsOptions {
   onSessionDeleted: () => void;
   onSessionArchived: () => void;
   onSessionRestored: () => void;
-  onFolderOperationComplete: (outcomes: DeleteSessionResult[]) => void;
+  onFolderOperationComplete: (outcomes: DeleteSessionResult[], action: FolderLifecycleAction) => void;
 }
 
 /**
@@ -92,34 +97,70 @@ export function useSessionMutations(
     [deleteSessionsMutation, onSessionDeleted],
   );
 
+  // ─── Destination-conflict handling (single-session) ────────────────
+  // The backend refuses archive/restore when the destination name already
+  // exists. On that sentinel error, ask once; confirming resends the same
+  // mutation variables with overwrite: true. Cancelling stays silent, the
+  // same convention as cancelling a native dialog elsewhere in the app.
+  const confirmOverwriteAndResend = useCallback(
+    async (
+      error: Error,
+      input: DeleteSessionOptions,
+      resend: (input: DeleteSessionOptions) => void,
+    ) => {
+      if (!isDestinationConflict(error.message)) {
+        window.alert(error.message);
+        return;
+      }
+      const replace = await confirm(
+        "A session already exists at the destination. Replace it?",
+        { title: "Destination conflict", kind: "warning" },
+      );
+      if (replace) {
+        resend({ ...input, overwrite: true });
+      }
+    },
+    [],
+  );
+
   const handleArchive = useCallback(
     (session: SessionMeta) => {
       const input = getLifecycleOperationOptions(session);
       if (!input) return;
+      const resend = (retry: DeleteSessionOptions) =>
+        archiveMutation.mutate(retry, {
+          onSuccess: () => onSessionArchived(),
+          onError: (retryError) => window.alert(retryError.message),
+        });
       archiveMutation.mutate(
         input,
         {
           onSuccess: () => onSessionArchived(),
-          onError: (error) => window.alert(error.message),
+          onError: (error) => void confirmOverwriteAndResend(error, input, resend),
         },
       );
     },
-    [archiveMutation, onSessionArchived],
+    [archiveMutation, onSessionArchived, confirmOverwriteAndResend],
   );
 
   const handleRestore = useCallback(
     (session: SessionMeta) => {
       const input = getLifecycleOperationOptions(session);
       if (!input) return;
+      const resend = (retry: DeleteSessionOptions) =>
+        restoreMutation.mutate(retry, {
+          onSuccess: () => onSessionRestored(),
+          onError: (retryError) => window.alert(retryError.message),
+        });
       restoreMutation.mutate(
         input,
         {
           onSuccess: () => onSessionRestored(),
-          onError: (error) => window.alert(error.message),
+          onError: (error) => void confirmOverwriteAndResend(error, input, resend),
         },
       );
     },
-    [restoreMutation, onSessionRestored],
+    [restoreMutation, onSessionRestored, confirmOverwriteAndResend],
   );
 
   // ─── Folder-level handlers ────────────────────────────────────────
@@ -128,7 +169,7 @@ export function useSessionMutations(
       if (items.length === 0) return;
       const mutate = action === "archive" ? archiveSessionsMutation : restoreSessionsMutation;
       mutate.mutate(items, {
-        onSuccess: onFolderOperationComplete,
+        onSuccess: (outcomes) => onFolderOperationComplete(outcomes, action),
         onError: (error) => window.alert(error.message),
       });
     },

@@ -268,6 +268,11 @@ pub struct DeleteSessionRequest {
     pub source_path: String,
     #[serde(default)]
     pub locator: Option<SessionLocator>,
+    /// Allow replacing an existing session at the destination for lifecycle
+    /// moves (archive/restore). Absent means refuse on destination conflict;
+    /// only interactive adapters set it, after the user confirmed replacement.
+    #[serde(default)]
+    pub overwrite: Option<bool>,
 }
 
 impl DeleteSessionRequest {

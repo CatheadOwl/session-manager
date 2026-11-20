@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@/types";
 import { useSessionMutations } from "./useSessionMutations";
 
@@ -9,8 +9,16 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
 }));
 
+const dialogMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: dialogMocks.confirm,
 }));
 
 // A folder with: two file-backed sessions (archivable), one database-backed
@@ -56,6 +64,7 @@ describe("useSessionMutations folder operations", () => {
 
   beforeEach(() => {
     mocks.invoke.mockReset();
+    dialogMocks.confirm.mockReset();
     for (const fn of Object.values(noopOptions)) fn.mockReset();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -138,5 +147,128 @@ describe("useSessionMutations folder operations", () => {
 
       expect(mocks.invoke).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("useSessionMutations destination conflicts", () => {
+  let queryClient: QueryClient;
+  let alertMock: ReturnType<typeof vi.spyOn>;
+
+  const wrapper = ({ children }: PropsWithChildren) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+
+  beforeEach(() => {
+    mocks.invoke.mockReset();
+    dialogMocks.confirm.mockReset();
+    for (const fn of Object.values(noopOptions)) fn.mockReset();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    alertMock = vi.spyOn(window, "alert").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    alertMock.mockRestore();
+  });
+
+  const renderMutationsHook = () =>
+    renderHook(
+      ({ scope }) => useSessionMutations(scope, sessions, [], new Map(), noopOptions),
+      { wrapper, initialProps: { scope: "active" as const } },
+    );
+
+  // The backend refuses the move with the sentinel error unless the invoke
+  // payload carries overwrite: true (the user confirmed replacement).
+  const mockConflictUntilOverwrite = () => {
+    mocks.invoke.mockImplementation(async (_command: string, payload?: { overwrite?: boolean }) => {
+      if (!payload?.overwrite) {
+        throw new Error(
+          "Destination conflict: session already exists at d:/archived/a.jsonl",
+        );
+      }
+      return true;
+    });
+  };
+
+  it("archive: retries with overwrite after the user confirms replacement", async () => {
+    mockConflictUntilOverwrite();
+    dialogMocks.confirm.mockResolvedValue(true);
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.handleArchive(sessions[0]);
+    });
+    // First invoke fails with the sentinel, the confirm resolves, the retry
+    // follows — assert the final call sequence, not an intermediate count.
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(2));
+
+    const [, firstPayload] = mocks.invoke.mock.calls[0];
+    expect(firstPayload.overwrite).toBeUndefined();
+
+    expect(dialogMocks.confirm).toHaveBeenCalledTimes(1);
+    expect(dialogMocks.confirm).toHaveBeenCalledWith(
+      "A session already exists at the destination. Replace it?",
+      { title: "Destination conflict", kind: "warning" },
+    );
+
+    const [, retryPayload] = mocks.invoke.mock.calls[1];
+    expect(retryPayload.overwrite).toBe(true);
+    await waitFor(() => expect(noopOptions.onSessionArchived).toHaveBeenCalled());
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("archive: cancelling the confirm leaves the session in place, silently", async () => {
+    mockConflictUntilOverwrite();
+    dialogMocks.confirm.mockResolvedValue(false);
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.handleArchive(sessions[0]);
+    });
+    await waitFor(() => expect(dialogMocks.confirm).toHaveBeenCalledTimes(1));
+
+    // Flush the cancel branch before asserting nothing else happened.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(noopOptions.onSessionArchived).not.toHaveBeenCalled();
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("restore: retries with overwrite after the user confirms replacement", async () => {
+    mockConflictUntilOverwrite();
+    dialogMocks.confirm.mockResolvedValue(true);
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.handleRestore(sessions[0]);
+    });
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(2));
+
+    const [firstCommand, firstPayload] = mocks.invoke.mock.calls[0];
+    expect(firstCommand).toBe("restore_session");
+    expect(firstPayload.overwrite).toBeUndefined();
+
+    const [retryCommand, retryPayload] = mocks.invoke.mock.calls[1];
+    expect(retryCommand).toBe("restore_session");
+    expect(retryPayload.overwrite).toBe(true);
+    await waitFor(() => expect(noopOptions.onSessionRestored).toHaveBeenCalled());
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("non-conflicting errors still alert and never trigger the confirm", async () => {
+    mocks.invoke.mockRejectedValue(new Error("Failed to move session file: access denied"));
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.handleArchive(sessions[0]);
+    });
+    await waitFor(() => expect(alertMock).toHaveBeenCalledWith("Failed to move session file: access denied"));
+
+    expect(dialogMocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(noopOptions.onSessionArchived).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,11 @@ const DB_OPERATION_UNSUPPORTED: &str =
 const REMOTE_OPERATION_UNSUPPORTED: &str =
     "Remote-backed sessions are read-only in this version";
 
+/// Stable sentinel prefix for archive/restore destination-name conflicts.
+/// The UI matches on it to offer an explicit "replace?" confirm instead of
+/// showing the raw failure.
+const DESTINATION_CONFLICT_PREFIX: &str = "Destination conflict:";
+
 /// Resolve the local source path a lifecycle operation will act on, or
 /// reject read-only locator kinds with their specific message. Mirrors the
 /// Database rejection precedent: the refusal happens BEFORE any path is
@@ -72,7 +77,11 @@ pub fn archive_sessions(
     requests: &[DeleteSessionRequest],
 ) -> Vec<DeleteSessionOutcome> {
     collect_session_outcomes(requests, "Session was not archived", |request| {
-        archive_session_for_handle(registry, &request.to_handle())
+        archive_session_for_handle(
+            registry,
+            &request.to_handle(),
+            request.overwrite.unwrap_or(false),
+        )
     })
 }
 
@@ -81,7 +90,11 @@ pub fn restore_sessions(
     requests: &[DeleteSessionRequest],
 ) -> Vec<DeleteSessionOutcome> {
     collect_session_outcomes(requests, "Session was not restored", |request| {
-        restore_session_for_handle(registry, &request.to_handle())
+        restore_session_for_handle(
+            registry,
+            &request.to_handle(),
+            request.overwrite.unwrap_or(false),
+        )
     })
 }
 
@@ -158,6 +171,34 @@ fn canonicalize_existing_path(path: &Path, label: &str) -> Result<PathBuf, Strin
         .map_err(|e| format!("Failed to resolve {label} {}: {e}", path.display()))
 }
 
+/// Reject a move that would silently replace an existing session at the
+/// destination: either the session file itself, or a same-stem directory
+/// (the claude/pi sidecar convention). `allow_overwrite` skips the check —
+/// the provider's replace semantics then apply, with the user's consent
+/// obtained upstream by the caller.
+fn reject_destination_conflict(dest_dir: &Path, source: &Path) -> Result<(), String> {
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "Source path has no file name".to_string())?;
+    let dest_file = dest_dir.join(file_name);
+    if dest_file.exists() {
+        return Err(format!(
+            "{DESTINATION_CONFLICT_PREFIX} session already exists at {}",
+            dest_file.display()
+        ));
+    }
+    if let Some(stem) = source.file_stem() {
+        let dest_sidecar = dest_dir.join(stem);
+        if dest_sidecar.is_dir() {
+            return Err(format!(
+                "{DESTINATION_CONFLICT_PREFIX} session already exists at {}",
+                dest_sidecar.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn collect_session_outcomes<F>(
     requests: &[DeleteSessionRequest],
     false_message: &str,
@@ -197,7 +238,8 @@ where
 /// Move a session between two root directories (e.g., active <-> archived).
 /// Validates that `source` is under `from_root`, computes the relative path,
 /// reconstructs the destination under `to_root`, validates the session ID,
-/// then delegates to the provider's move logic.
+/// refuses a destination-name conflict (unless `allow_overwrite`), then
+/// delegates to the provider's move logic.
 fn move_session_between_roots(
     registry: &ProviderRegistry,
     provider_id: &str,
@@ -205,6 +247,7 @@ fn move_session_between_roots(
     source_path: &str,
     from_root: &Path,
     to_root: &Path,
+    allow_overwrite: bool,
 ) -> Result<bool, String> {
     let source = Path::new(source_path);
     let validated_source = canonicalize_existing_path(source, "session source")?;
@@ -237,6 +280,12 @@ fn move_session_between_roots(
     let provider = registry.get(provider_id)?;
     provider.validate_session_id(&validated_source, session_id)?;
 
+    // Refuse a move that would silently replace an existing destination;
+    // the check runs before any IO so both sides stay untouched on refusal.
+    if !allow_overwrite {
+        reject_destination_conflict(&dest_dir, &validated_source)?;
+    }
+
     // Delegate the actual file move to the provider
     provider.move_session(&validated_source, &dest_dir)?;
     Ok(true)
@@ -257,12 +306,13 @@ pub fn archive_session(
             path: source_path.to_string(),
         },
     };
-    archive_session_for_handle(registry, &handle)
+    archive_session_for_handle(registry, &handle, false)
 }
 
 pub fn archive_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
+    allow_overwrite: bool,
 ) -> Result<bool, String> {
     let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
@@ -281,6 +331,7 @@ pub fn archive_session_for_handle(
         source_path,
         active_root,
         archive_root,
+        allow_overwrite,
     )
 }
 
@@ -299,7 +350,7 @@ pub fn restore_session(
             path: source_path.to_string(),
         },
     };
-    restore_session_for_handle(registry, &handle)
+    restore_session_for_handle(registry, &handle, false)
 }
 
 #[cfg(test)]
@@ -355,6 +406,7 @@ mod tests {
             locator: Some(super::super::types::SessionLocator::File {
                 path: path.to_string_lossy().to_string(),
             }),
+            overwrite: None,
         }
     }
 
@@ -512,6 +564,209 @@ mod tests {
         assert!(!source.exists(), "file ends up moved exactly once");
     }
 
+    // ── Destination-conflict refusal (GAP-04: no silent overwrite) ─────
+
+    fn file_handle(path: &Path, session_id: &str) -> SessionHandle {
+        SessionHandle {
+            provider_id: "claude".to_string(),
+            session_id: session_id.to_string(),
+            locator: SessionLocator::File {
+                path: path.to_string_lossy().to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn archive_rejects_existing_destination_file_and_preserves_both() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let source = projects.join("folder-a").join("s1.jsonl");
+        write_claude_session(&source, "id-1");
+        let source_content = std::fs::read_to_string(&source).expect("read source");
+
+        let dest = archived.join("folder-a").join("s1.jsonl");
+        std::fs::create_dir_all(dest.parent().expect("dest parent")).expect("create dest dir");
+        std::fs::write(&dest, "existing destination content").expect("write dest");
+
+        let err = archive_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
+            .expect_err("conflicting destination must be rejected");
+        assert!(
+            err.contains("Destination conflict"),
+            "error should carry the sentinel prefix: {err}"
+        );
+        assert!(err.contains("session already exists at"), "error: {err}");
+
+        // Refusal happens before any IO: both files stay byte-identical.
+        assert!(source.exists(), "source must be preserved on refusal");
+        assert_eq!(std::fs::read_to_string(&source).expect("read source"), source_content);
+        assert!(dest.exists(), "existing destination must be preserved");
+        assert_eq!(
+            std::fs::read_to_string(&dest).expect("read dest"),
+            "existing destination content"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_existing_destination_file_and_preserves_both() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let source = archived.join("folder-a").join("s1.jsonl");
+        write_claude_session(&source, "id-1");
+        let source_content = std::fs::read_to_string(&source).expect("read source");
+
+        let dest = projects.join("folder-a").join("s1.jsonl");
+        std::fs::create_dir_all(dest.parent().expect("dest parent")).expect("create dest dir");
+        std::fs::write(&dest, "existing destination content").expect("write dest");
+
+        let err = restore_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
+            .expect_err("conflicting destination must be rejected");
+        assert!(
+            err.contains("Destination conflict"),
+            "error should carry the sentinel prefix: {err}"
+        );
+
+        assert!(source.exists(), "archived source must be preserved on refusal");
+        assert_eq!(std::fs::read_to_string(&source).expect("read source"), source_content);
+        assert!(dest.exists(), "existing active destination must be preserved");
+        assert_eq!(
+            std::fs::read_to_string(&dest).expect("read dest"),
+            "existing destination content"
+        );
+    }
+
+    #[test]
+    fn archive_rejects_existing_destination_sidecar_directory() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let source = projects.join("folder-a").join("s1.jsonl");
+        write_claude_session(&source, "id-1");
+
+        // A same-stem directory at the destination is a session under the
+        // claude sidecar convention; moving into it would merge/replace it.
+        let dest_sidecar = archived.join("folder-a").join("s1");
+        std::fs::create_dir_all(&dest_sidecar).expect("create dest sidecar");
+        std::fs::write(dest_sidecar.join("old.txt"), "old sidecar").expect("write old sidecar");
+
+        let err = archive_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
+            .expect_err("sidecar conflict must be rejected");
+        assert!(
+            err.contains("Destination conflict"),
+            "error should carry the sentinel prefix: {err}"
+        );
+
+        assert!(source.exists(), "source must be preserved on refusal");
+        assert!(
+            !archived.join("folder-a").join("s1.jsonl").exists(),
+            "no file move may happen on refusal"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest_sidecar.join("old.txt")).expect("read old sidecar"),
+            "old sidecar"
+        );
+    }
+
+    #[test]
+    fn batch_archive_reports_destination_conflict_without_aborting_batch() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let s1 = projects.join("folder-a").join("s1.jsonl");
+        let s2 = projects.join("folder-b").join("s2.jsonl");
+        write_claude_session(&s1, "id-1");
+        write_claude_session(&s2, "id-2");
+        // Only s1 collides with a pre-existing archive entry.
+        let dest1 = archived.join("folder-a").join("s1.jsonl");
+        std::fs::create_dir_all(dest1.parent().expect("dest parent")).expect("create dest dir");
+        std::fs::write(&dest1, "existing destination content").expect("write dest");
+
+        let outcomes = archive_sessions(
+            &registry,
+            &[request_for(&s1, "id-1"), request_for(&s2, "id-2")],
+        );
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(!outcomes[0].success, "conflicting item must be reported");
+        assert!(
+            outcomes[0]
+                .error
+                .as_deref()
+                .expect("error string")
+                .contains("Destination conflict"),
+            "conflict outcome must carry the sentinel: {:?}",
+            outcomes[0].error
+        );
+        assert!(s1.exists(), "conflicting source stays put");
+        assert!(dest1.exists());
+
+        // The batch does not abort: the non-conflicting item still moves.
+        assert!(outcomes[1].success, "non-conflicting item must move: {:?}", outcomes[1].error);
+        assert!(archived.join("folder-b").join("s2.jsonl").exists());
+        assert!(!s2.exists());
+    }
+
+    #[test]
+    fn archive_with_overwrite_replaces_destination_file_and_sidecar() {
+        let _guard = ENV_LOCK.lock().expect("lock");
+        let cfg = tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_path("CLAUDE_CONFIG_DIR", cfg.path());
+        let registry = build_provider_registry_for_tests();
+
+        let projects = cfg.path().join("projects");
+        let archived = cfg.path().join("projects_archived");
+        let source = projects.join("folder-a").join("s1.jsonl");
+        write_claude_session(&source, "id-1");
+        let source_content = std::fs::read_to_string(&source).expect("read source");
+        let source_sidecar = projects.join("folder-a").join("s1");
+        std::fs::create_dir_all(&source_sidecar).expect("create source sidecar");
+        std::fs::write(source_sidecar.join("new.txt"), "new sidecar content").expect("write");
+
+        // Pre-existing destination: both the JSONL and an old sidecar.
+        let dest = archived.join("folder-a").join("s1.jsonl");
+        std::fs::create_dir_all(dest.parent().expect("dest parent")).expect("create dest dir");
+        std::fs::write(&dest, "old destination content").expect("write old dest");
+        let dest_sidecar = archived.join("folder-a").join("s1");
+        std::fs::create_dir_all(&dest_sidecar).expect("create dest sidecar");
+        std::fs::write(dest_sidecar.join("old.txt"), "old sidecar content").expect("write");
+
+        archive_session_for_handle(&registry, &file_handle(&source, "id-1"), true)
+            .expect("overwrite move should succeed");
+
+        assert!(!source.exists(), "source moves away");
+        assert_eq!(
+            std::fs::read_to_string(&dest).expect("read dest"),
+            source_content,
+            "destination file must be replaced with the source content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest_sidecar.join("new.txt")).expect("read new sidecar"),
+            "new sidecar content",
+            "source sidecar content must land at the destination"
+        );
+        assert!(
+            !dest_sidecar.join("old.txt").exists(),
+            "old sidecar content must be replaced, not merged"
+        );
+    }
+
     fn build_provider_registry_for_tests() -> ProviderRegistry {
         // A fresh registry with the real Claude provider: enough for the batch
         // operations under test (they only need &ProviderRegistry).
@@ -545,6 +800,7 @@ mod tests {
                 source_id: "ali-server".to_string(),
                 path: "/home/u/.claude/projects/p/remote-1.jsonl".to_string(),
             }),
+            overwrite: None,
         }
     }
 
@@ -555,9 +811,9 @@ mod tests {
 
         let delete_err = delete_session_for_handle(&registry, &handle)
             .expect_err("remote delete should be unsupported");
-        let archive_err = archive_session_for_handle(&registry, &handle)
+        let archive_err = archive_session_for_handle(&registry, &handle, false)
             .expect_err("remote archive should be unsupported");
-        let restore_err = restore_session_for_handle(&registry, &handle)
+        let restore_err = restore_session_for_handle(&registry, &handle, false)
             .expect_err("remote restore should be unsupported");
 
         for err in [delete_err, archive_err, restore_err] {
@@ -612,6 +868,7 @@ mod tests {
 pub fn restore_session_for_handle(
     registry: &ProviderRegistry,
     handle: &SessionHandle,
+    allow_overwrite: bool,
 ) -> Result<bool, String> {
     let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
@@ -629,5 +886,6 @@ pub fn restore_session_for_handle(
         source_path,
         archive_root,
         active_root,
+        allow_overwrite,
     )
 }

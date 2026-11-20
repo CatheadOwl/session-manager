@@ -1586,7 +1586,9 @@ fn move_session(source_path: &Path, dest_dir: &Path) -> Result<(), String> {
             if msg_dir.exists() {
                 let dest_msg = archive.join("message").join(session_id);
                 if dest_msg.exists() {
-                    fs::remove_dir_all(&dest_msg).ok();
+                    fs::remove_dir_all(&dest_msg).map_err(|e| {
+                        format!("Failed to remove existing message dir at destination: {e}")
+                    })?;
                 }
                 fs::create_dir_all(dest_msg.parent().unwrap())
                     .map_err(|e| format!("Failed to create message parent dir: {e}"))?;
@@ -1601,7 +1603,9 @@ fn move_session(source_path: &Path, dest_dir: &Path) -> Result<(), String> {
                             if part_dir.exists() {
                                 let dest_part = archive.join("part").join(msg_id);
                                 if dest_part.exists() {
-                                    fs::remove_dir_all(&dest_part).ok();
+                                    fs::remove_dir_all(&dest_part).map_err(|e| {
+                                        format!("Failed to remove existing part dir at destination: {e}")
+                                    })?;
                                 }
                                 if let Some(parent) = dest_part.parent() {
                                     fs::create_dir_all(parent).ok();
@@ -2862,7 +2866,8 @@ mod tests {
             },
         };
 
-        archive_session_for_handle(&registry, &handle).expect("archive legacy opencode session");
+        archive_session_for_handle(&registry, &handle, false)
+            .expect("archive legacy opencode session");
 
         assert!(
             !session_path.exists(),

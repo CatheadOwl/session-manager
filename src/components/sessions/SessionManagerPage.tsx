@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { getSessionFromMap } from "@/lib/session-map";
 import { useQaExport } from "@/hooks/useQaExport";
-import { useSessionMutations } from "@/hooks/useSessionMutations";
+import { useSessionMutations, type FolderLifecycleAction } from "@/hooks/useSessionMutations";
 import { useSessionQueries } from "@/hooks/useSessionQueries";
 import { useSessionUIState } from "@/hooks/useSessionUIState";
 import { useUpdater } from "@/hooks/useUpdater";
-import type { DeleteSessionResult } from "@/lib/api/sessions";
+import { isDestinationConflict, type DeleteSessionOptions, type DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
 import { getLifecycleOperationOptions, getMetadataKey, getSessionKey, type SessionLifecycleOperationOptions } from "@/lib/domain";
 import { normalizeProjectDir } from "@/utils/format";
@@ -41,9 +42,16 @@ export function SessionManagerPage() {
   const updater = useUpdater();
   const qaExport = useQaExport(ui.scope);
 
+  // Batch retry lane: the result handler below needs to re-trigger the batch
+  // command for the conflicting subset, but it is defined before the
+  // mutations hook. Same latest-value ref pattern as selectedKeysRef below.
+  const executeFolderOperationRef = useRef<
+    (action: FolderLifecycleAction, items: DeleteSessionOptions[]) => void
+  >(() => {});
+
   // ─── Folder operation result handler ──────────────────────────────
   const handleFolderOperationResult = useCallback(
-    (outcomes: DeleteSessionResult[]) => {
+    async (outcomes: DeleteSessionResult[], action: FolderLifecycleAction) => {
       const successes = outcomes.filter((o) => o.success).length;
       const failures = outcomes.filter((o) => !o.success);
 
@@ -53,11 +61,41 @@ export function SessionManagerPage() {
       }
 
       if (failures.length > 0) {
-        const details = failures
-          .slice(0, 3)
-          .map((f) => f.error || "Unknown error")
-          .join("\n");
-        window.alert(`${failures.length} sessions failed to move.\n${details}`);
+        // Destination conflicts get one grouped confirm; only the conflicting
+        // subset is resent with overwrite. The retry outcomes re-enter this
+        // handler, and overwrite=true cannot conflict again.
+        const conflicts = failures.filter(
+          (f): f is DeleteSessionResult & { error: string } =>
+            f.error !== undefined && isDestinationConflict(f.error),
+        );
+        const otherFailures = failures.filter(
+          (f) => f.error === undefined || !isDestinationConflict(f.error),
+        );
+
+        if (conflicts.length > 0) {
+          const replace = await confirm(
+            `${conflicts.length} session(s) already exist at the destination. Replace them?`,
+            { title: "Destination conflict", kind: "warning" },
+          );
+          if (replace) {
+            const retryItems: DeleteSessionOptions[] = conflicts.map((outcome) => ({
+              providerId: outcome.providerId,
+              sessionId: outcome.sessionId,
+              sourcePath: outcome.sourcePath,
+              locator: outcome.locator,
+              overwrite: true,
+            }));
+            executeFolderOperationRef.current(action, retryItems);
+          }
+        }
+
+        if (otherFailures.length > 0) {
+          const details = otherFailures
+            .slice(0, 3)
+            .map((f) => f.error || "Unknown error")
+            .join("\n");
+          window.alert(`${otherFailures.length} sessions failed to move.\n${details}`);
+        }
       }
     },
     [ui.setSelectedKey, ui.setSelectedFolder],
@@ -78,6 +116,8 @@ export function SessionManagerPage() {
       onFolderOperationComplete: handleFolderOperationResult,
     },
   );
+  // Keep the batch retry lane pointing at the latest trigger.
+  executeFolderOperationRef.current = mutations.executeFolderOperation;
 
   // ─── Star filter: sessions visible in the list ──────────────────────
   const displaySessions = useMemo(

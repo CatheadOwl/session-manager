@@ -234,6 +234,9 @@ pub async fn archive_session(
     sessionId: String,
     sourcePath: Option<String>,
     locator: Option<session_manager::SessionLocator>,
+    // Absent (older frontends) keeps the safe default: refuse on destination
+    // conflict instead of silently replacing the existing session.
+    overwrite: Option<bool>,
 ) -> Result<bool, String> {
     let request = session_manager::SessionHandleRequest {
         provider_id: providerId,
@@ -245,7 +248,7 @@ pub async fn archive_session(
     run_blocking!(
         registry,
         reg,
-        session_manager::archive_session_for_handle(&reg, &handle)
+        session_manager::archive_session_for_handle(&reg, &handle, overwrite.unwrap_or(false))
     )
 }
 
@@ -256,6 +259,9 @@ pub async fn restore_session(
     sessionId: String,
     sourcePath: Option<String>,
     locator: Option<session_manager::SessionLocator>,
+    // Absent (older frontends) keeps the safe default: refuse on destination
+    // conflict instead of silently replacing the existing session.
+    overwrite: Option<bool>,
 ) -> Result<bool, String> {
     let request = session_manager::SessionHandleRequest {
         provider_id: providerId,
@@ -267,7 +273,7 @@ pub async fn restore_session(
     run_blocking!(
         registry,
         reg,
-        session_manager::restore_session_for_handle(&reg, &handle)
+        session_manager::restore_session_for_handle(&reg, &handle, overwrite.unwrap_or(false))
     )
 }
 

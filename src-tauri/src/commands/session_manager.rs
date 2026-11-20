@@ -57,17 +57,11 @@ pub async fn list_sessions(
         _ => session_manager::SessionScope::Active,
     };
     // Read the settings sources overlay before entering the blocking task so
-    // the closure stays Send and the scan core stays Tauri-free.
-    let extra_sources = settings.enabled_sources();
-    // Extract the ssh entries up front so the blocking closure can own
+    // the closure stays Send and the scan core stays Tauri-free. The ssh
+    // entries are extracted up front too, so the blocking closure can own
     // the whole overlay without borrowing it back.
-    let ssh_sources: Vec<_> = extra_sources
-        .iter()
-        .filter_map(|e| match e {
-            SourceEntry::Ssh(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
+    let extra_sources = settings.enabled_sources();
+    let ssh_sources = enabled_ssh_sources(&settings);
     let mut sessions = run_blocking!(
         registry,
         reg,

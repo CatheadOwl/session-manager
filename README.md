@@ -35,6 +35,7 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 
 - Updates are delivered by the built-in auto-updater (checks on startup; can be turned off in Settings).
 - The Windows installer is not code-signed, so SmartScreen will show an "unknown publisher" warning — choose "More info → Run anyway" to proceed.
+- The macOS build is not notarized, so Gatekeeper will warn on first launch — right-click the app and choose "Open", or allow it under System Settings → Privacy & Security.
 - [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
 
 ## Features

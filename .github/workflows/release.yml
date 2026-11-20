@@ -154,3 +154,52 @@ jobs:
             exit 1
           fi
           echo "OK: all bundled executables are executable by other users"
+
+  # tauri-action propagates the workflow's placeholder releaseBody into
+  # latest.json's "notes" field, which installed clients show in the update
+  # dialog. Each matrix leg re-uploads latest.json (platform merge), so the
+  # notes must be patched ONCE, after every leg: this job extracts the
+  # released version's section from CHANGELOG.md and overwrites the field.
+  # Extraction semantics mirror meta scripts/extract-release-notes.mjs.
+  finalize:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch updater manifest notes from CHANGELOG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          cat > /tmp/extract-notes.cjs <<'EOF'
+            const { readFileSync } = require("node:fs");
+            const changelog = readFileSync("CHANGELOG.md", "utf8");
+            const v = process.argv[2].replace(/^v/, "");
+            const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const heading = new RegExp(
+              `^##\\s+(?:\\[${esc}\\]|${esc})(?:\\s+-\\s+.*|\\s*)$`, "m",
+            ).exec(changelog);
+            if (!heading) {
+              console.error(`CHANGELOG.md has no section for ${v}`);
+              process.exit(1);
+            }
+            const start = heading.index + heading[0].length;
+            const rest = changelog.slice(start);
+            const next = rest.search(/\n##\s+/);
+            const section = (next === -1 ? rest : rest.slice(0, next)).trim();
+            if (!section) {
+              console.error(`CHANGELOG.md section for ${v} is empty`);
+              process.exit(1);
+            }
+            process.stdout.write(section);
+          EOF
+          notes=$(node /tmp/extract-notes.cjs "$version")
+          gh release download "v$version" --pattern latest.json --clobber
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const manifest = JSON.parse(readFileSync("latest.json", "utf8"));
+            manifest.notes = process.argv[1];
+            writeFileSync("latest.json", JSON.stringify(manifest, null, 2) + "\n");
+          ' "$notes"
+          gh release upload "v$version" latest.json --clobber

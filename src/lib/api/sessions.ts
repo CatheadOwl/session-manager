@@ -32,8 +32,20 @@ export interface DeleteSessionOptions extends SessionHandleOptions {
  */
 export const DESTINATION_CONFLICT_PREFIX = "Destination conflict:";
 
-export const isDestinationConflict = (error: string): boolean =>
-  error.startsWith(DESTINATION_CONFLICT_PREFIX);
+/**
+ * Normalize a rejected promise reason into its message. Tauri `invoke`
+ * rejects with the raw error STRING from the Rust command (not an Error
+ * instance), so `error.message` is undefined at runtime even though the
+ * react-query types claim `Error`.
+ */
+export const invocationErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  return String(error ?? "Unknown error");
+};
+
+export const isDestinationConflict = (error: unknown): boolean =>
+  invocationErrorMessage(error).startsWith(DESTINATION_CONFLICT_PREFIX);
 
 const databaseRecordId = (
   locator: Extract<SessionLocator, { kind: "database" }>,

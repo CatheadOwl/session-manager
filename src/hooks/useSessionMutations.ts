@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import {
+  invocationErrorMessage,
   isDestinationConflict,
   type DeleteSessionOptions,
   type DeleteSessionResult,
@@ -109,14 +110,18 @@ export function useSessionMutations(
   // mutation is pending (this app re-renders on every cache invalidation),
   // which silently dropped both the conflict dialog and the success side
   // effects. The mutateAsync promise is observer-independent.
+  //
+  // Rejection reasons from Tauri invoke are raw strings, so every error
+  // here goes through invocationErrorMessage instead of error.message.
   const confirmOverwriteAndResend = useCallback(
     async (
-      error: Error,
+      error: unknown,
       input: DeleteSessionOptions,
       resend: (input: DeleteSessionOptions) => void,
     ) => {
-      if (!isDestinationConflict(error.message)) {
-        window.alert(error.message);
+      const message = invocationErrorMessage(error);
+      if (!isDestinationConflict(message)) {
+        window.alert(message);
         return;
       }
       const replace = await confirm(
@@ -130,23 +135,6 @@ export function useSessionMutations(
     [],
   );
 
-  const handleArchive = useCallback(
-    (session: SessionMeta) => {
-      const input = getLifecycleOperationOptions(session);
-      if (!input) return;
-      const resend = (retry: DeleteSessionOptions) =>
-        archiveMutation.mutateAsync(retry).then(
-          () => onSessionArchived(),
-          (retryError: Error) => window.alert(retryError.message),
-        );
-      archiveMutation.mutateAsync(input).then(
-        () => onSessionArchived(),
-        (error: Error) => void confirmOverwriteAndResend(error, input, resend),
-      );
-    },
-    [archiveMutation, onSessionArchived, confirmOverwriteAndResend],
-  );
-
   const handleRestore = useCallback(
     (session: SessionMeta) => {
       const input = getLifecycleOperationOptions(session);
@@ -154,14 +142,31 @@ export function useSessionMutations(
       const resend = (retry: DeleteSessionOptions) =>
         restoreMutation.mutateAsync(retry).then(
           () => onSessionRestored(),
-          (retryError: Error) => window.alert(retryError.message),
+          (retryError: unknown) => window.alert(invocationErrorMessage(retryError)),
         );
       restoreMutation.mutateAsync(input).then(
         () => onSessionRestored(),
-        (error: Error) => void confirmOverwriteAndResend(error, input, resend),
+        (error: unknown) => void confirmOverwriteAndResend(error, input, resend),
       );
     },
     [restoreMutation, onSessionRestored, confirmOverwriteAndResend],
+  );
+
+  const handleArchive = useCallback(
+    (session: SessionMeta) => {
+      const input = getLifecycleOperationOptions(session);
+      if (!input) return;
+      const resend = (retry: DeleteSessionOptions) =>
+        archiveMutation.mutateAsync(retry).then(
+          () => onSessionArchived(),
+          (retryError: unknown) => window.alert(invocationErrorMessage(retryError)),
+        );
+      archiveMutation.mutateAsync(input).then(
+        () => onSessionArchived(),
+        (error: unknown) => void confirmOverwriteAndResend(error, input, resend),
+      );
+    },
+    [archiveMutation, onSessionArchived, confirmOverwriteAndResend],
   );
 
   // ─── Folder-level handlers ────────────────────────────────────────
@@ -174,7 +179,7 @@ export function useSessionMutations(
       // not depend on mutate-call callbacks surviving re-renders.
       mutate.mutateAsync(items).then(
         (outcomes) => onFolderOperationComplete(outcomes, action),
-        (error: Error) => window.alert(error.message),
+        (error: unknown) => window.alert(invocationErrorMessage(error)),
       );
     },
     [archiveSessionsMutation, restoreSessionsMutation, onFolderOperationComplete],

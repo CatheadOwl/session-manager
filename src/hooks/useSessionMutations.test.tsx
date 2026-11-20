@@ -180,12 +180,12 @@ describe("useSessionMutations destination conflicts", () => {
 
   // The backend refuses the move with the sentinel error unless the invoke
   // payload carries overwrite: true (the user confirmed replacement).
+  // Tauri invoke rejects with the RAW STRING from the Rust command, not an
+  // Error instance — the mock mirrors that runtime shape.
   const mockConflictUntilOverwrite = () => {
     mocks.invoke.mockImplementation(async (_command: string, payload?: { overwrite?: boolean }) => {
       if (!payload?.overwrite) {
-        throw new Error(
-          "Destination conflict: session already exists at d:/archived/a.jsonl",
-        );
+        throw "Destination conflict: session already exists at d:/archived/a.jsonl";
       }
       return true;
     });

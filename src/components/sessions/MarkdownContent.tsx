@@ -12,10 +12,10 @@ interface MarkdownContentProps {
   highlightQuery?: string;
 }
 
-// Second line of defense: react-markdown's urlTransform already strips hrefs
-// outside http/https/irc/mailto/xmpp before an anchor exists (so javascript:
-// and tel: never reach this gate); the authoritative gate is the opener
-// plugin's ACL in Rust (mailto/tel/http/https only, no local paths).
+// Second line of defense: react-markdown's urlTransform empties hrefs outside
+// http/https/irc/ircs/mailto/xmpp, so dangerous or unsupported protocols reach
+// this gate only as anchors with href="" and are dropped here; the opener
+// capability in Rust is the authoritative allowlist (https/http/mailto only).
 const EXTERNAL_LINK = /^(https?:|mailto:)/i;
 
 // The Tauri webview silently drops target="_blank" navigations, so external

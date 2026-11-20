@@ -47,15 +47,19 @@ describe("MarkdownContent links", () => {
     expect(screen.getByRole("link")).not.toHaveAttribute("target");
   });
 
-  // react-markdown's urlTransform strips hrefs outside http/https/irc/mailto/xmpp,
-  // so these render as bare anchors with no href — the click gate never sees them.
-  // If this starts failing, revisit the EXTERNAL_LINK gate before widening it.
+  // urlTransform empties hrefs outside http/https/irc/ircs/mailto/xmpp: the
+  // anchor still renders (href=""), so clicking must stay a no-op and must
+  // never reach the opener. If this starts failing, the sanitizer's protocol
+  // list changed and the EXTERNAL_LINK gate needs a second look.
   it.each(["javascript:alert(1)", "tel:+123456"])(
-    "renders no anchor for a %s link",
+    "renders %s links inert",
     (href) => {
-      render(<MarkdownContent content={`[x](${href})`} />);
+      const { container } = render(<MarkdownContent content={`[x](${href})`} />);
 
-      expect(screen.queryByRole("link")).toBeNull();
+      const link = container.querySelector("a");
+      expect(link).not.toBeNull();
+      expect(link).toHaveAttribute("href", "");
+      expect(fireEvent.click(link!)).toBe(false);
       expect(mocks.openUrl).not.toHaveBeenCalled();
     },
   );

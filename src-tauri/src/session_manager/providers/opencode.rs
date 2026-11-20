@@ -1583,9 +1583,15 @@ fn move_session(source_path: &Path, dest_dir: &Path) -> Result<(), String> {
         if let Some(archive) = archive_base {
             // Move message directory
             let msg_dir = storage_base.join("message").join(session_id);
-            if msg_dir.exists() {
+            if msg_dir
+                .try_exists()
+                .map_err(|e| format!("Failed to check source message dir: {e}"))?
+            {
                 let dest_msg = archive.join("message").join(session_id);
-                if dest_msg.exists() {
+                if dest_msg
+                    .try_exists()
+                    .map_err(|e| format!("Failed to check destination message dir: {e}"))?
+                {
                     fs::remove_dir_all(&dest_msg).map_err(|e| {
                         format!("Failed to remove existing message dir at destination: {e}")
                     })?;
@@ -1596,24 +1602,37 @@ fn move_session(source_path: &Path, dest_dir: &Path) -> Result<(), String> {
                     .map_err(|e| format!("Failed to move message dir: {e}"))?;
 
                 // Move part directories for each message
-                if let Ok(entries) = fs::read_dir(&dest_msg) {
-                    for entry in entries.flatten() {
-                        if let Some(msg_id) = entry.path().file_stem().and_then(|s| s.to_str()) {
-                            let part_dir = storage_base.join("part").join(msg_id);
-                            if part_dir.exists() {
-                                let dest_part = archive.join("part").join(msg_id);
-                                if dest_part.exists() {
-                                    fs::remove_dir_all(&dest_part).map_err(|e| {
-                                        format!("Failed to remove existing part dir at destination: {e}")
-                                    })?;
-                                }
-                                if let Some(parent) = dest_part.parent() {
-                                    fs::create_dir_all(parent).ok();
-                                }
-                                fs::rename(&part_dir, &dest_part).ok();
-                            }
-                        }
+                let entries = fs::read_dir(&dest_msg)
+                    .map_err(|e| format!("Failed to read moved message directory: {e}"))?;
+                let dest_part_root = archive.join("part");
+                for entry in entries {
+                    let msg_path = entry
+                        .map_err(|e| format!("Failed to read moved message directory entry: {e}"))?
+                        .path();
+                    let Some(msg_id) = msg_path.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    let part_dir = storage_base.join("part").join(msg_id);
+                    if !part_dir
+                        .try_exists()
+                        .map_err(|e| format!("Failed to check source part dir: {e}"))?
+                    {
+                        continue;
                     }
+
+                    fs::create_dir_all(&dest_part_root)
+                        .map_err(|e| format!("Failed to create part parent dir: {e}"))?;
+                    let dest_part = dest_part_root.join(msg_id);
+                    if dest_part
+                        .try_exists()
+                        .map_err(|e| format!("Failed to check destination part dir: {e}"))?
+                    {
+                        fs::remove_dir_all(&dest_part).map_err(|e| {
+                            format!("Failed to remove existing part dir at destination: {e}")
+                        })?;
+                    }
+                    fs::rename(&part_dir, &dest_part)
+                        .map_err(|e| format!("Failed to move part dir: {e}"))?;
                 }
             }
         }
@@ -2149,6 +2168,91 @@ mod tests {
         assert!(
             dest_dir.join("session-test.json").exists(),
             "file should be at destination"
+        );
+    }
+
+    #[test]
+    fn move_session_replaces_destination_messages_and_parts() {
+        let ts = TestStorage::new();
+        let archive = ts.dir.path().join("storage_archived");
+        let source = write_session(&ts.storage, "proj", "ses", Some("Current"), None, 1, None);
+        let dest = write_session(&archive, "proj", "ses", Some("Old"), None, 1, None);
+        write_message(&archive, "ses", "msg_old", "user", 2);
+        write_text_part(&archive, "msg_1", "prt_old", "Old part");
+
+        for (msg_id, text) in [("msg_1", "First part"), ("msg_2", "Second part")] {
+            write_message(&ts.storage, "ses", msg_id, "user", 3);
+            write_text_part(&ts.storage, msg_id, "prt_new", text);
+        }
+        let source_content = std::fs::read(&source).expect("read source session");
+
+        OpenCodeProvider
+            .move_session(&source, dest.parent().expect("session parent"))
+            .expect("replace archived session and sidecars");
+
+        assert_eq!(
+            std::fs::read(&dest).expect("read archived session"),
+            source_content
+        );
+        assert!(!source.exists());
+        assert!(!ts.storage.join("message/ses").exists());
+        assert!(!archive.join("message/ses/msg_old.json").exists());
+        assert!(!archive.join("part/msg_1/prt_old.json").exists());
+        for (msg_id, text) in [("msg_1", "First part"), ("msg_2", "Second part")] {
+            let part_dir = Path::new("part").join(msg_id);
+            assert!(!ts.storage.join(&part_dir).exists());
+            assert!(archive
+                .join("message/ses")
+                .join(format!("{msg_id}.json"))
+                .is_file());
+            assert_eq!(read_part_text(&archive.join(part_dir)), text);
+        }
+    }
+
+    #[test]
+    fn move_session_reports_failure_to_create_part_parent() {
+        let ts = TestStorage::new();
+        let source = write_session(&ts.storage, "proj", "ses", None, None, 1, None);
+        write_message(&ts.storage, "ses", "msg_1", "user", 2);
+        write_text_part(&ts.storage, "msg_1", "prt_1", "Source part");
+        let archive = ts.dir.path().join("storage_archived");
+        std::fs::create_dir(&archive).expect("create archive");
+        std::fs::write(archive.join("part"), "blocks part directory creation")
+            .expect("write blocking file");
+
+        let err = OpenCodeProvider
+            .move_session(&source, &archive.join("session/proj"))
+            .expect_err("blocked part directory must fail the move");
+
+        assert!(
+            err.starts_with("Failed to create part parent dir:"),
+            "{err}"
+        );
+        assert_eq!(
+            read_part_text(&ts.storage.join("part/msg_1")),
+            "Source part"
+        );
+    }
+
+    #[test]
+    fn move_session_reports_failure_to_read_moved_message_dir() {
+        let ts = TestStorage::new();
+        let source = write_session(&ts.storage, "proj", "ses", None, None, 1, None);
+        std::fs::create_dir(ts.storage.join("message")).expect("create message parent");
+        std::fs::write(
+            ts.storage.join("message/ses"),
+            "file in place of message directory",
+        )
+        .expect("write invalid message sidecar");
+        let dest_dir = ts.dir.path().join("storage_archived/session/proj");
+
+        let err = OpenCodeProvider
+            .move_session(&source, &dest_dir)
+            .expect_err("invalid message directory must fail the move");
+
+        assert!(
+            err.starts_with("Failed to read moved message directory:"),
+            "{err}"
         );
     }
 

@@ -40,8 +40,8 @@ export function SettingRow({ label, description, children, id, error, variant = 
           {label}
         </label>
         {(Array.isArray(description) ? description : description ? [description] : []).map(
-          (line) => (
-            <div key={line} className="setting-description">
+          (line, index) => (
+            <div key={index} className="setting-description">
               {line}
             </div>
           ),

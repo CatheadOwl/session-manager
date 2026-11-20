@@ -12,7 +12,7 @@ export type ConfirmActionTarget =
       skippedCount: number;
     }
   | { kind: "remove-source"; path: string }
-  | { kind: "remove-ssh-source"; id: string; alias: string | null };;
+  | { kind: "remove-ssh-source"; id: string; alias: string | null };
 
 interface ConfirmActionDialogProps {
   target: ConfirmActionTarget;
@@ -31,7 +31,7 @@ export function ConfirmActionDialog({ target, isWorking, onConfirm, onCancel }: 
     return () => document.removeEventListener("keydown", handler);
   }, [isWorking, onCancel]);
 
-  const copy = getConfirmActionCopy(target, isWorking);
+  const copy = getConfirmActionCopy(target);
   const skippedNote =
     "skippedCount" in target && target.skippedCount > 0
       ? `${target.skippedCount} read-only session(s) will be skipped.`
@@ -92,14 +92,14 @@ export function ConfirmActionDialog({ target, isWorking, onConfirm, onCancel }: 
   );
 }
 
-function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
+function getConfirmActionCopy(target: ConfirmActionTarget) {
   if (target.kind === "delete-single") {
     return {
       title: "Delete session?",
       description: "This will move the session to your system's trash / Recycle Bin.",
       targetLabel: target.session.title || target.session.sessionId,
       confirmLabel: "Delete",
-      workingLabel: isWorking ? "Deleting..." : "Delete",
+      workingLabel: "Deleting...",
       confirmClassName: "danger-button",
       icon: "×",
       tone: "danger",
@@ -112,7 +112,7 @@ function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
       description: `This will move ${target.count} selected session${target.count === 1 ? "" : "s"} to your system's trash / Recycle Bin.`,
       targetLabel: `${target.count} selected session${target.count === 1 ? "" : "s"}`,
       confirmLabel: "Delete",
-      workingLabel: isWorking ? "Deleting..." : "Delete",
+      workingLabel: "Deleting...",
       confirmClassName: "danger-button",
       icon: "×",
       tone: "danger",
@@ -125,7 +125,7 @@ function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
       description: "This removes the scan source from settings. The folder on disk is not touched.",
       targetLabel: target.path || "(empty path)",
       confirmLabel: "Remove",
-      workingLabel: isWorking ? "Removing..." : "Remove",
+      workingLabel: "Removing...",
       confirmClassName: "danger-button",
       icon: "−",
       tone: "danger",
@@ -139,7 +139,7 @@ function getConfirmActionCopy(target: ConfirmActionTarget, isWorking: boolean) {
         "This removes the remote source from settings. Files on the remote machine and the local scan cache are not touched.",
       targetLabel: target.alias !== null ? `${target.id} (ssh config alias: ${target.alias})` : target.id,
       confirmLabel: "Remove",
-      workingLabel: isWorking ? "Removing..." : "Remove",
+      workingLabel: "Removing...",
       confirmClassName: "danger-button",
       icon: "−",
       tone: "danger",

@@ -10,9 +10,11 @@ use tauri::Emitter;
 use crate::session_manager::providers::ProviderRegistry;
 use crate::session_manager::settings::{SettingsManager, SettingValue, SettingsSnapshot};
 
-/// Read-only provider id listing for the settings UI's source editor. Reuses
-/// the same registry that backs the `agents` CLI subcommand — one source of
-/// truth for "which providers exist" (explicit-provider model).
+/// Read-only provider id listing. Reuses the same registry that backs the
+/// `agents` CLI subcommand — one source of truth for "which providers
+/// exist". Currently without a UI consumer (the source editor edits
+/// sources, not providers); kept deliberately as part of the settings API
+/// surface.
 #[tauri::command]
 pub fn list_providers(registry: tauri::State<'_, Arc<ProviderRegistry>>) -> Vec<String> {
     registry.ids().cloned().collect()

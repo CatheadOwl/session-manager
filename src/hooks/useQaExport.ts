@@ -14,7 +14,7 @@ const DEFAULT_STATUS: QaExportStatus = { state: "idle", message: "" };
 
 /**
  * Large-export threshold: exporting more than this many sessions distills a
- * lot of JSONL in one synchronous command (no progress/cancel, D4), so the
+ * lot of JSONL in one synchronous command (no progress or cancel), so the
  * user gets a native confirm dialog before the save dialog opens. This is
  * the size guard that replaces the old "All time cannot be exported" rule —
  * it guards the actual cost driver (visible session count), not the time
@@ -24,8 +24,8 @@ const LARGE_EXPORT_THRESHOLD = 50;
 
 /**
  * Remote-backed sessions (SSH sources) export like local ones: the backend
- * fetches their content into the transient cache (first fetch ~0.2s/file,
- * P3 bench; re-exports free) and keeps the remote locator in provenance.
+ * fetches their content into the transient cache (first fetch ~0.2s/file;
+ * re-exports free) and keeps the remote locator in provenance.
  * A per-item fetch failure surfaces as that session being `skipped`, never
  * an aborted batch — so no pre-filter is needed here anymore.
  */
@@ -58,7 +58,7 @@ export function useQaExport(scope: "active" | "archived") {
       // Large exports: native confirm BEFORE the save dialog (the user
       // should know the cost before picking a destination). Cancel aborts
       // silently, same as cancelling the save dialog. Remote sessions add a
-      // first-fetch SSH transfer (~0.2s each, P3 bench) — called out in the
+      // first-fetch SSH transfer (~0.2s each) — called out in the
       // message so the count alone doesn't understate the cost.
       const remoteCount = countRemoteSessions(sessions);
       if (sessions.length > LARGE_EXPORT_THRESHOLD) {

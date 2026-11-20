@@ -317,7 +317,8 @@ pub fn archive_session_for_handle(
     let source_path = local_source_path(handle)?;
     let provider = registry.get(&handle.provider_id)?;
     let roots = provider.roots();
-    // Active root = first root, Archive root = second root (per ClaudeProvider::roots())
+    // Root order convention: first root = active, second root = archive
+    // (provider roots())
     let active_root = roots
         .first()
         .ok_or_else(|| "No active root found".to_string())?;

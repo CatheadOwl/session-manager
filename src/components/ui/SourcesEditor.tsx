@@ -149,11 +149,11 @@ export function SourcesEditor({ label, description, value, onChange, error }: So
           // controls as local rows (enabled toggle, guarded remove) — the
           // same visual rhythm as a local row: one line of identity +
           // toggle + Remove. The identity fields themselves stay read-only —
-              // connection config comes from the Add flow or hand editing.
+          // connection config comes from the Add flow or hand editing.
           if (row.entry.kind === "ssh") {
             const ssh = row.entry;
-              // sshConfig entries keep placeholder host/user fields: the
-              // identity line shows the LIVE alias reference
+            // sshConfig entries keep placeholder host/user fields: the
+            // identity line shows the LIVE alias reference
             // instead — no resolution request here, by design (a config
             // edit must not need a settings round-trip to render).
             const viaAlias =

@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-11-20
+
 ### Added
 
-- Markdown links in session messages open in the system browser (#7): clicks on `http(s)`/`mailto` links are handed to the default application via `tauri-plugin-opener` instead of relying on `target="_blank"`, which the in-app webview drops. The opener capability is scoped to those protocols only (`javascript:`/`tel:` hrefs render inert — sanitization empties the href and the click gate cancels navigation), so session content cannot open local paths or arbitrary apps.
-- Pi sessions can now be archived and restored. Archive moves a session's `.jsonl` (plus its sidecar `run-N/` sub-run directory, when present) from `~/.pi/agent/sessions` to a new sibling `~/.pi/agent/sessions_archived` folder, preserving the per-project subdirectory layout; restore moves it back. The Archived scope, folder-level batch archive, and single-session archive/restore buttons now apply to Pi like the other file-backed providers. Proposed by @keeganwitt in #6.
+- Pi sessions can now be archived and restored ([#6](https://github.com/CatheadOwl/session-manager/issues/6), proposed by @keeganwitt). Archive moves a session's `.jsonl` (plus its sidecar `run-N/` sub-run directory, when present) from `~/.pi/agent/sessions` to a new sibling `~/.pi/agent/sessions_archived` folder, preserving the per-project subdirectory layout; restore moves it back. The Archived scope, folder-level batch archive, and single-session archive/restore buttons now apply to Pi like the other file-backed providers.
+
+### Fixed
+
+- Markdown links in session messages now open outside the app ([#7](https://github.com/CatheadOwl/session-manager/issues/7)): `http(s)` links go to your default browser and `mailto:` links to your mail application, instead of being silently ignored. Only those two protocols are clickable — session content still cannot open local files or other apps.
 
 ## [0.4.6] - 2026-11-12
 

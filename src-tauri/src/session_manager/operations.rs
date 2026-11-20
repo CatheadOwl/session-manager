@@ -597,7 +597,7 @@ mod tests {
         let err = archive_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
             .expect_err("conflicting destination must be rejected");
         assert!(
-            err.contains("Destination conflict"),
+            err.starts_with("Destination conflict:"),
             "error should carry the sentinel prefix: {err}"
         );
         assert!(err.contains("session already exists at"), "error: {err}");
@@ -632,7 +632,7 @@ mod tests {
         let err = restore_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
             .expect_err("conflicting destination must be rejected");
         assert!(
-            err.contains("Destination conflict"),
+            err.starts_with("Destination conflict:"),
             "error should carry the sentinel prefix: {err}"
         );
 
@@ -666,7 +666,7 @@ mod tests {
         let err = archive_session_for_handle(&registry, &file_handle(&source, "id-1"), false)
             .expect_err("sidecar conflict must be rejected");
         assert!(
-            err.contains("Destination conflict"),
+            err.starts_with("Destination conflict:"),
             "error should carry the sentinel prefix: {err}"
         );
 
@@ -711,7 +711,7 @@ mod tests {
                 .error
                 .as_deref()
                 .expect("error string")
-                .contains("Destination conflict"),
+                .starts_with("Destination conflict:"),
             "conflict outcome must carry the sentinel: {:?}",
             outcomes[0].error
         );

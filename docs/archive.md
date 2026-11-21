@@ -42,16 +42,8 @@ from it: it drops out of the agent's resume picker, and resuming it by ID
 fails until you restore it. This mirrors the behavior of Codex's own archive
 (`codex archive`), which uses the same `archived_sessions` folder.
 
-Two consequences worth knowing:
-
-- **Archive is not deletion.** The file stays intact on disk and can always
-  be restored from this app's Archived scope.
-- **Archiving exempts a session from agent-side cleanup.** Claude Code
-  deletes transcripts older than `cleanupPeriodDays` (30 days by default)
-  from its active directory; a session moved to the archive is outside that
-  scan and is kept indefinitely. Restoring puts it back under the cleanup
-  window, so a long-restored session can still age out unless it is archived
-  again or the setting is raised.
+Archive is not deletion: the file stays intact on disk and can always be
+restored from this app's Archived scope.
 
 ## Destination conflicts
 

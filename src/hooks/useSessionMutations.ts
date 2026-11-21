@@ -77,7 +77,8 @@ export function useSessionMutations(
         input,
         {
           onSuccess: () => onSessionDeleted(),
-          onError: (error) => window.alert(error.message),
+          // Tauri invoke rejects with raw strings, not Error instances.
+          onError: (error) => window.alert(invocationErrorMessage(error)),
         },
       );
     },
@@ -92,7 +93,8 @@ export function useSessionMutations(
         onSuccess: () => {
           onSessionDeleted();
         },
-        onError: (error) => window.alert(error.message),
+        // Tauri invoke rejects with raw strings, not Error instances.
+        onError: (error) => window.alert(invocationErrorMessage(error)),
       });
     },
     [deleteSessionsMutation, onSessionDeleted],

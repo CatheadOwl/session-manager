@@ -272,3 +272,109 @@ describe("useSessionMutations destination conflicts", () => {
     expect(noopOptions.onSessionArchived).not.toHaveBeenCalled();
   });
 });
+
+describe("useSessionMutations delete wiring", () => {
+  let queryClient: QueryClient;
+  let alertMock: ReturnType<typeof vi.spyOn>;
+
+  const wrapper = ({ children }: PropsWithChildren) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+
+  beforeEach(() => {
+    mocks.invoke.mockReset();
+    dialogMocks.confirm.mockReset();
+    for (const fn of Object.values(noopOptions)) fn.mockReset();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    alertMock = vi.spyOn(window, "alert").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    alertMock.mockRestore();
+  });
+
+  const renderMutationsHook = () =>
+    renderHook(
+      ({ scope }) => useSessionMutations(scope, sessions, [], new Map(), noopOptions),
+      { wrapper, initialProps: { scope: "active" as const } },
+    );
+
+  it("single delete: invokes delete_session and notifies exactly once on success", async () => {
+    mocks.invoke.mockResolvedValue(true);
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.confirmDeleteSession(sessions[0]);
+    });
+    await waitFor(() => expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1));
+
+    const [command, payload] = mocks.invoke.mock.calls[0];
+    expect(command).toBe("delete_session");
+    expect(payload.sessionId).toBe("a");
+    expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1);
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("single delete: a raw-string rejection alerts the string itself, not undefined", async () => {
+    // Tauri invoke rejects with the RAW STRING from the Rust command, not an
+    // Error instance — the mock mirrors that runtime shape. The literal is
+    // invented here on purpose, independent of any production constant.
+    mocks.invoke.mockRejectedValue("Failed to delete session file: permission denied");
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.confirmDeleteSession(sessions[0]);
+    });
+    await waitFor(() =>
+      expect(alertMock).toHaveBeenCalledWith("Failed to delete session file: permission denied"),
+    );
+
+    // Regression guard for the original bug: alerting `error.message` on a
+    // string rejection shows the literal "undefined".
+    expect(alertMock.mock.calls[0][0]).not.toBe("undefined");
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "delete_session",
+      expect.objectContaining({ sessionId: "a" }),
+    );
+    expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it("batch delete: invokes delete_sessions with the batch and notifies exactly once on success", async () => {
+    mocks.invoke.mockResolvedValue([]);
+    const { result } = renderMutationsHook();
+
+    const { items } = result.current.getFolderOperationItems("d:/work/target");
+    act(() => {
+      result.current.executeBatchDelete(items);
+    });
+    await waitFor(() => expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1));
+
+    const [command, payload] = mocks.invoke.mock.calls[0];
+    expect(command).toBe("delete_sessions");
+    expect(payload.items).toHaveLength(2);
+    expect(payload.items.map((item: { sessionId: string }) => item.sessionId).sort()).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1);
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("batch delete: a raw-string rejection alerts the string itself, not undefined", async () => {
+    mocks.invoke.mockRejectedValue("Batch delete failed: 2 of 2 sessions could not be removed");
+    const { result } = renderMutationsHook();
+
+    const { items } = result.current.getFolderOperationItems("d:/work/target");
+    act(() => {
+      result.current.executeBatchDelete(items);
+    });
+    await waitFor(() =>
+      expect(alertMock).toHaveBeenCalledWith("Batch delete failed: 2 of 2 sessions could not be removed"),
+    );
+
+    expect(alertMock.mock.calls[0][0]).not.toBe("undefined");
+    expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+  });
+});

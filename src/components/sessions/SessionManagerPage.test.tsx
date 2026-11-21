@@ -402,8 +402,8 @@ describe("SessionManagerPage", () => {
       sourcePath: `/tmp/${id}.jsonl`,
       locator: { kind: "file", path: `/tmp/${id}.jsonl` },
     }));
-    // ADR 0014 Decision 3: the expected literals are independent of the
-    // production constants — a prefix drift on either side must fail here.
+    // The expected literals are independent of the production constants —
+    // a prefix drift on either side must fail here.
     const conflictError = "Destination conflict: another session already exists at the destination";
     const ordinaryError = "Failed to move session file: access denied";
     const outcome = (sessionId: string, success: boolean, error?: string) => ({

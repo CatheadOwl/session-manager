@@ -107,11 +107,11 @@ export function useSessionMutations(
   // same convention as cancelling a native dialog elsewhere in the app.
   //
   // Both handlers go through mutateAsync + promise chaining instead of
-  // mutate(variables, { callbacks }): the mutate-call callbacks live on the
-  // MutationObserver and are wiped when the component re-renders while the
-  // mutation is pending (this app re-renders on every cache invalidation),
-  // which silently dropped both the conflict dialog and the success side
-  // effects. The mutateAsync promise is observer-independent.
+  // mutate(variables, { callbacks }): mutate-call callbacks live on the
+  // MutationObserver, so a second mutate() on the same observer while
+  // pending, or an unmount, replaces or detaches them; the mutateAsync
+  // promise is observer-independent, so the confirm/retry chain and the
+  // completion callbacks survive those observer transitions.
   //
   // Rejection reasons from Tauri invoke are raw strings, so every error
   // here goes through invocationErrorMessage instead of error.message.
@@ -176,9 +176,12 @@ export function useSessionMutations(
     (action: FolderLifecycleAction, items: DeleteSessionOptions[]) => {
       if (items.length === 0) return;
       const mutate = action === "archive" ? archiveSessionsMutation : restoreSessionsMutation;
-      // mutateAsync for the same observer-callback race as the single-session
-      // handlers: batch results feed the conflict-escalation flow, which must
-      // not depend on mutate-call callbacks surviving re-renders.
+      // mutateAsync for the same observer-callback hazard as the
+      // single-session handlers: mutate-call callbacks live on the
+      // MutationObserver and are replaced or detached by a second mutate()
+      // while pending or by an unmount; the mutateAsync promise is
+      // observer-independent, so the batch results feeding the
+      // conflict-escalation flow survive those observer transitions.
       mutate.mutateAsync(items).then(
         (outcomes) => onFolderOperationComplete(outcomes, action),
         (error: unknown) => window.alert(invocationErrorMessage(error)),

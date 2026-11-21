@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useSettingsQuery } from "@/lib/query/queries";
@@ -9,7 +9,6 @@ export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus>("idle");
   const [update, setUpdate] = useState<Update | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const cancelledRef = useRef(false);
 
   // Settings gate: `update.autoCheck === false` opts out of the
   // startup check. The gate is a read through IPC, not a local flag —
@@ -28,7 +27,15 @@ export function useUpdater() {
       setStatus("checking");
       setError(null);
       const u = await check();
-      if (cancelledRef.current) return;
+      // Deliberately NO cancellation guard: every resolution is applied. The
+      // former cancelledRef discarded a resolution when a gate flip landed
+      // mid-flight (its cleanup ran on dep changes, but the early-return
+      // path never reset the flag) — status stuck on "checking" forever,
+      // which busy-disable then turned into an unrecoverable check row.
+      // A resolution is a fact about the remote, valid regardless of the
+      // flip that landed meanwhile; React 18 makes a post-unmount setState
+      // a harmless no-op, and this hook's only mount point
+      // (SessionManagerPage, rendered unconditionally by App) never unmounts.
       if (u) {
         setUpdate(u);
         setStatus("available");
@@ -36,18 +43,14 @@ export function useUpdater() {
         setStatus("idle");
       }
     } catch (e) {
-      if (!cancelledRef.current) {
-        setError(String(e));
-        setStatus("error");
-      }
+      setError(String(e));
+      setStatus("error");
     }
   }, []);
 
   useEffect(() => {
     if (!settingsLoaded || autoCheckDisabled) return;
-    cancelledRef.current = false;
     checkForUpdate();
-    return () => { cancelledRef.current = true; };
   }, [settingsLoaded, autoCheckDisabled, checkForUpdate]);
 
   const installUpdate = useCallback(async () => {

@@ -245,10 +245,11 @@ const RENDERERS: Partial<Record<SettingType, SettingRenderer>> = {
  * page-level updater state machine, passed down from `SessionManagerPage`
  * — this row only fires the hook's dedicated `checkForUpdate` entry and
  * reflects its status; install stays on the toolbar toast, so the
- * "available" line points there (the settings overlay covers the toolbar
- * while open). The "up to date" line is gated on a manual check having
- * actually run: a bare `idle` may predate any check and must not be
- * claimed as checked.
+ * "available" line points there. The toast renders on the COLLAPSED folder
+ * rail only (the expanded rail shows a dot badge instead), hence the
+ * collapse hint in the copy. The "up to date" line is gated on a manual
+ * check having actually run: a bare `idle` may predate any check and must
+ * not be claimed as checked.
  */
 const UpdateCheckRow: FC<{
   status: UpdateStatus;
@@ -259,9 +260,16 @@ const UpdateCheckRow: FC<{
   const [manualCheckRan, setManualCheckRan] = useState(false);
   const checking = status === "checking" || status === "downloading";
 
+  // An install taking over the machine (toast-driven download) invalidates
+  // the manual-check provenance: a later error must not be labeled
+  // "Update check failed" when the failure belonged to the install.
+  useEffect(() => {
+    if (status === "downloading" || status === "ready") setManualCheckRan(false);
+  }, [status]);
+
   const statusLine: string | null =
     status === "available"
-      ? `Update to v${version ?? "?"} available. Close settings and install from the toolbar's update button.`
+      ? `Update to v${version ?? "?"} available. Install from the folder rail's update button — collapse the rail if it's expanded.`
       : status === "downloading"
         ? "Downloading update…"
         : status === "ready"

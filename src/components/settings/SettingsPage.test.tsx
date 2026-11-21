@@ -70,6 +70,32 @@ describe("SettingsPage", () => {
   const renderPage = (overrides?: Partial<typeof updateProps>) =>
     render(<SettingsPage onClose={onClose} {...updateProps} {...overrides} />, { wrapper });
 
+  // Stable-rerender host for tests that drive the machine across states.
+  // The Host function identity is constant across rerenders — a rerender
+  // whose root type differs (e.g. a hand-wrapped provider) would remount the
+  // whole tree and reset the row's internal state.
+  type UpdateOverride = {
+    updateStatus?: UpdateStatus;
+    updateVersion?: string;
+    updateError?: string | null;
+  };
+  const renderHost = (initial: UpdateOverride = {}) => {
+    let override: UpdateOverride = initial;
+    const Host = () => (
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage onClose={onClose} {...updateProps} {...override} />
+      </QueryClientProvider>
+    );
+    const view = render(<Host />);
+    return {
+      set(next: UpdateOverride) {
+        override = { ...override, ...next };
+        view.rerender(<Host />);
+      },
+      view,
+    };
+  };
+
   beforeEach(() => {
     mocks.invoke.mockReset();
     onClose.mockReset();
@@ -224,43 +250,49 @@ describe("SettingsPage", () => {
   });
 
   it("offers a manual update check and reflects the running machine state", async () => {
-    // Host is the STABLE rerender root (same type as the initial render) so
-    // the row's internal manual-check flag survives the machine-state change
-    // — a rerender whose root type differs remounts the whole tree.
-    let override: { updateStatus?: UpdateStatus; updateVersion?: string } = {
-      updateStatus: "available",
-      updateVersion: "0.5.0",
-    };
-    const Host = () => (
-      <QueryClientProvider client={queryClient}>
-        <SettingsPage onClose={onClose} {...updateProps} {...override} />
-      </QueryClientProvider>
-    );
-    const view = render(<Host />);
+    const host = renderHost();
     await screen.findByRole("switch", { name: "Check for updates automatically" });
-    // "available" reflects immediately — a bare idle must NOT claim up to date.
-    expect(screen.getByText(/Update to v0\.5\.0 available/)).toBeInTheDocument();
+    // Regression pin: a bare idle predates any check — claiming "up to date"
+    // here would recreate the exact falsehood class this row exists to fix.
+    // Deleting the manualCheckRan guard must fail this test.
     expect(screen.queryByText("You're up to date.")).toBeNull();
+
+    host.set({ updateStatus: "available", updateVersion: "0.5.0" });
+    expect(screen.getByText(/Update to v0\.5\.0 available/)).toBeInTheDocument();
 
     // Clicking drives the dedicated entry; idle after a click means checked.
     fireEvent.click(screen.getByRole("button", { name: "Check now" }));
     expect(updateProps.onCheckForUpdate).toHaveBeenCalledTimes(1);
-    override = { updateStatus: "idle" };
-    view.rerender(<Host />);
+    host.set({ updateStatus: "idle" });
     expect(screen.getByText("You're up to date.")).toBeInTheDocument();
   });
 
   it("disables the check trigger while the machine is busy", async () => {
-    renderPage({ updateStatus: "checking" });
+    const host = renderHost({ updateStatus: "checking" });
     await screen.findByRole("switch", { name: "Check for updates automatically" });
-    const button = screen.getByRole("button", { name: "Checking…" });
-    expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+    // The downloading half of the busy predicate is reachable in the real
+    // app: an install starts from the toast, Settings opens meanwhile.
+    host.set({ updateStatus: "downloading" });
+    expect(screen.getByRole("button", { name: "Check now" })).toBeDisabled();
   });
 
-  it("surfaces a failed manual check on the row's alert slot", async () => {
-    renderPage({ updateStatus: "error", updateError: "network down" });
+  it("surfaces a failed update on the alert slot with the right provenance", async () => {
+    const host = renderHost({ updateStatus: "error", updateError: "network down" });
     await screen.findByRole("switch", { name: "Check for updates automatically" });
-    expect(screen.getByRole("alert")).toHaveTextContent("network down");
+    // No manual check ran — the auto path error, generic prefix.
+    expect(screen.getByRole("alert")).toHaveTextContent("Update error: network down");
+
+    // Click-then-fail is the manual path — "Update check failed" prefix.
+    fireEvent.click(screen.getByRole("button", { name: "Check now" }));
+    host.set({ updateStatus: "error" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Update check failed: network down");
+
+    // An install taking over resets provenance: a following error belongs to
+    // the install, not the manual check, and gets the generic prefix again.
+    host.set({ updateStatus: "downloading" });
+    host.set({ updateStatus: "error" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Update error: network down");
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

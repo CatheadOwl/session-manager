@@ -63,5 +63,5 @@ export function useUpdater() {
     }
   }, [update]);
 
-  return { status, update, error, installUpdate, retryCheck: checkForUpdate };
+  return { status, update, error, installUpdate };
 }

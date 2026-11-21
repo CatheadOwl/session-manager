@@ -93,8 +93,8 @@ describe("useUpdater", () => {
   });
 
   // Regression: installUpdate must be a guarded no-op when no update object exists
-  // (e.g. in the `error` state). Binding "Retry" to installUpdate would otherwise
-  // silently do nothing — see the retryCheck test below for the real recovery path.
+  // (e.g. in the `error` state, where `update === null`). Recovery from a failed
+  // check is next-launch auto-retry, not an install attempt.
   it("installUpdate is a no-op when there is no resolved update", async () => {
     mocks.check.mockRejectedValue(new Error("check failed"));
 
@@ -107,26 +107,6 @@ describe("useUpdater", () => {
 
     expect(mocks.relaunch).not.toHaveBeenCalled();
     expect(result.current.status).toBe("error");
-  });
-
-  // Regression: retryCheck re-runs the network check, providing a real recovery
-  // path from `error` (distinct from installUpdate).
-  it("retryCheck re-runs the check and can recover from error", async () => {
-    const fakeUpdate = makeFakeUpdate();
-    mocks.check
-      .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValueOnce(fakeUpdate);
-
-    const { result } = renderHook(() => useUpdater());
-    await waitFor(() => expect(result.current.status).toBe("error"));
-
-    await act(async () => {
-      await result.current.retryCheck();
-    });
-
-    await waitFor(() => expect(result.current.status).toBe("available"));
-    expect(mocks.check).toHaveBeenCalledTimes(2);
-    expect(result.current.update).toBe(fakeUpdate);
   });
 
   // Settings gate: update.autoCheck === false skips the mount auto-check.
@@ -184,23 +164,6 @@ describe("useUpdater", () => {
 
     await waitFor(() => expect(result.current.status).toBe("available"));
     expect(mocks.check).toHaveBeenCalledTimes(1);
-  });
-
-  // The gate only silences automatic checks — retryCheck (user-initiated) stays ungated.
-  it("retryCheck still runs the check when update.autoCheck is false", async () => {
-    mockSettings(false);
-    const fakeUpdate = makeFakeUpdate();
-    mocks.check.mockResolvedValue(fakeUpdate);
-
-    const { result } = renderHook(() => useUpdater());
-
-    await act(async () => {
-      await result.current.retryCheck();
-    });
-
-    expect(mocks.check).toHaveBeenCalledTimes(1);
-    expect(result.current.status).toBe("available");
-    expect(result.current.update).toBe(fakeUpdate);
   });
 
   it("surfaces download failure as `error`", async () => {    const fakeUpdate = makeFakeUpdate();

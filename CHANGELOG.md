@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-11-21
+
+### Added
+
+- Manual update check: a "Check for updates" row in Settings → General runs an update check on demand and reflects the result inline — "up to date" appears only after a real check ran. This is the first check surface for users who keep automatic checking off; installing an available update still happens via the toolbar toast.
+
+### Changed
+
+- Archive and restore no longer silently replace a session that already exists at the destination: single-session flows surface a confirmation dialog (replace or cancel), and folder-level batch archive/restore keeps non-conflicting items moving and offers to replace only the conflicting subset. The check covers both the target session file and its same-stem sidecar folder.
+
+### Fixed
+
+- Batch delete failures are no longer silent: per-item failures surface in an alert (first few error details included), and the session list refreshes only when at least one session was actually deleted — a batch where every item failed previously reported success.
+- Single-session delete failure alerts show a readable error message instead of "undefined" (the alert read `error.message` off Tauri's raw string rejection).
+- OpenCode archive/restore could report success while leaving stale or incomplete destination data when replacing an existing session: relocation failures now propagate and report failure instead of being swallowed.
+- The update dialog now shows the release notes for the new version instead of a placeholder text.
+
 ## [0.4.7] - 2026-11-20
 
 ### Added

@@ -46,7 +46,7 @@ Download the latest installer from [GitHub Releases](https://github.com/CatheadO
 - **In-session search** - find text within the currently open session's messages, with match count and prev/next navigation.
 - **Session detail** - full messages or compact Q&A pairs, with metadata, tool calls, and a Markdown rendering toggle.
 - **Starred sessions** - mark important sessions and filter to them.
-- **Archive and restore** - single or folder-level batch, between active and archived directories.
+- **Archive and restore** - single or folder-level batch, between active and archived directories ([details](docs/archive.md)).
 - **Batch delete** - select multiple sessions and send them to the system trash in one action.
 - **Time-ranged Q&A export** - export the visible sessions as Q&A-distilled JSON or Markdown with full provenance; also scriptable headlessly (`session-manager export --help`).
 - **SSH remote sources** - register remote hosts as read-only sources and browse their sessions alongside local ones ([details](docs/sources.md)).

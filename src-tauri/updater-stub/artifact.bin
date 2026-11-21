@@ -1,0 +1,4 @@
+session-manager updater stub artifact — never a real installer.
+An install attempt downloads this, then fails signature validation
+against the release pubkey baked into tauri.conf.json. That failure is
+the designed install-error test state; nothing is ever executed.

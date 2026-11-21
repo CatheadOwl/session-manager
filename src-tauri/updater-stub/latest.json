@@ -1,0 +1,11 @@
+{
+  "version": "99.0.0",
+  "notes": "Updater stub build for dev-surface testing — no real release exists behind this version.",
+  "pub_date": "2026-11-21T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dGVzdC1zaWduYXR1cmUtbm90LXJlYWwtZm9yLWRldi1zdHViCg==",
+      "url": "http://localhost:1420/__updater-stub/artifact.bin"
+    }
+  }
+}

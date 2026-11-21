@@ -89,9 +89,26 @@ export function useSessionMutations(
     (sessionsToDelete: DeleteSessionOptions[]) => {
       if (sessionsToDelete.length === 0) return;
 
+      // The batch command RESOLVES with per-item outcomes — per-item failures
+      // never reject, so without inspecting the data a batch where every item
+      // failed would report success. Notify only if something actually was
+      // deleted (the mutation layer removes only successful outcomes from the
+      // cache, so a zero-success batch leaves the lists untouched), and
+      // surface the failed items' error strings through the window.alert
+      // fall-through, mirroring the page's capped folder-op alert shape.
       deleteSessionsMutation.mutate(sessionsToDelete, {
-        onSuccess: () => {
-          onSessionDeleted();
+        onSuccess: (outcomes: DeleteSessionResult[]) => {
+          if (outcomes.some((outcome) => outcome.success)) {
+            onSessionDeleted();
+          }
+          const failures = outcomes.filter((outcome) => !outcome.success);
+          if (failures.length > 0) {
+            const details = failures
+              .slice(0, 3)
+              .map((outcome) => outcome.error || "Unknown error")
+              .join("\n");
+            window.alert(`${failures.length} sessions failed to delete.\n${details}`);
+          }
         },
         // Tauri invoke rejects with raw strings, not Error instances.
         onError: (error) => window.alert(invocationErrorMessage(error)),

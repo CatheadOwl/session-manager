@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeleteSessionResult } from "@/lib/api/sessions";
 import type { SessionMeta } from "@/types";
 import { useSessionMutations } from "./useSessionMutations";
 
@@ -301,6 +302,19 @@ describe("useSessionMutations delete wiring", () => {
       { wrapper, initialProps: { scope: "active" as const } },
     );
 
+  // A resolved per-item outcome for the delete_sessions batch command. The
+  // literals are invented on purpose, independent of any production constant.
+  const batchOutcome = (
+    sessionId: string,
+    overrides?: Partial<DeleteSessionResult>,
+  ): DeleteSessionResult => ({
+    providerId: "claude",
+    sessionId,
+    sourcePath: `d:/work/target/${sessionId}.jsonl`,
+    success: true,
+    ...overrides,
+  });
+
   it("single delete: invokes delete_session and notifies exactly once on success", async () => {
     mocks.invoke.mockResolvedValue(true);
     const { result } = renderMutationsHook();
@@ -342,7 +356,9 @@ describe("useSessionMutations delete wiring", () => {
   });
 
   it("batch delete: invokes delete_sessions with the batch and notifies exactly once on success", async () => {
-    mocks.invoke.mockResolvedValue([]);
+    // Realistic per-item outcomes: the backend maps every request to one
+    // outcome, so a non-empty batch never resolves with an empty array.
+    mocks.invoke.mockResolvedValue([batchOutcome("a"), batchOutcome("b")]);
     const { result } = renderMutationsHook();
 
     const { items } = result.current.getFolderOperationItems("d:/work/target");
@@ -376,5 +392,112 @@ describe("useSessionMutations delete wiring", () => {
 
     expect(alertMock.mock.calls[0][0]).not.toBe("undefined");
     expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it("batch delete: mixed outcomes notify once and alert the failed item's error", async () => {
+    // The batch command RESOLVES per-item outcomes — per-item failures never
+    // reject, so the failures are only visible in the resolved data.
+    mocks.invoke.mockResolvedValue([
+      batchOutcome("a"),
+      batchOutcome("b", {
+        success: false,
+        error: "session source not found: d:/work/target/b.jsonl",
+      }),
+    ]);
+    const { result } = renderMutationsHook();
+
+    const { items } = result.current.getFolderOperationItems("d:/work/target");
+    act(() => {
+      result.current.executeBatchDelete(items);
+    });
+    await waitFor(() => expect(alertMock).toHaveBeenCalledTimes(1));
+
+    expect(alertMock).toHaveBeenCalledWith(
+      "1 sessions failed to delete.\nsession source not found: d:/work/target/b.jsonl",
+    );
+    // One item succeeded, so the deleted-notification still fires — once.
+    expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("batch delete: an all-failed batch alerts every error and never notifies", async () => {
+    // The mutation layer removes only successful outcomes from the cache, so
+    // a zero-success batch leaves the session lists untouched; not calling
+    // onSessionDeleted keeps the page state consistent with that (nothing
+    // actually changed on disk).
+    mocks.invoke.mockResolvedValue([
+      batchOutcome("a", {
+        success: false,
+        error: "session source not found: d:/work/target/a.jsonl",
+      }),
+      batchOutcome("b", {
+        success: false,
+        error: "Failed to send session to system trash: recycle bin unavailable",
+      }),
+    ]);
+    const { result } = renderMutationsHook();
+
+    const { items } = result.current.getFolderOperationItems("d:/work/target");
+    act(() => {
+      result.current.executeBatchDelete(items);
+    });
+    await waitFor(() => expect(alertMock).toHaveBeenCalledTimes(1));
+
+    expect(alertMock).toHaveBeenCalledWith(
+      "2 sessions failed to delete.\nsession source not found: d:/work/target/a.jsonl\nFailed to send session to system trash: recycle bin unavailable",
+    );
+    expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it("batch delete: the failure alert caps the details at three errors", async () => {
+    mocks.invoke.mockResolvedValue([
+      batchOutcome("a", { success: false, error: "delete failure one" }),
+      batchOutcome("b", { success: false, error: "delete failure two" }),
+      batchOutcome("c", { success: false, error: "delete failure three" }),
+      batchOutcome("d", { success: false, error: "delete failure four" }),
+    ]);
+    const { result } = renderMutationsHook();
+
+    const { items } = result.current.getFolderOperationItems("d:/work/target");
+    act(() => {
+      result.current.executeBatchDelete(items);
+    });
+    await waitFor(() => expect(alertMock).toHaveBeenCalledTimes(1));
+
+    // Same capped-details shape as the page's folder-op alert: the count
+    // covers every failure, but at most three error lines are listed.
+    expect(alertMock).toHaveBeenCalledWith(
+      "4 sessions failed to delete.\ndelete failure one\ndelete failure two\ndelete failure three",
+    );
+    expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it("batch delete: an empty batch is a no-op", () => {
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.executeBatchDelete([]);
+    });
+
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(noopOptions.onSessionDeleted).not.toHaveBeenCalled();
+    expect(alertMock).not.toHaveBeenCalled();
+  });
+
+  it("single delete: a resolved false still notifies — the backend never emits Ok(false)", async () => {
+    // Backend contract (operations.rs delete path): the only Ok is Ok(true)
+    // after the trash succeeds; every non-success is a string rejection
+    // ("session source not found", "outside provider roots", trash failure),
+    // so Ok(false) is unreachable today. The mutation layer ignoring the
+    // boolean is by design, not a silent-failure bug — this test pins that
+    // adjudication: a future backend emitting false must revisit it.
+    mocks.invoke.mockResolvedValue(false);
+    const { result } = renderMutationsHook();
+
+    act(() => {
+      result.current.confirmDeleteSession(sessions[0]);
+    });
+    await waitFor(() => expect(noopOptions.onSessionDeleted).toHaveBeenCalledTimes(1));
+
+    expect(alertMock).not.toHaveBeenCalled();
   });
 });

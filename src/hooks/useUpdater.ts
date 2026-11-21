@@ -63,5 +63,11 @@ export function useUpdater() {
     }
   }, [update]);
 
-  return { status, update, error, installUpdate };
+  // `checkForUpdate` is the dedicated manual-check entry (Settings check row):
+  // it runs regardless of the auto gate and is the recovery path from a
+  // failed check. Callers disable their trigger while `status` is busy
+  // (checking/downloading) — the hook itself does not queue a second check.
+  // Never bind retry actions to `installUpdate`: it no-ops on a null update
+  // (the `error` state), which is exactly the bug class the guard exists for.
+  return { status, update, error, checkForUpdate, installUpdate };
 }

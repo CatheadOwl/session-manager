@@ -428,7 +428,15 @@ export function SessionManagerPage() {
         />
       ) : null}
       <ExportToast status={qaExport.status} onDismiss={qaExport.clearStatus} />
-      {isSettingsOpen ? <SettingsPage onClose={() => setIsSettingsOpen(false)} /> : null}
+      {isSettingsOpen ? (
+        <SettingsPage
+          onClose={() => setIsSettingsOpen(false)}
+          updateStatus={updater.status}
+          updateVersion={updater.update?.version}
+          updateError={updater.error}
+          onCheckForUpdate={updater.checkForUpdate}
+        />
+      ) : null}
     </div>
   );
 }

@@ -109,6 +109,47 @@ describe("useUpdater", () => {
     expect(result.current.status).toBe("error");
   });
 
+  // Manual check entry (Settings check row drives it): the dedicated entry
+  // must run a check even when the auto gate is off — that is its whole
+  // reason to exist, and the recovery path the false-copy TODO left open.
+  it("checkForUpdate runs a manual check while autoCheck is false", async () => {
+    mockSettings(false);
+    mocks.check.mockResolvedValue(makeFakeUpdate());
+
+    const { result } = renderHook(() => useUpdater());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // The gate held the mount auto-check; nothing has fired.
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+
+    await act(async () => {
+      await result.current.checkForUpdate();
+    });
+
+    expect(mocks.check).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("available");
+    expect(result.current.error).toBeNull();
+  });
+
+  // Retry semantics: the dedicated entry is what recovers from a failed
+  // check — installUpdate is a guarded no-op in the error state.
+  it("checkForUpdate recovers from a failed check", async () => {
+    mocks.check.mockRejectedValueOnce(new Error("network down"));
+    mocks.check.mockResolvedValue(makeFakeUpdate());
+
+    const { result } = renderHook(() => useUpdater());
+    await waitFor(() => expect(result.current.status).toBe("error"));
+
+    await act(async () => {
+      await result.current.checkForUpdate();
+    });
+
+    expect(result.current.status).toBe("available");
+    expect(result.current.error).toBeNull();
+  });
+
   // Settings gate: update.autoCheck === false skips the mount auto-check.
   it("stays idle and never calls check when update.autoCheck is false", async () => {
     mockSettings(false);

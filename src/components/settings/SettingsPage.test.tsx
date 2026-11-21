@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 import type { SettingsSnapshot } from "@/lib/api/settings";
+import type { UpdateStatus } from "@/hooks/useUpdater";
 import { SettingsPage } from "./SettingsPage";
 
 const mocks = vi.hoisted(() => ({
@@ -48,16 +50,30 @@ const fixture = (): SettingsSnapshot => ({
 describe("SettingsPage", () => {
   let queryClient: QueryClient;
   const onClose = vi.fn();
+  // Manual update-check slice stub — the check row is a view over the
+  // page-level updater passed through props; tests that need a specific
+  // machine state override these per render.
+  const updateProps: {
+    updateStatus: UpdateStatus;
+    updateError: string | null;
+    onCheckForUpdate: Mock<() => void>;
+  } = {
+    updateStatus: "idle",
+    updateError: null,
+    onCheckForUpdate: vi.fn(),
+  };
 
   const wrapper = ({ children }: PropsWithChildren) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 
-  const renderPage = () => render(<SettingsPage onClose={onClose} />, { wrapper });
+  const renderPage = (overrides?: Partial<typeof updateProps>) =>
+    render(<SettingsPage onClose={onClose} {...updateProps} {...overrides} />, { wrapper });
 
   beforeEach(() => {
     mocks.invoke.mockReset();
     onClose.mockReset();
+    updateProps.onCheckForUpdate.mockReset();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -205,6 +221,46 @@ describe("SettingsPage", () => {
     fireEvent.change(editor, { target: { value: "{SessionId}" } });
     expect(preview).toHaveTextContent("a1b2c3");
     expect(preview).not.toHaveTextContent("codex resume");
+  });
+
+  it("offers a manual update check and reflects the running machine state", async () => {
+    // Host is the STABLE rerender root (same type as the initial render) so
+    // the row's internal manual-check flag survives the machine-state change
+    // — a rerender whose root type differs remounts the whole tree.
+    let override: { updateStatus?: UpdateStatus; updateVersion?: string } = {
+      updateStatus: "available",
+      updateVersion: "0.5.0",
+    };
+    const Host = () => (
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage onClose={onClose} {...updateProps} {...override} />
+      </QueryClientProvider>
+    );
+    const view = render(<Host />);
+    await screen.findByRole("switch", { name: "Check for updates automatically" });
+    // "available" reflects immediately — a bare idle must NOT claim up to date.
+    expect(screen.getByText(/Update to v0\.5\.0 available/)).toBeInTheDocument();
+    expect(screen.queryByText("You're up to date.")).toBeNull();
+
+    // Clicking drives the dedicated entry; idle after a click means checked.
+    fireEvent.click(screen.getByRole("button", { name: "Check now" }));
+    expect(updateProps.onCheckForUpdate).toHaveBeenCalledTimes(1);
+    override = { updateStatus: "idle" };
+    view.rerender(<Host />);
+    expect(screen.getByText("You're up to date.")).toBeInTheDocument();
+  });
+
+  it("disables the check trigger while the machine is busy", async () => {
+    renderPage({ updateStatus: "checking" });
+    await screen.findByRole("switch", { name: "Check for updates automatically" });
+    const button = screen.getByRole("button", { name: "Checking…" });
+    expect(button).toBeDisabled();
+  });
+
+  it("surfaces a failed manual check on the row's alert slot", async () => {
+    renderPage({ updateStatus: "error", updateError: "network down" });
+    await screen.findByRole("switch", { name: "Check for updates automatically" });
+    expect(screen.getByRole("alert")).toHaveTextContent("network down");
   });
 
   it("closes on Esc, backdrop click, and the back button", async () => {

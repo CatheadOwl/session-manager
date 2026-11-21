@@ -10,6 +10,7 @@ import {
 } from "@/lib/api/settings";
 import { queryKeys } from "@/lib/query/keys";
 import { useSettingsQuery } from "@/lib/query/queries";
+import type { UpdateStatus } from "@/hooks/useUpdater";
 import { SettingRow } from "@/components/ui/SettingRow";
 import { SourcesEditor } from "@/components/ui/SourcesEditor";
 import { ToggleRow } from "@/components/ui/ToggleRow";
@@ -59,7 +60,8 @@ const SETTING_PRESENTATION: Record<
 > = {
   "update.autoCheck": {
     label: "Check for updates automatically",
-    description: "When off, the startup update check is skipped. Manual retry from the update toast still works.",
+    description:
+      "When off, the startup update check is skipped. Use \"Check for updates\" below to check manually at any time.",
   },
   sources: {
     label: "Extra session sources",
@@ -238,7 +240,79 @@ const RENDERERS: Partial<Record<SettingType, SettingRenderer>> = {
   sourceList: SourceListRenderer,
 };
 
-export function SettingsPage({ onClose }: { onClose: () => void }) {
+/**
+ * Manual update-check action row (Settings › General). A view over the
+ * page-level updater state machine, passed down from `SessionManagerPage`
+ * — this row only fires the hook's dedicated `checkForUpdate` entry and
+ * reflects its status; install stays on the toolbar toast, so the
+ * "available" line points there (the settings overlay covers the toolbar
+ * while open). The "up to date" line is gated on a manual check having
+ * actually run: a bare `idle` may predate any check and must not be
+ * claimed as checked.
+ */
+const UpdateCheckRow: FC<{
+  status: UpdateStatus;
+  version?: string;
+  error: string | null;
+  onCheck: () => void;
+}> = ({ status, version, error, onCheck }) => {
+  const [manualCheckRan, setManualCheckRan] = useState(false);
+  const checking = status === "checking" || status === "downloading";
+
+  const statusLine: string | null =
+    status === "available"
+      ? `Update to v${version ?? "?"} available. Close settings and install from the toolbar's update button.`
+      : status === "downloading"
+        ? "Downloading update…"
+        : status === "ready"
+          ? "Update installed — the app restarts."
+          : manualCheckRan && status === "idle"
+            ? "You're up to date."
+            : null;
+
+  const staticHint = "Runs an update check now, even when the automatic startup check is off.";
+
+  return (
+    <SettingRow
+      label="Check for updates"
+      description={statusLine ? [staticHint, statusLine] : staticHint}
+      error={
+        status === "error"
+          ? manualCheckRan
+            ? `Update check failed: ${error ?? "unknown error"}`
+            : `Update error: ${error ?? "unknown error"}`
+          : null
+      }
+    >
+      <button
+        type="button"
+        className="ghost-button"
+        onClick={() => {
+          setManualCheckRan(true);
+          onCheck();
+        }}
+        disabled={checking}
+      >
+        {status === "checking" ? "Checking…" : "Check now"}
+      </button>
+    </SettingRow>
+  );
+};
+
+export function SettingsPage({
+  onClose,
+  updateStatus,
+  updateVersion,
+  updateError,
+  onCheckForUpdate,
+}: {
+  onClose: () => void;
+  /** Manual update-check slice of the page-level updater (SessionManagerPage). */
+  updateStatus: UpdateStatus;
+  updateVersion?: string;
+  updateError: string | null;
+  onCheckForUpdate: () => void;
+}) {
   const queryClient = useQueryClient();
   const settingsQuery = useSettingsQuery();
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
@@ -341,29 +415,39 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
                 Failed to load settings: {settingsQuery.error instanceof Error ? settingsQuery.error.message : "unknown error"}
               </div>
             ) : snapshot === undefined ? null : (
-              descriptors.map((def) => {
-                const Renderer = RENDERERS[def.type];
-                if (!Renderer) {
+              <>
+                {descriptors.map((def) => {
+                  const Renderer = RENDERERS[def.type];
+                  if (!Renderer) {
+                    return (
+                      <SettingRow
+                        key={def.key}
+                        label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
+                        description={def.key}
+                      >
+                        <div className="setting-unsupported">Unsupported setting type: {def.type}</div>
+                      </SettingRow>
+                    );
+                  }
                   return (
-                    <SettingRow
+                    <Renderer
                       key={def.key}
-                      label={SETTING_PRESENTATION[def.key]?.label ?? def.key}
-                      description={def.key}
-                    >
-                      <div className="setting-unsupported">Unsupported setting type: {def.type}</div>
-                    </SettingRow>
+                      def={def}
+                      value={snapshot.values[def.key]}
+                      error={errors[def.key] ?? null}
+                      onChange={(next) => void handleChange(def.key, next)}
+                    />
                   );
-                }
-                return (
-                  <Renderer
-                    key={def.key}
-                    def={def}
-                    value={snapshot.values[def.key]}
-                    error={errors[def.key] ?? null}
-                    onChange={(next) => void handleChange(def.key, next)}
+                })}
+                {active === "update" ? (
+                  <UpdateCheckRow
+                    status={updateStatus}
+                    version={updateVersion}
+                    error={updateError}
+                    onCheck={onCheckForUpdate}
                   />
-                );
-              })
+                ) : null}
+              </>
             )}
           </div>
         </div>
